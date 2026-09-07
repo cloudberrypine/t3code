@@ -1,3 +1,4 @@
+import type { AngelScriptWorkspace } from "~/hooks/useAngelScript";
 import type {
   AnnotationSide,
   CodeViewDiffItem,
@@ -80,11 +81,14 @@ interface AnnotatableCodeViewProps {
     fileVersion: number;
     collapsed: boolean;
   }>;
+  workspace?: AngelScriptWorkspace;
   sectionId: string;
   sectionTitle: string;
   composerDraftTarget: ScopedThreadRef | DraftId;
   options: StyledDiffCodeViewOptions<DiffCommentAnnotationGroup>;
   viewerRef?: Ref<AnnotatableCodeViewHandle>;
+  onRevealItem?: (id: string) => void;
+  onActiveFileChange?: (path: string | null) => void;
   className?: string;
   renderHeaderFilenameSuffix: (fileDiff: FileDiffMetadata) => ReactNode;
   renderHeaderPrefix: (
@@ -100,12 +104,15 @@ interface DiffSelectionContext {
 
 export function AnnotatableCodeView({
   codeViewKey,
+  workspace,
   files,
   sectionId,
   sectionTitle,
   composerDraftTarget,
   options,
   viewerRef,
+  onRevealItem,
+  onActiveFileChange,
   className,
   renderHeaderFilenameSuffix,
   renderHeaderPrefix,
@@ -243,6 +250,9 @@ export function AnnotatableCodeView({
   return (
     <StyledDiffCodeView<DiffCommentAnnotationGroup>
       key={codeViewKey}
+      {...(workspace ? { workspace } : {})}
+      {...(onRevealItem ? { onRevealItem } : {})}
+      {...(onActiveFileChange ? { onActiveFileChange } : {})}
       {...(viewerRef ? { viewerRef } : {})}
       {...(className ? { className } : {})}
       items={items}

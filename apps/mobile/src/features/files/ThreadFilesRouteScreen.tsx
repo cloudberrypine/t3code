@@ -210,6 +210,11 @@ function FileContent(props: {
         />
       ) : (
         <SourceFileSurface
+          workspace={{
+            environmentId: props.environmentId,
+            cwd: props.cwd,
+            revision: props.fileContents,
+          }}
           contents={props.fileContents}
           path={props.relativePath}
           initialLine={props.initialLine}
@@ -317,7 +322,7 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
     environmentId !== null && cwd !== null && !fileInspector.supported
       ? projectEnvironment.listEntries({
           environmentId,
-          input: { cwd },
+          input: { cwd, includeIgnored: true },
         })
       : null,
   );

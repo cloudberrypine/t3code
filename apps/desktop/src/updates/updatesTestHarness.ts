@@ -20,6 +20,7 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 export const flushCallbacks = Effect.yieldNow;
 
 export interface UpdatesHarnessOptions {
+  readonly appVersion?: string;
   readonly checkForUpdates?: Effect.Effect<
     void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
@@ -146,7 +147,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
     platform: "darwin",
     processArch: "x64",
-    appVersion: "1.2.3",
+    appVersion: options.appVersion ?? "1.2.3",
     appPath: "/repo",
     isPackaged: true,
     resourcesPath: "/missing/resources",

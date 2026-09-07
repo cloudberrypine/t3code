@@ -1,3 +1,5 @@
+import { useAngelScript, type AngelScriptWorkspace } from "../../lib/useAngelScript";
+import { prepareAngelScriptReview } from "./angelScriptReview";
 import { useCallback, useMemo, useState } from "react";
 import type { NativeSyntheticEvent } from "react-native";
 
@@ -12,6 +14,7 @@ export { buildNativeReviewTokensResetKey } from "./reviewDiffBridgeKeys";
 
 export function useNativeReviewDiffBridge(input: {
   readonly threadKey: string | null;
+  readonly workspace?: AngelScriptWorkspace;
   readonly sectionId: string | null;
   readonly diff: string | null | undefined;
   readonly data: NativeReviewDiffData;
@@ -23,7 +26,7 @@ export function useNativeReviewDiffBridge(input: {
   const {
     canHighlight,
     collapsedFileIds,
-    data,
+    data: rawData,
     diff,
     sectionId,
     selectedRowIds,
@@ -33,6 +36,13 @@ export function useNativeReviewDiffBridge(input: {
   const { nativeReviewDiffStyle } = useAppearanceCodeSurface();
   const { themeAppearance: scheme, themeId } = useAppearancePreferences();
   const appTheme = useUniwindTheme();
+  const api = useAngelScript(
+    rawData.files.some((file) => /\.as$/i.test(file.path)) ? input.workspace : undefined,
+  );
+  const { data, semantics } = useMemo(
+    () => prepareAngelScriptReview(rawData, api, scheme),
+    [rawData, api, scheme],
+  );
   const [collapsedCommentIds, setCollapsedCommentIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -66,6 +76,7 @@ export function useNativeReviewDiffBridge(input: {
   const { tokensPatchJson, updateVisibleRange } = useNativeReviewDiffHighlighting({
     files: data.files,
     rows: data.rows,
+    semantics,
     scheme,
     resetKey: tokensResetKey,
     enabled: canHighlight,

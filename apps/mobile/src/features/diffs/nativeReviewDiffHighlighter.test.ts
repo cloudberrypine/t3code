@@ -45,6 +45,7 @@ const TYPESCRIPT_FILE: NativeReviewDiffFile = {
   language: "typescript",
   additions: 0,
   deletions: 0,
+  loaded: true,
 };
 
 function makeLine(
@@ -84,6 +85,28 @@ function highlight(
 }
 
 describe("highlightNativeReviewDiffVisibleRows", () => {
+  it("tokenizes AngelScript with the JavaScript fallback engine", async () => {
+    const result = await highlightNativeReviewDiffVisibleRows({
+      files: [{ ...TYPESCRIPT_FILE, path: "shot.as", language: "angelscript" }],
+      rows: [
+        makeLine({
+          id: "as-line",
+          content: "void shot(Shot@ s) { s.wait(1.0f); }",
+          change: "context",
+          newLineNumber: 1,
+        }),
+      ],
+      scheme: "dark",
+      engine: "javascript",
+      firstRowIndex: 0,
+      lastRowIndex: 0,
+    });
+    const tokens = result.tokensByRowId["as-line"]!;
+    expect(tokens.map((token) => token.content).join("")).toBe(
+      "void shot(Shot@ s) { s.wait(1.0f); }",
+    );
+    expect(new Set(tokens.map((token) => token.color)).size).toBeGreaterThan(2);
+  });
   it("does not carry grammar state across hunk boundaries", async () => {
     const exportRow = makeLine({
       id: "export-row",

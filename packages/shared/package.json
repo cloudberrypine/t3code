@@ -278,6 +278,10 @@
     "./dateTime": {
       "types": "./src/dateTime.ts",
       "import": "./src/dateTime.ts"
+    },
+    "./angelscript": {
+      "types": "./src/angelscript.ts",
+      "import": "./src/angelscript.ts"
     }
   },
   "scripts": {

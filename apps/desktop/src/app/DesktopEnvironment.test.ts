@@ -135,6 +135,24 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("isolates packaged preview builds from installed desktop state", () =>
+    Effect.gen(function* () {
+      const preview = yield* makeEnvironment({
+        isPackaged: true,
+        appVersion: "0.0.38-pr.local.1",
+      });
+
+      assert.equal(preview.baseDir, "/Users/alice/.t3/preview");
+      assert.equal(preview.stateDir, "/Users/alice/.t3/preview/userdata");
+      assert.equal(preview.userDataDirName, "t3code-preview");
+      assert.equal(preview.legacyUserDataDirName, "T3 Code (Preview)");
+      assert.equal(preview.displayName, "T3 Code (Preview)");
+      assert.equal(preview.appUserModelId, "com.t3tools.t3code.preview");
+      assert.equal(preview.linuxDesktopEntryName, "t3code-preview.desktop");
+      assert.equal(preview.linuxWmClass, "t3code-preview");
+    }),
+  );
+
   it.effect("uses a configured app user model id override", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

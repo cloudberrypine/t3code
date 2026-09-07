@@ -158,6 +158,22 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
+  it.effect("uses a separate Electron profile for packaged preview builds", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        const userDataPath = yield* identity.resolveUserDataPath;
+
+        assert.equal(userDataPath, "/Users/alice/Library/Application Support/t3code-preview");
+      }),
+      {
+        environment: {
+          appVersion: "0.0.38-pr.local.1",
+        },
+      },
+    ),
+  );
+
   it.effect("preserves failures while inspecting the legacy userData path", () => {
     const legacyPath = "/Users/alice/Library/Application Support/T3 Code (Alpha)";
     const cause = PlatformError.systemError({

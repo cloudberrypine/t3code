@@ -10,7 +10,9 @@ private struct ReviewDiffNativeRow: Decodable, Sendable {
   let changeType: String?
   let additions: Int?
   let deletions: Int?
+  let loaded: Bool?
   let text: String?
+  let awaitBackground: String?
   let content: String?
   let change: String?
   let oldLineNumber: Int?
@@ -1835,27 +1837,37 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
 
     drawViewedCheckbox(rect: interactiveRects.checkbox, checked: viewedFileIds.contains(fileId))
 
-    let deletions = row.deletions ?? 0
-    let additions = row.additions ?? 0
-    let deleteText = "-\(deletions)"
-    let addText = "+\(additions)"
+    let deleteText = "-\(row.deletions ?? 0)"
+    let addText = "+\(row.additions ?? 0)"
+    let unloadedText = "LOAD"
     let deleteWidth = textWidth(deleteText, font: fileHeaderMetaFont)
     let addWidth = textWidth(addText, font: fileHeaderMetaFont)
     let countsGap = min(style.fileHeaderCountGap, 4)
-    let countsWidth = deleteWidth + countsGap + addWidth
+    let countsWidth = row.loaded == false
+      ? textWidth(unloadedText, font: fileHeaderMetaFont)
+      : deleteWidth + countsGap + addWidth
     let countsX = interactiveRects.checkbox.minX - 10 - countsWidth
-    drawSingleLineText(
-      deleteText,
-      rect: CGRect(x: countsX, y: centerY - 9, width: deleteWidth, height: 18),
-      color: theme.deleteText,
-      font: fileHeaderMetaFont
-    )
-    drawSingleLineText(
-      addText,
-      rect: CGRect(x: countsX + deleteWidth + countsGap, y: centerY - 9, width: addWidth, height: 18),
-      color: theme.addText,
-      font: fileHeaderMetaFont
-    )
+    if row.loaded == false {
+      drawSingleLineText(
+        unloadedText,
+        rect: CGRect(x: countsX, y: centerY - 9, width: countsWidth, height: 18),
+        color: theme.mutedText,
+        font: fileHeaderMetaFont
+      )
+    } else {
+      drawSingleLineText(
+        deleteText,
+        rect: CGRect(x: countsX, y: centerY - 9, width: deleteWidth, height: 18),
+        color: theme.deleteText,
+        font: fileHeaderMetaFont
+      )
+      drawSingleLineText(
+        addText,
+        rect: CGRect(x: countsX + deleteWidth + countsGap, y: centerY - 9, width: addWidth, height: 18),
+        color: theme.addText,
+        font: fileHeaderMetaFont
+      )
+    }
 
     let pathLayout = fileHeaderPathLayout(for: row, cardRect: cardRect)
     let pathOffset = horizontalOffset(for: resolvedFileId(for: row), kind: .fileHeaderPath)
@@ -1963,12 +1975,12 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     let centerY = cardRect.midY
     let interactiveRects = fileHeaderInteractiveRects(for: row, cardRect: cardRect)
 
-    let deletions = row.deletions ?? 0
-    let additions = row.additions ?? 0
-    let deleteWidth = textWidth("-\(deletions)", font: fileHeaderMetaFont)
-    let addWidth = textWidth("+\(additions)", font: fileHeaderMetaFont)
+    let deleteWidth = textWidth("-\(row.deletions ?? 0)", font: fileHeaderMetaFont)
+    let addWidth = textWidth("+\(row.additions ?? 0)", font: fileHeaderMetaFont)
     let countsGap = min(style.fileHeaderCountGap, 4)
-    let countsWidth = deleteWidth + countsGap + addWidth
+    let countsWidth = row.loaded == false
+      ? textWidth("LOAD", font: fileHeaderMetaFont)
+      : deleteWidth + countsGap + addWidth
     let countsX = interactiveRects.checkbox.minX - 10 - countsWidth
     let pathX = interactiveRects.icon.maxX + 10
     let pathWidth = max(CGFloat(24), countsX - pathX - 12)
@@ -2194,6 +2206,10 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     let change = row.change ?? "context"
     rowBackground(for: change).setFill()
     context.fill(rect)
+    if let awaitBackground = UIColor(reviewDiffHex: row.awaitBackground) {
+      awaitBackground.setFill()
+      context.fill(CGRect(x: stickyWidth, y: rect.minY, width: max(0, rect.width - stickyWidth), height: rect.height))
+    }
 
     if change == "add" {
       theme.addBar.setFill()

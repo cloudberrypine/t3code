@@ -1,5 +1,6 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { FileDiffMetadata } from "@pierre/diffs/types";
+import type { ReviewDiffPreviewFile } from "@t3tools/contracts";
 
 const DIFF_THEME_NAMES = {
   light: "pierre-light",
@@ -31,7 +32,7 @@ export function fnv1a32(
 }
 
 export function buildPatchCacheKey(patch: string, scope = "diff-panel"): string {
-  const normalizedPatch = patch.trim();
+  const normalizedPatch = patch.trimStart().replace(/\n+$/, "");
   const primary = fnv1a32(normalizedPatch, FNV_OFFSET_BASIS_32, FNV_PRIME_32).toString(36);
   const secondary = fnv1a32(
     normalizedPatch,
@@ -55,6 +56,11 @@ export type RenderablePatch =
 export interface DiffLineStat {
   additions: number;
   deletions: number;
+}
+
+/** Older servers append this marker inside the patch; it is metadata, not a diff line. */
+export function stripDiffTruncationMarker(patch: string): string {
+  return patch.replace(/\n*\[truncated\]\s*$/, "");
 }
 
 export function getDiffLineStat(files: ReadonlyArray<FileDiffMetadata>): DiffLineStat {
@@ -112,12 +118,14 @@ export function getRenderablePatch(
   options: RenderablePatchOptions = {},
 ): RenderablePatch | null {
   if (!patch) return null;
-  const normalizedPatch = patch.trim();
+  const normalizedPatch = patch.trimStart();
   if (normalizedPatch.length === 0) return null;
 
   try {
     const parsedPatches = parsePatchFiles(
-      normalizedPatch,
+      // Patch line terminators are syntax; a missing file newline has its own explicit marker.
+      // Preserve trailing spaces in source lines and restore a stripped patch terminator.
+      normalizedPatch.endsWith("\n") ? normalizedPatch : `${normalizedPatch}\n`,
       buildPatchCacheKey(normalizedPatch, cacheScope),
     );
     const files = parsedPatches.flatMap((parsedPatch) =>
@@ -149,6 +157,25 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
     return raw.slice(2);
   }
   return raw;
+}
+
+/** Header-only render model for a manifest file whose patch will be fetched on expansion. */
+export function buildReviewDiffPlaceholder(
+  file: ReviewDiffPreviewFile,
+  cacheScope: string,
+): FileDiffMetadata {
+  return {
+    name: `b/${file.newPath}`,
+    ...(file.oldPath !== file.newPath ? { prevName: `a/${file.oldPath}` } : {}),
+    type: file.changeType,
+    hunks: [],
+    splitLineCount: 0,
+    unifiedLineCount: 0,
+    isPartial: true,
+    deletionLines: [],
+    additionLines: [],
+    cacheKey: `${cacheScope}:unloaded:${file.oldPath}\0${file.newPath}`,
+  };
 }
 
 /**
@@ -281,41 +308,44 @@ export const DIFF_SURFACE_THEME_UNSAFE_CSS = `
   );
   --diffs-bg-buffer-override: color-mix(in srgb, var(--code-background) 90%, var(--code-foreground));
 
-  --diffs-bg-addition-override: light-dark(
-    color-mix(in srgb, var(--code-background) 50%, var(--success)),
-    color-mix(in srgb, var(--code-background) 70%, var(--success))
+  /* More saturated hues at lower opacity keep changes distinct without heavy row fills. */
+  --diffs-addition-color-override: oklch(from var(--success) l calc(c * 1.2) h);
+  --diffs-deletion-color-override: oklch(from var(--destructive) l calc(c * 1.2) h);
+  --diffs-bg-addition-emphasis-override: light-dark(
+    color-mix(in srgb, transparent 84%, var(--diffs-addition-color-override)),
+    color-mix(in srgb, transparent 80%, var(--diffs-addition-color-override))
   );
-  --diffs-bg-addition-number-override: light-dark(
-    color-mix(in srgb, var(--code-background) 35%, var(--success)),
-    color-mix(in srgb, var(--code-background) 60%, var(--success))
-  );
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--code-background) 85%, var(--success));
-  --diffs-bg-addition-emphasis-override: color-mix(
-    in srgb,
-    var(--code-background) 80%,
-    var(--success)
-  );
-
-  --diffs-bg-deletion-override: light-dark(
-    color-mix(in srgb, var(--code-background) 50%, var(--destructive)),
-    color-mix(in srgb, var(--code-background) 70%, var(--destructive))
-  );
-  --diffs-bg-deletion-number-override: light-dark(
-    color-mix(in srgb, var(--code-background) 35%, var(--destructive)),
-    color-mix(in srgb, var(--code-background) 60%, var(--destructive))
-  );
-  --diffs-bg-deletion-hover-override: color-mix(
-    in srgb,
-    var(--code-background) 85%,
-    var(--destructive)
-  );
-  --diffs-bg-deletion-emphasis-override: color-mix(
-    in srgb,
-    var(--code-background) 80%,
-    var(--destructive)
+  --diffs-bg-deletion-emphasis-override: light-dark(
+    color-mix(in srgb, transparent 84%, var(--diffs-deletion-color-override)),
+    color-mix(in srgb, transparent 80%, var(--diffs-deletion-color-override))
   );
 
   background-color: var(--diffs-bg) !important;
   color: var(--code-foreground) !important;
+}
+
+/* Pierre blends each row against its base color. Control that single blend instead of
+   supplying a pre-blended background that would dilute the change color a second time. */
+[data-background] :is([data-line], [data-no-newline], [data-column-number], [data-gutter-buffer]):is(
+  [data-line-type="change-addition"], [data-line-type="change-deletion"]
+) {
+  --mix-light: 90%;
+  --mix-dark: 86%;
+}
+
+[data-background] :is([data-column-number], [data-gutter-buffer]):is(
+  [data-line-type="change-addition"], [data-line-type="change-deletion"]
+) {
+  --mix-light: 84%;
+  --mix-dark: 80%;
+}
+
+@media (pointer: fine) {
+  [data-background] :is([data-line], [data-no-newline], [data-column-number], [data-gutter-buffer]):is(
+    [data-line-type="change-addition"], [data-line-type="change-deletion"]
+  )[data-hovered] {
+    --mix-light: 82%;
+    --mix-dark: 77%;
+  }
 }
 `;

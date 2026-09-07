@@ -442,6 +442,7 @@ internal data class DiffRow(
   val changeType: String,
   val additions: Int,
   val deletions: Int,
+  val loaded: Boolean,
   val text: String,
   val content: String,
   val change: String,
@@ -450,7 +451,8 @@ internal data class DiffRow(
   val wordDiffRanges: List<DiffWordDiffRange>,
   val commentText: String,
   val commentRangeLabel: String,
-  val commentSectionTitle: String
+  val commentSectionTitle: String,
+  val awaitBackground: Int? = null
 ) {
   val resolvedFileId: String get() = fileId.ifEmpty { id }
 }
@@ -948,12 +950,19 @@ private class DiffCanvasView(context: Context) : View(context) {
     val deleteWidth = boldTextPaint.measureText(deleteText)
     val addText = "+${row.additions}"
     val addWidth = boldTextPaint.measureText(addText)
+    val unloadedText = "LOAD"
     val countGap = 4f * density
-    val countsX = checkboxRect.left - 10f * density - deleteWidth - countGap - addWidth
+    val countsWidth = if (row.loaded) deleteWidth + countGap + addWidth else boldTextPaint.measureText(unloadedText)
+    val countsX = checkboxRect.left - 10f * density - countsWidth
     val baseline = centeredBaseline(top, bottom, boldTextPaint)
-    canvas.drawText(deleteText, countsX, baseline, boldTextPaint)
-    boldTextPaint.color = theme.addText
-    canvas.drawText(addText, countsX + deleteWidth + countGap, baseline, boldTextPaint)
+    if (row.loaded) {
+      canvas.drawText(deleteText, countsX, baseline, boldTextPaint)
+      boldTextPaint.color = theme.addText
+      canvas.drawText(addText, countsX + deleteWidth + countGap, baseline, boldTextPaint)
+    } else {
+      boldTextPaint.color = theme.mutedText
+      canvas.drawText(unloadedText, countsX, baseline, boldTextPaint)
+    }
 
     val pathLayout = fileHeaderPathLayout(row, top, bottom, iconRect, countsX)
     val maxPathOffset = maxHeaderPathOffset(pathLayout)
@@ -1018,9 +1027,13 @@ private class DiffCanvasView(context: Context) : View(context) {
       size = style.fileHeaderMetaFontSizePx,
       weight = style.fileHeaderMetaFontWeight,
     )
-    val countsX = checkboxRect.left - 10f * density -
-      boldTextPaint.measureText("-${row.deletions}") - 4f * density -
-      boldTextPaint.measureText("+${row.additions}")
+    val countsWidth = if (row.loaded) {
+      boldTextPaint.measureText("-${row.deletions}") + 4f * density +
+        boldTextPaint.measureText("+${row.additions}")
+    } else {
+      boldTextPaint.measureText("LOAD")
+    }
+    val countsX = checkboxRect.left - 10f * density - countsWidth
     return maxHeaderPathOffset(fileHeaderPathLayout(row, top, bottom, iconRect, countsX))
   }
 
@@ -1152,6 +1165,9 @@ private class DiffCanvasView(context: Context) : View(context) {
       else -> theme.background
     }
     fill(canvas, background, 0f, top.toFloat(), width.toFloat(), bottom.toFloat())
+    row.awaitBackground?.let { color ->
+      fill(canvas, color, style.changeBarWidthPx + style.gutterWidthPx, top.toFloat(), width.toFloat(), bottom.toFloat())
+    }
     if (style.changeBarWidthPx > 0) {
       when (row.change) {
         "add" -> fill(
@@ -1345,8 +1361,10 @@ private fun parseRows(value: String): List<DiffRow> = try {
       changeType = row.optString("changeType"),
       additions = row.optInt("additions"),
       deletions = row.optInt("deletions"),
+      loaded = if (row.has("loaded")) row.optBoolean("loaded") else true,
       text = row.optString("text"),
       content = row.optString("content"),
+      awaitBackground = row.optNullableString("awaitBackground")?.let { runCatching { Color.parseColor(it) }.getOrNull() },
       change = row.optString("change", "context"),
       oldLineNumber = row.optNullableInt("oldLineNumber"),
       newLineNumber = row.optNullableInt("newLineNumber"),

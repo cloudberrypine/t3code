@@ -898,6 +898,103 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("automatically includes patches above the old preview and file limits", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* writeTextFile(cwd, "large.txt", `before:${"a".repeat(6_500_000)}\n`);
+        yield* git(cwd, ["add", "large.txt"]);
+        yield* git(cwd, ["commit", "-m", "add large preview fixture"]);
+        yield* writeTextFile(cwd, "large.txt", `after:${"b".repeat(6_500_000)}\n`);
+
+        const preview = yield* driver.getReviewDiffPreview({
+          cwd,
+          sourceKind: "working-tree",
+          ignoreWhitespace: false,
+        });
+        const source = preview.sources[0];
+        assert.isDefined(source);
+        if (!source) return;
+        assert.isFalse(source.truncated);
+        assert.isTrue(source.files?.find((file) => file.newPath === "large.txt")?.patchIncluded);
+        assert.isAbove(new TextEncoder().encode(source.diff).byteLength, 12_000_000);
+        assert.isBelow(new TextEncoder().encode(source.diff).byteLength, 120_000_000);
+        assert.include(source.diff, "diff --git a/large.txt b/large.txt");
+      }),
+    );
+
+    it.effect("keeps a complete file list and loads an omitted patch on demand", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* writeTextFile(cwd, "first.txt", `before:${"a".repeat(31_000_000)}\n`);
+        yield* writeTextFile(cwd, "large.txt", `before:${"a".repeat(31_000_000)}\n`);
+        yield* writeTextFile(cwd, "small.txt", "before\n");
+        yield* git(cwd, ["add", "first.txt", "large.txt", "small.txt"]);
+        yield* git(cwd, ["commit", "-m", "add preview fixtures"]);
+        yield* writeTextFile(cwd, "first.txt", `after:${"b".repeat(31_000_000)}\n`);
+        yield* writeTextFile(cwd, "large.txt", `after:${"b".repeat(31_000_000)}\n`);
+        yield* writeTextFile(cwd, "small.txt", "after\n");
+
+        const preview = yield* driver.getReviewDiffPreview({
+          cwd,
+          sourceKind: "working-tree",
+          ignoreWhitespace: false,
+        });
+        const source = preview.sources[0];
+        assert.isDefined(source);
+        if (!source) return;
+
+        assert.deepStrictEqual(
+          source.files?.map((file) => file.newPath),
+          ["first.txt", "large.txt", "small.txt"],
+        );
+        assert.isTrue(source.truncated);
+        assert.notInclude(source.diff, "[truncated]");
+        assert.include(source.diff, "first.txt");
+        assert.notInclude(source.diff, "large.txt");
+        assert.include(source.diff, "small.txt");
+        const omitted = source.files?.find((file) => file.newPath === "large.txt");
+        assert.isDefined(omitted);
+        assert.isFalse(omitted?.patchIncluded);
+
+        const loaded = yield* driver.getReviewDiffFileContents({
+          cwd,
+          sourceKind: source.kind,
+          changeType: omitted?.changeType ?? "change",
+          baseRef: source.baseRef,
+          headRef: source.headRef,
+          oldPath: omitted?.oldPath ?? "large.txt",
+          newPath: omitted?.newPath ?? "large.txt",
+          isUntracked: omitted?.isUntracked ?? false,
+          includePatch: true,
+        });
+        assert.isDefined(loaded.patch);
+        assert.include(loaded.patch ?? "", "diff --git a/large.txt b/large.txt");
+        assert.notInclude(loaded.patch ?? "", "[truncated]");
+      }),
+    );
+
+    it.effect("returns only the requested preview source", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const preview = yield* driver.getReviewDiffPreview({
+          cwd,
+          sourceKind: "working-tree",
+        });
+
+        assert.deepStrictEqual(
+          preview.sources.map((source) => source.kind),
+          ["working-tree"],
+        );
+      }),
+    );
+
     it.effect("loads full file contents for working-tree diff expansion", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -973,6 +1070,33 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           oldContents: "# test\n",
           newContents: "",
         });
+      }),
+    );
+
+    it.effect("loads exact checkpoint contents and patches without a shared ancestor", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const oldTree = yield* git(cwd, ["write-tree"]);
+        const oldRef = yield* git(cwd, ["commit-tree", oldTree, "-m", "old checkpoint"]);
+        yield* writeTextFile(cwd, "README.md", "# checkpoint change\nremaining context\n");
+        yield* git(cwd, ["add", "README.md"]);
+        const newTree = yield* git(cwd, ["write-tree"]);
+        const newRef = yield* git(cwd, ["commit-tree", newTree, "-m", "new checkpoint"]);
+        const contents = yield* driver.getReviewDiffFileContents(
+          makeReviewDiffFileContentsInput(cwd, {
+            sourceKind: "branch-range",
+            baseRefMode: "exact",
+            baseRef: oldRef,
+            headRef: newRef,
+            includePatch: true,
+          }),
+        );
+        assert.strictEqual(contents.oldContents, "# test\n");
+        assert.strictEqual(contents.newContents, "# checkpoint change\nremaining context\n");
+        assert.include(contents.patch, "-# test");
+        assert.include(contents.patch, "+# checkpoint change");
       }),
     );
 

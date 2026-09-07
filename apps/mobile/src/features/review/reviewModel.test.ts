@@ -13,8 +13,58 @@ import {
   getDefaultReviewSectionId,
   getReviewFilePreviewState,
   getReviewSectionIdForCheckpoint,
+  mergeReviewDiffPreviewFiles,
   type ReviewRenderableFile,
 } from "./reviewModel";
+
+describe("mergeReviewDiffPreviewFiles", () => {
+  it("keeps every manifest file in order and marks an omitted patch as unloaded", () => {
+    const parsed = buildReviewParsedDiff(
+      [
+        "diff --git a/loaded.ts b/loaded.ts",
+        "--- a/loaded.ts",
+        "+++ b/loaded.ts",
+        "@@ -1 +1 @@",
+        "-before",
+        "+after",
+      ].join("\n"),
+      "review",
+    );
+    const merged = mergeReviewDiffPreviewFiles(
+      parsed,
+      [
+        {
+          changeType: "change",
+          oldPath: "loaded.ts",
+          newPath: "loaded.ts",
+          additions: 1,
+          deletions: 1,
+          patchIncluded: true,
+          isUntracked: false,
+        },
+        {
+          changeType: "new",
+          oldPath: "unloaded.ts",
+          newPath: "unloaded.ts",
+          additions: 3,
+          deletions: 0,
+          patchIncluded: false,
+          isUntracked: true,
+        },
+      ],
+      "review",
+    );
+
+    expect(merged.kind).toBe("files");
+    if (merged.kind !== "files") return;
+    expect(merged.files.map((file) => [file.path, file.loaded])).toEqual([
+      ["loaded.ts", true],
+      ["unloaded.ts", false],
+    ]);
+    expect(merged.files[1]?.rows).toEqual([]);
+    expect(merged).toMatchObject({ fileCount: 2, additions: 4, deletions: 1 });
+  });
+});
 
 function makeCheckpoint(
   input: Partial<OrchestrationCheckpointSummary> &
@@ -43,6 +93,7 @@ function makeRenderableFile(
     additionLines: [],
     deletionLines: [],
     rows: [],
+    loaded: true,
     ...input,
   };
 }

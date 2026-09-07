@@ -53,6 +53,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.t3tools.t3code";
+const DESKTOP_PREVIEW_APP_ID = "com.t3tools.t3code.preview";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2091,6 +2092,9 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
     // by the WSL preflight probe at runtime, while ffi-rs, @ff-labs/fff-node
     // and the bun adapters are covered by the shared runtime-external closure
     // and emitted-bundle checks.
+    const probeEnv = { ...process.env };
+    delete probeEnv.ELECTRON_RUN_AS_NODE;
+
     yield* runCommand(
       ChildProcess.make(
         process.execPath,
@@ -2106,7 +2110,7 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
           // NODE_PATH would let a createRequire call inside the bundle resolve
           // a missing external from outside the packaged tree, which is the
           // whole thing this is trying to rule out.
-          env: { ...process.env, NODE_PATH: "" },
+          env: { ...probeEnv, NODE_PATH: "" },
         },
       ),
       {
@@ -2557,6 +2561,7 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
+  if (isDesktopPreviewVersion(version)) return "T3 Code (Preview)";
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
@@ -2582,7 +2587,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    appId: isDesktopPreviewVersion(version) ? DESKTOP_PREVIEW_APP_ID : DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],

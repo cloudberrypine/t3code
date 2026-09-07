@@ -244,6 +244,9 @@ function createNoticeRow(fileId: string, suffix: string, text: string): NativeRe
 }
 
 function noticeRowsForFile(file: ReviewRenderableFile): ReadonlyArray<NativeReviewDiffRow> {
+  if (!file.loaded) {
+    return [createNoticeRow(file.id, "unloaded", "Expand this file to load its diff.")];
+  }
   if (file.rows.length > 0) {
     return [];
   }
@@ -401,6 +404,7 @@ function prepareFileRows(
       changeType: mapChangeType(file),
       additions: file.additions,
       deletions: file.deletions,
+      loaded: file.loaded,
     },
   ];
 
@@ -503,6 +507,7 @@ function prepareNativeReviewDiffData(parsedDiff: ReviewParsedDiff): PreparedNati
     language: getLanguageForPath(file.path, file.languageHint),
     additions: file.additions,
     deletions: file.deletions,
+    loaded: file.loaded,
   }));
   const commentTargetsByRowId = new Map<string, NativeReviewDiffCommentTarget>();
   const rowIdByCommentLineId = new Map<string, string>();

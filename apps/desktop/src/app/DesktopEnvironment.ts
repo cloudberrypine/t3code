@@ -14,7 +14,7 @@ import * as Path from "effect/Path";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
-import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
+import { isNightlyDesktopVersion, isPreviewDesktopVersion } from "../updates/updateChannels.ts";
 
 export interface MakeDesktopEnvironmentInput {
   readonly dirname: string;
@@ -95,6 +95,10 @@ function resolveDesktopAppStageLabel(input: {
     return "Dev";
   }
 
+  if (isPreviewDesktopVersion(input.appVersion)) {
+    return "Preview";
+  }
+
   return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
 }
 
@@ -156,11 +160,16 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
-  const baseDir = resolveDesktopBaseDir({
+  const configuredBaseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
     t3Home: config.t3Home,
   });
+  const isPreview = input.isPackaged && isPreviewDesktopVersion(input.appVersion);
+  const baseDir =
+    isPreview && Option.isNone(config.t3Home)
+      ? path.join(configuredBaseDir, "preview")
+      : configuredBaseDir;
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const serverRoot =
@@ -178,8 +187,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const userDataDirName = isDevelopment ? "t3code-dev" : isPreview ? "t3code-preview" : "t3code";
+  const legacyUserDataDirName = isDevelopment
+    ? "T3 Code (Dev)"
+    : isPreview
+      ? "T3 Code (Preview)"
+      : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -224,10 +237,18 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      isDevelopment
+        ? "com.t3tools.t3code.dev"
+        : isPreview
+          ? "com.t3tools.t3code.preview"
+          : "com.t3tools.t3code",
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxDesktopEntryName: isDevelopment
+      ? "t3code-dev.desktop"
+      : isPreview
+        ? "t3code-preview.desktop"
+        : "t3code.desktop",
+    linuxWmClass: isDevelopment ? "t3code-dev" : isPreview ? "t3code-preview" : "t3code",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,

@@ -10,7 +10,8 @@ import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
 import { Button } from "~/components/ui/button";
-import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
+import { usePaneFindShortcut } from "~/hooks/usePaneFindShortcut";
+import { FileSearchField } from "./FileSearchField";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useComposerHandleContext } from "~/composerHandleContext";
@@ -64,34 +65,6 @@ function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }
   );
 }
 
-function FileSearchField(props: {
-  ariaLabel: string;
-  name: string;
-  onClose: () => void;
-  onValueChange: (value: string) => void;
-  value: string;
-}) {
-  return (
-    <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
-      <InputGroupInput
-        type="search"
-        name={props.name}
-        size="sm"
-        value={props.value}
-        aria-label={props.ariaLabel}
-        placeholder="Search files"
-        spellCheck={false}
-        onChange={(event) => props.onValueChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Escape") return;
-          props.onClose();
-          event.currentTarget.blur();
-        }}
-      />
-    </InputGroup>
-  );
-}
-
 export default function FileBrowserPanel({
   environmentId,
   cwd,
@@ -103,6 +76,11 @@ export default function FileBrowserPanel({
   workspaceMutationId,
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const findShortcut = usePaneFindShortcut(() => {
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  });
   const composerRef = useComposerHandleContext();
   const entriesQuery = useProjectEntriesQuery(environmentId, cwd);
   const entries = entriesQuery.data?.entries ?? [];
@@ -369,8 +347,31 @@ export default function FileBrowserPanel({
   return (
     <div
       ref={panelRef}
+      {...findShortcut}
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
+      onClickCapture={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+          return;
+        const row = event.nativeEvent
+          .composedPath()
+          .find(
+            (node): node is HTMLElement =>
+              node instanceof HTMLElement && node.hasAttribute("data-item-path"),
+          );
+        const path = row?.getAttribute("data-item-path");
+        // Pierre only emits selection changes. An explicit click on the already-selected
+        // file is still an open request, so the preview can re-read an external edit.
+        if (
+          path &&
+          path === selectedPath &&
+          model.getSelectedPaths().includes(path) &&
+          entryKinds.get(path) === "file"
+        ) {
+          treeSelectionPathRef.current = path;
+          onOpenFile(path);
+        }
+      }}
     >
       <div
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
@@ -378,6 +379,7 @@ export default function FileBrowserPanel({
       >
         <RefreshFilesButton isPending={entriesQuery.isPending} onRefresh={handleRefresh} />
         <FileSearchField
+          inputRef={searchInputRef}
           name="project-files-search"
           ariaLabel={`Search ${projectName} files`}
           value={search.value}

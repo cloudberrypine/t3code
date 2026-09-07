@@ -1,3 +1,4 @@
+import { angelScriptGrammar } from "@t3tools/shared/angelscript";
 import { createHighlighterCore, type GrammarState, type HighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import bashLanguage from "@shikijs/langs/bash";
@@ -182,6 +183,7 @@ const NATIVE_REVIEW_DIFF_SHIKI_THEMES = [
 ] satisfies Parameters<typeof createHighlighterCore>[0]["themes"];
 
 const NATIVE_REVIEW_DIFF_LANGUAGES = [
+  angelScriptGrammar,
   bashLanguage,
   diffLanguage,
   javascriptLanguage,

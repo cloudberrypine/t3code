@@ -1,3 +1,10 @@
+import {
+  analyzeAngelScript,
+  colorAngelScriptTokens,
+  isAngelScriptPath,
+  usesAngelScript,
+  type AngelScriptApi,
+} from "@t3tools/shared/angelscript";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import type { ProjectContentMatch } from "@t3tools/contracts";
 import { memo, Suspense, use, useMemo, type CSSProperties } from "react";
@@ -128,20 +135,31 @@ function HighlightedTokens(props: {
 function SyntaxHighlightedTokens(props: {
   readonly line: string;
   readonly language: string;
+  readonly api?: AngelScriptApi | null;
   readonly ranges: ReadonlyArray<Range>;
   readonly theme: "light" | "dark";
 }) {
   const highlighter = use(getSyntaxHighlighterPromise(props.language));
   const tokens = useMemo(() => {
     try {
-      return highlighter.codeToTokens(props.line, {
+      const tokens = highlighter.codeToTokens(props.line, {
         lang: props.language,
         theme: resolveDiffThemeName(props.theme),
       }).tokens[0];
+      const colored =
+        tokens && props.api
+          ? colorAngelScriptTokens(tokens, analyzeAngelScript(props.line, props.api), props.theme)
+          : tokens;
+      let offset = 0;
+      return colored?.map((token) => {
+        const result = { ...token, offset };
+        offset += token.content.length;
+        return result;
+      });
     } catch {
       return undefined;
     }
-  }, [highlighter, props.language, props.line, props.theme]);
+  }, [highlighter, props.language, props.line, props.theme, props.api]);
 
   return tokens ? (
     <HighlightedTokens line={props.line} ranges={props.ranges} tokens={tokens} />
@@ -157,6 +175,7 @@ function SyntaxHighlightedTokens(props: {
 export const HighlightedSearchLine = memo(function HighlightedSearchLine(props: {
   readonly match: ProjectContentMatch;
   readonly path: string;
+  readonly api?: AngelScriptApi | null;
   readonly theme: "light" | "dark";
 }) {
   const ranges = useMemo(() => normalizeRanges(props.match), [props.match]);
@@ -173,7 +192,12 @@ export const HighlightedSearchLine = memo(function HighlightedSearchLine(props: 
       <Suspense fallback={fallback}>
         <SyntaxHighlightedTokens
           line={props.match.lineContent}
-          language={getFiletypeFromFileName(props.path)}
+          language={
+            usesAngelScript(props.path, props.match.lineContent, props.api ?? null)
+              ? "angelscript"
+              : getFiletypeFromFileName(props.path)
+          }
+          api={isAngelScriptPath(props.path) ? (props.api ?? null) : null}
           ranges={ranges}
           theme={props.theme}
         />

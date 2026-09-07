@@ -1,6 +1,10 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { ChangeTypes, FileDiffMetadata } from "@pierre/diffs/types";
-import type { OrchestrationCheckpointSummary, ReviewDiffPreviewSource } from "@t3tools/contracts";
+import type {
+  OrchestrationCheckpointSummary,
+  ReviewDiffPreviewFile,
+  ReviewDiffPreviewSource,
+} from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Order from "effect/Order";
@@ -18,6 +22,7 @@ export interface ReviewSectionItem {
   readonly subtitle: string | null;
   readonly diff: string | null;
   readonly isLoading: boolean;
+  readonly source: ReviewDiffPreviewSource | null;
 }
 
 export interface ReviewRenderableHunkRow {
@@ -56,6 +61,7 @@ export interface ReviewRenderableFile {
   readonly additionLines: ReadonlyArray<string>;
   readonly deletionLines: ReadonlyArray<string>;
   readonly rows: ReadonlyArray<ReviewRenderableRow>;
+  readonly loaded: boolean;
 }
 
 export type ReviewFilePreviewState =
@@ -396,6 +402,59 @@ function mapRenderableFile(file: FileDiffMetadata): ReviewRenderableFile {
     additionLines: file.additionLines,
     deletionLines: file.deletionLines,
     rows: buildRenderableRows(file),
+    loaded: true,
+  };
+}
+
+/** Adds collapsed header-only entries for manifest files whose patches were omitted. */
+export function mergeReviewDiffPreviewFiles(
+  parsedDiff: ReviewParsedDiff,
+  previewFiles: ReadonlyArray<ReviewDiffPreviewFile> | undefined,
+  cacheScope: string,
+): ReviewParsedDiff {
+  if (!previewFiles || previewFiles.length === 0 || parsedDiff.kind === "raw") {
+    return parsedDiff;
+  }
+
+  const loadedFiles =
+    parsedDiff.kind === "files"
+      ? new Map(parsedDiff.files.map((file) => [file.path, file] as const))
+      : new Map<string, ReviewRenderableFile>();
+  const files = previewFiles
+    .toSorted((left, right) =>
+      left.newPath.localeCompare(right.newPath, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    )
+    .map<ReviewRenderableFile>((previewFile) => {
+      const loadedFile = loadedFiles.get(previewFile.newPath);
+      if (loadedFile) return loadedFile;
+      const loaded = previewFile.patchIncluded;
+      const id = `${cacheScope}:manifest:${previewFile.oldPath}\0${previewFile.newPath}`;
+      return {
+        id,
+        cacheKey: id,
+        path: previewFile.newPath,
+        previousPath: previewFile.oldPath === previewFile.newPath ? null : previewFile.oldPath,
+        changeType: previewFile.changeType,
+        additions: previewFile.additions,
+        deletions: previewFile.deletions,
+        languageHint: null,
+        additionLines: [],
+        deletionLines: [],
+        rows: [],
+        loaded,
+      };
+    });
+
+  return {
+    kind: "files",
+    files,
+    fileCount: files.length,
+    additions: previewFiles.reduce((total, file) => total + file.additions, 0),
+    deletions: previewFiles.reduce((total, file) => total + file.deletions, 0),
+    notice: parsedDiff.kind === "files" ? parsedDiff.notice : null,
   };
 }
 
@@ -432,6 +491,7 @@ export function buildReviewSectionItems(input: {
         subtitle: checkpointSubtitle(checkpoint),
         diff: input.turnDiffById[id] ?? null,
         isLoading: input.loadingTurnIds[id] === true,
+        source: null,
       };
     },
   );
@@ -443,6 +503,7 @@ export function buildReviewSectionItems(input: {
     subtitle: gitSubtitle(section),
     diff: section.diff,
     isLoading: false,
+    source: section,
   }));
   const hasDirtyWorktreeItem = gitItems.some((item) => item.id === DIRTY_WORKTREE_SECTION_ID);
   const visibleGitItems =
@@ -455,6 +516,7 @@ export function buildReviewSectionItems(input: {
             subtitle: DIRTY_WORKTREE_SUBTITLE,
             diff: null,
             isLoading: true,
+            source: null,
           } satisfies ReviewSectionItem,
           ...gitItems,
         ]

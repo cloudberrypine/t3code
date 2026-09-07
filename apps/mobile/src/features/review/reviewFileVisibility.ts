@@ -6,7 +6,7 @@ import type { ReviewRenderableFile } from "./reviewModel";
 function getDefaultReviewExpandedFileIds(
   files: ReadonlyArray<ReviewRenderableFile>,
 ): ReadonlyArray<string> {
-  return files.map((file) => file.id);
+  return files.filter((file) => file.loaded).map((file) => file.id);
 }
 
 export function getValidReviewFileIds(

@@ -1,3 +1,4 @@
+import { angelScriptGrammar } from "@t3tools/shared/angelscript";
 import { createHighlighterCore, type HighlighterCore } from "@shikijs/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import bashLanguage from "@shikijs/langs/bash";
@@ -57,6 +58,7 @@ const REVIEW_HIGHLIGHT_CHUNK_LINE_THRESHOLD = 8;
 const REVIEW_HIGHLIGHT_CHUNK_SIZE = 200;
 const REVIEW_TOKENIZE_MAX_LINE_LENGTH = 1_000;
 const REVIEW_INITIAL_LANGUAGE_MODULES = [
+  angelScriptGrammar,
   bashLanguage,
   javascriptLanguage,
   jsonLanguage,
@@ -66,6 +68,7 @@ const REVIEW_INITIAL_LANGUAGE_MODULES = [
   yamlLanguage,
 ] satisfies Parameters<typeof createHighlighterCore>[0]["langs"];
 const loadedLanguages = new Set<string>([
+  "angelscript",
   "text",
   "bash",
   "javascript",
@@ -608,8 +611,9 @@ export async function highlightSourceFile(input: {
   readonly path: string;
   readonly contents: string;
   readonly theme: ReviewDiffTheme;
+  readonly language?: string;
 }): Promise<ReadonlyArray<ReadonlyArray<ReviewHighlightedToken>>> {
-  const language = await resolveLanguageFromPath(input.path);
+  const language = await resolveLanguageFromPath(input.path, input.language ?? null);
   return highlightLines(input.contents, language, SHIKI_THEME_NAME_BY_SCHEME[input.theme]);
 }
 

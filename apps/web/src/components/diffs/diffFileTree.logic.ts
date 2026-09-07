@@ -1,5 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { FileTreeBatchOperation, GitStatus } from "@pierre/trees";
+import type { ReviewDiffPreviewFile } from "@t3tools/contracts";
 
 import { resolveFileDiffPath } from "~/lib/diffRendering";
 
@@ -7,6 +8,7 @@ import { resolveFileDiffPath } from "~/lib/diffRendering";
 export interface DiffFileTreeEntry {
   readonly path: string;
   readonly status: GitStatus;
+  readonly loadState?: "loaded" | "loading" | "unloaded" | "error";
 }
 
 function toGitStatus(file: FileDiffMetadata): GitStatus {
@@ -28,6 +30,34 @@ export function diffFileTreeEntries(
   files: ReadonlyArray<FileDiffMetadata>,
 ): ReadonlyArray<DiffFileTreeEntry> {
   return files.map((file) => ({ path: resolveFileDiffPath(file), status: toGitStatus(file) }));
+}
+
+/** Builds the complete tree from the server's file manifest, including patches not yet loaded. */
+export function reviewDiffFileTreeEntries(
+  files: ReadonlyArray<ReviewDiffPreviewFile>,
+  loadedPaths: ReadonlySet<string> = new Set(),
+  loadingPaths: ReadonlySet<string> = new Set(),
+  errorPath: string | null = null,
+): ReadonlyArray<DiffFileTreeEntry> {
+  return files.map((file) => ({
+    path: file.newPath,
+    status:
+      file.changeType === "new"
+        ? "added"
+        : file.changeType === "deleted"
+          ? "deleted"
+          : file.changeType === "rename-pure" || file.changeType === "rename-changed"
+            ? "renamed"
+            : "modified",
+    loadState:
+      file.patchIncluded || loadedPaths.has(file.newPath)
+        ? "loaded"
+        : loadingPaths.has(file.newPath)
+          ? "loading"
+          : errorPath === file.newPath
+            ? "error"
+            : "unloaded",
+  }));
 }
 
 /**

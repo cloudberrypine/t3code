@@ -1,10 +1,15 @@
 import { useEffect, useMemo } from "react";
+import type { ReviewDiffPreviewFile } from "@t3tools/contracts";
 
 import { countReviewCommentContexts, parseReviewInlineComments } from "./reviewCommentSelection";
 import { getCachedNativeReviewDiffData } from "./nativeReviewDiffAdapter";
 import { markReviewEvent, measureReviewWork } from "./reviewPerf";
 import { getCachedReviewParsedDiff } from "./reviewState";
-import type { ReviewParsedDiff, ReviewSectionItem } from "./reviewModel";
+import {
+  mergeReviewDiffPreviewFiles,
+  type ReviewParsedDiff,
+  type ReviewSectionItem,
+} from "./reviewModel";
 
 const EMPTY_INLINE_REVIEW_COMMENTS = Object.freeze([]);
 
@@ -25,10 +30,19 @@ function logReviewDiffDiagnostic(message: string, details?: Record<string, unkno
   console.log(`[review-sheet] ${message}`);
 }
 
-export function formatHeaderDiffSummary(parsedDiff: ReviewParsedDiff): {
+export function formatHeaderDiffSummary(
+  parsedDiff: ReviewParsedDiff,
+  previewFiles: ReadonlyArray<ReviewDiffPreviewFile> | undefined = [],
+): {
   readonly additions: string | null;
   readonly deletions: string | null;
 } {
+  if (previewFiles && previewFiles.length > 0) {
+    return {
+      additions: `+${previewFiles.reduce((total, file) => total + file.additions, 0)}`,
+      deletions: `-${previewFiles.reduce((total, file) => total + file.deletions, 0)}`,
+    };
+  }
   if (parsedDiff.kind !== "files") {
     return { additions: null, deletions: null };
   }
@@ -46,7 +60,7 @@ export function useReviewDiffData(input: {
 }) {
   const { draftMessage, selectedSection, threadKey } = input;
   const selectedSectionId = selectedSection?.id ?? null;
-  const parsedDiff = useMemo(
+  const baseParsedDiff = useMemo(
     () =>
       measureReviewWork("parse-diff", () =>
         getCachedReviewParsedDiff({
@@ -57,7 +71,19 @@ export function useReviewDiffData(input: {
       ),
     [selectedSection?.diff, selectedSection?.id, threadKey],
   );
-  const headerDiffSummary = useMemo(() => formatHeaderDiffSummary(parsedDiff), [parsedDiff]);
+  const parsedDiff = useMemo(
+    () =>
+      mergeReviewDiffPreviewFiles(
+        baseParsedDiff,
+        selectedSection?.source?.files,
+        `${threadKey ?? "review"}:${selectedSectionId ?? "none"}`,
+      ),
+    [baseParsedDiff, selectedSection?.source?.files, selectedSectionId, threadKey],
+  );
+  const headerDiffSummary = useMemo(
+    () => formatHeaderDiffSummary(parsedDiff, selectedSection?.source?.files),
+    [parsedDiff, selectedSection?.source?.files],
+  );
   const inlineReviewComments = useMemo(
     () => parseReviewInlineComments(draftMessage),
     [draftMessage],

@@ -51,6 +51,7 @@ function acquireDiffWorkerPool(themeName: DiffThemeName, poolSize: number) {
       {
         theme: themeName,
         preferredHighlighter: PREFERRED_HIGHLIGHTER,
+        lineDiffType: "none",
         tokenizeMaxLineLength: 1_000,
         useTokenTransformer: true,
       },
@@ -64,7 +65,7 @@ function acquireDiffWorkerPool(themeName: DiffThemeName, poolSize: number) {
   return entry;
 }
 
-function DiffWorkerThemeSync({ themeName }: { themeName: DiffThemeName }) {
+function DiffWorkerRenderOptionsSync({ themeName }: { themeName: DiffThemeName }) {
   const workerPool = useWorkerPool();
 
   useEffect(() => {
@@ -76,7 +77,7 @@ function DiffWorkerThemeSync({ themeName }: { themeName: DiffThemeName }) {
     void (async () => {
       try {
         const current = workerPool.getDiffRenderOptions();
-        if (current.theme === themeName) {
+        if (current.theme === themeName && current.lineDiffType === "none") {
           return;
         }
 
@@ -84,6 +85,7 @@ function DiffWorkerThemeSync({ themeName }: { themeName: DiffThemeName }) {
         await workerPool.setRenderOptions({
           ...current,
           theme: themeName,
+          lineDiffType: "none",
         });
       } catch (cause) {
         console.error(new DiffWorkerError({ operation, themeName, cause }));
@@ -160,7 +162,7 @@ export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
 
   return (
     <WorkerPoolContext value={workerPool}>
-      <DiffWorkerThemeSync themeName={diffThemeName} />
+      <DiffWorkerRenderOptionsSync themeName={diffThemeName} />
       <DiffWorkerReady>{children}</DiffWorkerReady>
     </WorkerPoolContext>
   );

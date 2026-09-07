@@ -1,8 +1,10 @@
 import type { GitStatusEntry } from "@pierre/trees";
-import { FileTree, useFileTree, useFileTreeSelector } from "@pierre/trees/react";
+import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
+import { usePaneFindShortcut } from "~/hooks/usePaneFindShortcut";
+import { FileSearchField } from "../files/FileSearchField";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
@@ -16,6 +18,16 @@ import {
   collectDirectoryPaths,
   type DiffFileTreeEntry,
 } from "./diffFileTree.logic";
+
+const DIFF_FILE_TREE_UNSAFE_CSS = `${PIERRE_TREE_UNSAFE_CSS}
+  [data-item-section='content']:has(+ [data-item-section='decoration'] > span) {
+    flex: 1 1 auto;
+  }
+  [data-item-section='decoration']:has(> span) {
+    flex: 0 0 auto;
+    padding-inline-start: var(--trees-item-row-gap);
+  }
+`;
 
 export type { DiffFileTreeEntry } from "./diffFileTree.logic";
 
@@ -52,6 +64,11 @@ export function DiffFileTree({
   className,
 }: DiffFileTreeProps) {
   const { resolvedTheme } = useTheme();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const findShortcut = usePaneFindShortcut(() => {
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  });
   const paths = useMemo(() => entries.map((entry) => entry.path), [entries]);
   const directoryPaths = useMemo(() => collectDirectoryPaths(paths), [paths]);
   const gitStatus = useMemo<ReadonlyArray<GitStatusEntry>>(
@@ -59,6 +76,9 @@ export function DiffFileTree({
     [entries],
   );
   const filePathsRef = useRef<ReadonlySet<string>>(new Set(paths));
+  const loadStatesRef = useRef(
+    new Map(entries.map((entry) => [entry.path, entry.loadState] as const)),
+  );
   const onSelectFileRef = useRef(onSelectFile);
   // Selection driven by `selectedPath` below is an echo of a file already on screen, not a
   // request to scroll to it again.
@@ -68,11 +88,13 @@ export function DiffFileTree({
 
   useEffect(() => {
     filePathsRef.current = new Set(paths);
+    loadStatesRef.current = new Map(entries.map((entry) => [entry.path, entry.loadState] as const));
     onSelectFileRef.current = onSelectFile;
-  }, [onSelectFile, paths]);
+  }, [entries, onSelectFile, paths]);
 
   const { model } = useFileTree({
     density: "compact",
+    fileTreeSearchMode: "hide-non-matches",
     flattenEmptyDirectories: true,
     initialExpansion: "open",
     icons: T3_PIERRE_ICONS,
@@ -81,10 +103,18 @@ export function DiffFileTree({
       const path = selectedPaths.at(-1)?.replace(/\/$/, "");
       if (path && filePathsRef.current.has(path)) onSelectFileRef.current(path);
     },
+    renderRowDecoration: ({ row }) => {
+      const loadState = loadStatesRef.current.get(row.path);
+      if (loadState === "loading") return { text: "Loading", title: "Loading file diff" };
+      if (loadState === "error") return { text: "Retry", title: "Retry loading file diff" };
+      if (loadState === "unloaded") return { text: "Load", title: "File diff not loaded" };
+      return null;
+    },
     paths: [],
     search: false,
-    unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
+    unsafeCSS: DIFF_FILE_TREE_UNSAFE_CSS,
   });
+  const search = useFileTreeSearch(model);
   const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>
     areAllDirectoriesExpanded(currentModel, directoryPaths),
   );
@@ -137,12 +167,22 @@ export function DiffFileTree({
   }, [model, paths, revealRequestId, selectedPath]);
 
   return (
-    <div className={cn("flex min-h-0 flex-1 flex-col bg-background", className)}>
+    <div
+      {...findShortcut}
+      className={cn("flex min-h-0 flex-1 flex-col bg-background outline-none", className)}
+    >
       <div
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 text-xs text-muted-foreground in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
         data-surface-subheader
       >
-        <span className="px-1 font-medium text-foreground">Files</span>
+        <FileSearchField
+          inputRef={searchInputRef}
+          name="diff-files-search"
+          ariaLabel="Search changed files"
+          value={search.value}
+          onValueChange={(value) => (value.trim() ? search.setValue(value) : search.close())}
+          onClose={search.close}
+        />
         <span className="ml-auto tabular-nums">{entries.length}</span>
         {headerAccessory}
         {directoryPaths.length > 0 ? (

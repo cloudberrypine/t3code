@@ -22,12 +22,15 @@ export const ProjectSearchEntriesInput = Schema.Struct({
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_SEARCH_ENTRIES_MAX_LIMIT)),
   kind: Schema.optional(ProjectEntryKind),
   imageOnly: Schema.optional(Schema.Boolean),
+  // Exact discovery includes generated/ignored files, but excludes nested repositories.
+  exactFileName: Schema.optional(TrimmedNonEmptyString.check(Schema.isPattern(/^[^/\\]+$/))),
 });
 export type ProjectSearchEntriesInput = typeof ProjectSearchEntriesInput.Type;
 
 export const ProjectEntry = Schema.Struct({
   path: TrimmedNonEmptyString,
   kind: ProjectEntryKind,
+  revision: Schema.optional(Schema.String),
 });
 export type ProjectEntry = typeof ProjectEntry.Type;
 
@@ -72,6 +75,7 @@ export type ProjectSearchContentsResult = typeof ProjectSearchContentsResult.Typ
 
 export const ProjectListEntriesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
+  includeIgnored: Schema.optional(Schema.Boolean),
 });
 export type ProjectListEntriesInput = typeof ProjectListEntriesInput.Type;
 

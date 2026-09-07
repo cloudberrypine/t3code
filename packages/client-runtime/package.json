@@ -226,6 +226,10 @@
     "./work-log/scroll-anchor": {
       "types": "./src/work-log/scrollAnchor.ts",
       "default": "./src/work-log/scrollAnchor.ts"
+    },
+    "./angelscript": {
+      "types": "./src/angelscript.ts",
+      "default": "./src/angelscript.ts"
     }
   },
   "scripts": {

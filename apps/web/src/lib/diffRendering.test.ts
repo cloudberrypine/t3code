@@ -4,9 +4,48 @@ import {
   buildFileDiffIdentityKey,
   buildFileDiffRenderKey,
   buildPatchCacheKey,
+  buildReviewDiffPlaceholder,
   getDiffLineStat,
   getRenderablePatch,
+  stripDiffTruncationMarker,
 } from "./diffRendering";
+
+describe("buildReviewDiffPlaceholder", () => {
+  it("creates a stable header-only partial diff for an unloaded manifest file", () => {
+    const placeholder = buildReviewDiffPlaceholder(
+      {
+        changeType: "rename-changed",
+        oldPath: "src/old.ts",
+        newPath: "src/new.ts",
+        additions: 4,
+        deletions: 2,
+        patchIncluded: false,
+        isUntracked: false,
+      },
+      "review-scope",
+    );
+
+    expect(placeholder).toMatchObject({
+      name: "b/src/new.ts",
+      prevName: "a/src/old.ts",
+      type: "rename-changed",
+      hunks: [],
+      isPartial: true,
+      splitLineCount: 0,
+      unifiedLineCount: 0,
+    });
+    expect(buildFileDiffIdentityKey(placeholder)).toBe("src/old.ts\0src/new.ts");
+  });
+});
+
+describe("stripDiffTruncationMarker", () => {
+  it("removes server metadata without changing a complete patch", () => {
+    const patch = "diff --git a/a.ts b/a.ts\n+value";
+
+    expect(stripDiffTruncationMarker(`${patch}\n\n[truncated]\n`)).toBe(patch);
+    expect(stripDiffTruncationMarker(patch)).toBe(patch);
+  });
+});
 
 describe("buildPatchCacheKey", () => {
   it("normalizes outer whitespace before hashing", () => {
@@ -22,6 +61,11 @@ describe("buildPatchCacheKey", () => {
     expect(buildPatchCacheKey(before)).not.toBe(buildPatchCacheKey(after));
   });
 
+  it("distinguishes trailing whitespace in the final source line", () => {
+    const patch = "diff --git a/a.ts b/a.ts\n+value";
+    expect(buildPatchCacheKey(`${patch}  \n`)).not.toBe(buildPatchCacheKey(`${patch}\n`));
+  });
+
   it("changes when cache scope changes", () => {
     const patch = "diff --git a/a.ts b/a.ts\n+console.log('hello')";
 
@@ -32,6 +76,22 @@ describe("buildPatchCacheKey", () => {
 });
 
 describe("getRenderablePatch", () => {
+  it.each(["", "\n"])("preserves source whitespace with patch terminator %j", (terminator) => {
+    const patch =
+      "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+after  ";
+    const parsed = getRenderablePatch(stripDiffTruncationMarker(patch + terminator));
+    if (parsed?.kind !== "files") throw new Error("Expected parsed patch");
+    expect(parsed.files[0]?.additionLines).toEqual(["after  \n"]);
+  });
+
+  it("respects an explicit missing-file-newline marker", () => {
+    const parsed = getRenderablePatch(
+      "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+after\n\\ No newline at end of file",
+    );
+    if (parsed?.kind !== "files") throw new Error("Expected parsed patch");
+    expect(parsed.files[0]?.additionLines).toEqual(["after"]);
+  });
+
   it("compacts partial hunk render offsets for virtualized review diffs", () => {
     const patch = [
       "diff --git a/example.ts b/example.ts",

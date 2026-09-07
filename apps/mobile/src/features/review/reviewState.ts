@@ -186,6 +186,46 @@ export function setReviewGitSections(
   appAtomRegistry.set(reviewGitSectionsByThreadKeyAtom(threadKey), sections);
 }
 
+export function setReviewGitFilePatch(input: {
+  readonly threadKey: string;
+  readonly sourceKind: ReviewDiffPreviewSource["kind"];
+  readonly diffHash: string;
+  readonly filePath: string;
+  readonly patch: string;
+}): boolean {
+  const atom = reviewGitSectionsByThreadKeyAtom(input.threadKey);
+  const sections = appAtomRegistry.get(atom);
+  let updated = false;
+  appAtomRegistry.set(
+    atom,
+    sections.map((section) => {
+      if (
+        section.kind !== input.sourceKind ||
+        section.diffHash !== input.diffHash ||
+        !section.files
+      ) {
+        return section;
+      }
+      const target = section.files.find((file) => file.newPath === input.filePath);
+      if (!target || target.patchIncluded) return section;
+      updated = true;
+      const files = section.files.map((file) =>
+        file.newPath === input.filePath ? { ...file, patchIncluded: true } : file,
+      );
+      const diff = [section.diff.trimEnd(), input.patch.trimEnd()]
+        .filter((part) => part.length > 0)
+        .join("\n");
+      return {
+        ...section,
+        diff,
+        files,
+        truncated: section.fileListTruncated === true || files.some((file) => !file.patchIncluded),
+      };
+    }),
+  );
+  return updated;
+}
+
 export function setReviewTurnDiff(threadKey: string, sectionId: string, diff: string): void {
   const atom = reviewTurnDiffByThreadKeyAtom(threadKey);
   const current = appAtomRegistry.get(atom);

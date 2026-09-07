@@ -1,4 +1,11 @@
 import { Spinner } from "~/components/ui/spinner";
+import { isAngelScriptPath, usesAngelScript } from "@t3tools/shared/angelscript";
+import { useAngelScript } from "~/hooks/useAngelScript";
+import {
+  ANGELSCRIPT_CSS,
+  createAngelScriptPainter,
+  angelScriptCacheKey,
+} from "~/lib/angelScriptRendering";
 import type {
   ChatFileAttachment,
   EditorId,
@@ -52,6 +59,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
 import FileBrowserPanel from "./FileBrowserPanel";
+import { FileBrowserPane } from "./FileBrowserPane";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import {
@@ -103,6 +111,7 @@ const RENDER_BROWSER_FILE_STORAGE_KEY = "t3code.renderBrowserFile";
 const FILE_LINK_REVEAL_ATTRIBUTE = "data-file-link-reveal";
 const FILE_LINK_REVEAL_UNSAFE_CSS = `
   ${DIFF_SURFACE_THEME_UNSAFE_CSS}
+  ${ANGELSCRIPT_CSS}
 
   diffs-container {
     --diffs-bg: var(--code-background, var(--background)) !important;
@@ -162,6 +171,14 @@ function WorkspaceImagePreview(props: {
     [props.threadRef.threadId, props.absolutePath],
   );
   const assetUrl = useAssetUrlState(props.environmentId, resource);
+  const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
+  useWorkspaceMutationRefresh({
+    mutationId: props.workspaceMutationId,
+    resourceKey: JSON.stringify([props.environmentId, resource]),
+    refresh: () => {
+      void refreshAssetUrl().catch(() => undefined);
+    },
+  });
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const revisionSuffix =
     props.workspaceMutationId === null
@@ -294,6 +311,14 @@ function WorkspaceBrowserPreview(props: {
     [insideWorkspace, props.threadRef.threadId, props.absolutePath],
   );
   const assetUrl = useAssetUrlState(props.environmentId, resource);
+  const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
+  useWorkspaceMutationRefresh({
+    mutationId: props.workspaceMutationId,
+    resourceKey: JSON.stringify([props.environmentId, resource]),
+    refresh: () => {
+      void refreshAssetUrl().catch(() => undefined);
+    },
+  });
   const revisionSuffix =
     props.workspaceMutationId === null
       ? ""
@@ -603,6 +628,7 @@ interface EditableFileSurfaceProps {
   revealRequestId: number;
   wordWrap: boolean;
   onPostRender: FilePostRender;
+  angelScript?: boolean;
   onPendingChange: (relativePath: string, pending: boolean) => void;
 }
 
@@ -621,6 +647,7 @@ function EditableFileSurface({
   revealRequestId,
   wordWrap,
   onPostRender,
+  angelScript,
   onPendingChange,
 }: EditableFileSurfaceProps) {
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
@@ -824,6 +851,13 @@ function EditableFileSurface({
     [onPostRender, selectedRange],
   );
 
+  const editorCacheKey = projectFileEditorCacheKey(
+    environmentId,
+    cwd,
+    relativePath,
+    contents,
+    editor.getFile(),
+  );
   return (
     <EditProvider editor={editor}>
       <div ref={surfaceRef} className="flex min-h-0 flex-1">
@@ -837,14 +871,9 @@ function EditableFileSurface({
           <File<FileCommentAnnotationGroup>
             file={{
               name: relativePath,
+              ...(angelScript ? { lang: "angelscript" } : {}),
               contents,
-              cacheKey: projectFileEditorCacheKey(
-                environmentId,
-                cwd,
-                relativePath,
-                contents,
-                editor.getFile(),
-              ),
+              cacheKey: angelScript ? angelScriptCacheKey(editorCacheKey) : editorCacheKey,
             }}
             options={{
               disableFileHeader: true,
@@ -857,7 +886,7 @@ function EditableFileSurface({
               theme: resolveDiffThemeName(resolvedTheme),
               preferredHighlighter: PREFERRED_HIGHLIGHTER,
               themeType: resolvedTheme,
-              unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
+              unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${ANGELSCRIPT_CSS}`,
               onPostRender: handlePostRender,
             }}
             selectedLines={selectedRange}
@@ -995,6 +1024,9 @@ export default function FilePreviewPanel({
     relativePath,
     attachment === undefined && !isMedia && !isPdf,
   );
+  const [manualRefreshId, setManualRefreshId] = useState(0);
+  const previewRevision = JSON.stringify([workspaceMutationId, revealRequestId, manualRefreshId]);
+  const refreshSelectedFile = useCallback(() => setManualRefreshId((current) => current + 1), []);
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
   const showExplorer = shouldShowFileExplorer({
     relativePath,
@@ -1040,7 +1072,23 @@ export default function FilePreviewPanel({
     isBrowserPreviewFile(relativePath);
   const absolutePath =
     relativePath && attachment === undefined ? resolvePathLinkTarget(relativePath, cwd) : null;
-  const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const api = useAngelScript(
+    relativePath && isAngelScriptPath(relativePath) && !isHostFile
+      ? { environmentId, cwd, revision: previewRevision }
+      : undefined,
+  );
+  const angelScript =
+    relativePath !== null && usesAngelScript(relativePath, file.data?.contents ?? "", api);
+  const painter = useMemo(() => createAngelScriptPainter(api), [api]);
+  useEffect(() => () => painter.dispose(), [painter]);
+  const revealFileLine = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const onFilePostRender = useCallback<FilePostRender>(
+    (node, instance, phase) => {
+      painter.paint(node, instance.file, phase);
+      revealFileLine(node, instance, phase);
+    },
+    [painter, revealFileLine],
+  );
   useWorkspaceMutationRefresh({
     enabled:
       attachment === undefined &&
@@ -1048,7 +1096,7 @@ export default function FilePreviewPanel({
       !isMedia &&
       !isPdf &&
       !selectedFilePending,
-    mutationId: workspaceMutationId,
+    mutationId: previewRevision,
     refresh: file.refresh,
     resourceKey: `file:${environmentId}:${cwd}:${relativePath ?? ""}`,
   });
@@ -1235,7 +1283,7 @@ export default function FilePreviewPanel({
               absolutePath={absolutePath}
               workspaceRoot={cwd}
               name={relativePath}
-              workspaceMutationId={workspaceMutationId}
+              workspaceMutationId={previewRevision}
             />
           ) : relativePath && isImage && absolutePath ? (
             <WorkspaceImagePreview
@@ -1245,7 +1293,7 @@ export default function FilePreviewPanel({
               absolutePath={absolutePath}
               workspaceRoot={cwd}
               alt={relativePath}
-              workspaceMutationId={workspaceMutationId}
+              workspaceMutationId={previewRevision}
             />
           ) : relativePath && renderBrowserFile && absolutePath ? (
             <WorkspaceBrowserPreview
@@ -1255,7 +1303,7 @@ export default function FilePreviewPanel({
               absolutePath={absolutePath}
               workspaceRoot={cwd}
               title={relativePath}
-              workspaceMutationId={workspaceMutationId}
+              workspaceMutationId={previewRevision}
             />
           ) : relativePath && file.error && file.data === null ? (
             <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
@@ -1293,8 +1341,13 @@ export default function FilePreviewPanel({
                   <File
                     file={{
                       name: relativePath,
+                      ...(angelScript ? { lang: "angelscript" } : {}),
                       contents: file.data.contents,
-                      cacheKey: projectFileCacheKey(cwd, relativePath, file.data.contents),
+                      cacheKey: angelScript
+                        ? angelScriptCacheKey(
+                            projectFileCacheKey(cwd, relativePath, file.data.contents),
+                          )
+                        : projectFileCacheKey(cwd, relativePath, file.data.contents),
                     }}
                     options={{
                       disableFileHeader: true,
@@ -1302,7 +1355,7 @@ export default function FilePreviewPanel({
                       theme: resolveDiffThemeName(resolvedTheme),
                       preferredHighlighter: PREFERRED_HIGHLIGHTER,
                       themeType: resolvedTheme,
-                      unsafeCSS: FILE_LINK_REVEAL_UNSAFE_CSS,
+                      unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${ANGELSCRIPT_CSS}`,
                       onPostRender: onFilePostRender,
                     }}
                     className="min-h-full"
@@ -1312,6 +1365,7 @@ export default function FilePreviewPanel({
             ) : (
               <DiffWorkerPoolProvider>
                 <EditableFileSurface
+                  angelScript={angelScript}
                   key={`${relativePath}:${resolvedTheme}`}
                   environmentId={environmentId}
                   cwd={cwd}
@@ -1329,14 +1383,7 @@ export default function FilePreviewPanel({
           ) : null}
         </div>
         {showExplorer ? (
-          <aside
-            className={cn(
-              "flex min-h-0 shrink-0 bg-background",
-              relativePath
-                ? "w-[min(22rem,46%)] min-w-64 border-l border-border/60"
-                : "min-w-0 flex-1",
-            )}
-          >
+          <FileBrowserPane besidePreview={relativePath !== null}>
             <FileBrowserPanel
               key={`${environmentId}:${cwd}`}
               environmentId={environmentId}
@@ -1346,11 +1393,9 @@ export default function FilePreviewPanel({
               selectedPathRevealId={revealRequestId}
               onOpenFile={onOpenFile}
               workspaceMutationId={workspaceMutationId}
-              {...(relativePath && !isMedia && !isPdf
-                ? { onRefreshSelectedFile: file.refresh }
-                : {})}
+              {...(relativePath ? { onRefreshSelectedFile: refreshSelectedFile } : {})}
             />
-          </aside>
+          </FileBrowserPane>
         ) : null}
       </div>
     </div>

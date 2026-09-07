@@ -1,3 +1,12 @@
+import {
+  isAngelScriptPath,
+  usesAngelScript,
+  angelScriptLineSemantics,
+  colorAngelScriptTokens,
+  angelScriptColors,
+  type AngelScriptSemanticToken,
+} from "@t3tools/shared/angelscript";
+import { useAngelScript, type AngelScriptWorkspace } from "../../lib/useAngelScript";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import type { ComponentType } from "react";
@@ -20,6 +29,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import {
   buildNativeSourceTokens,
+  buildNativeSourceRows,
   NATIVE_SOURCE_CONTENT_WIDTH,
   nativeSourceRowId,
 } from "./nativeSourceFileAdapter";
@@ -27,6 +37,7 @@ import { prepareSourceFileDocument } from "./source-file-document";
 import { sourceHighlightAtom } from "./sourceHighlightingState";
 
 interface SourceFileSurfaceProps {
+  readonly workspace?: AngelScriptWorkspace;
   readonly contents: string;
   readonly path: string;
   readonly initialLine?: number | null;
@@ -43,11 +54,12 @@ const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
   readonly tokens: ReadonlyArray<ReviewHighlightedToken> | null;
   readonly highlighted: boolean;
   readonly wordBreak: boolean;
+  readonly awaitBackground?: string | undefined;
 }) {
   return (
     <View
       className={cn("flex-row", props.highlighted && "bg-primary/10")}
-      style={{ minHeight: props.codeSurface.rowHeight }}
+      style={{ minHeight: props.codeSurface.rowHeight, backgroundColor: props.awaitBackground }}
     >
       <NativeText
         className="select-none pr-3 text-right text-foreground-tertiary"
@@ -112,24 +124,69 @@ const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
 function useSourceFileModel(props: SourceFileSurfaceProps) {
   const { themeAppearance: theme } = useAppearancePreferences();
   const document = useMemo(() => prepareSourceFileDocument(props.contents), [props.contents]);
-  const { contents: normalizedContents, lines, rowsJson } = document;
+  const { contents: normalizedContents, lines } = document;
+  const api = useAngelScript(isAngelScriptPath(props.path) ? props.workspace : undefined);
+  const semantics = useMemo(
+    () =>
+      api
+        ? angelScriptLineSemantics(normalizedContents, api)
+        : new Map<number, AngelScriptSemanticToken[]>(),
+    [api, normalizedContents],
+  );
+  const awaitLines = useMemo(
+    () =>
+      new Set(
+        [...semantics]
+          .filter(([, tokens]) => tokens.some((token) => token.kind === "await"))
+          .map(([line]) => line),
+      ),
+    [semantics],
+  );
+  const rowsJson = useMemo(
+    () =>
+      api
+        ? JSON.stringify(
+            buildNativeSourceRows(lines).map((row, index) =>
+              awaitLines.has(index + 1)
+                ? { ...row, awaitBackground: angelScriptColors[theme].background }
+                : row,
+            ),
+          )
+        : document.rowsJson,
+    [api, awaitLines, document.rowsJson, lines, theme],
+  );
   const targetIndex =
     props.initialLine !== null && props.initialLine !== undefined && props.initialLine > 0
       ? Math.min(Math.floor(props.initialLine) - 1, Math.max(0, lines.length - 1))
       : null;
   const highlightAtom = useMemo(
-    () => sourceHighlightAtom({ path: props.path, contents: normalizedContents, theme }),
-    [normalizedContents, props.path, theme],
+    () =>
+      sourceHighlightAtom({
+        path: props.path,
+        contents: normalizedContents,
+        theme,
+        ...(usesAngelScript(props.path, normalizedContents, api)
+          ? { language: "angelscript" }
+          : {}),
+      }),
+    [normalizedContents, props.path, theme, api],
   );
   const highlightResult = useAtomValue(highlightAtom);
-  const tokens = AsyncResult.isSuccess(highlightResult) ? highlightResult.value : null;
+  const rawTokens = AsyncResult.isSuccess(highlightResult) ? highlightResult.value : null;
+  const tokens = useMemo(
+    () =>
+      rawTokens?.map((line, index) =>
+        colorAngelScriptTokens(line, semantics.get(index + 1) ?? [], theme),
+      ) ?? null,
+    [rawTokens, semantics, theme],
+  );
   const status: SourceHighlightStatus = AsyncResult.isFailure(highlightResult)
     ? "error"
     : AsyncResult.isSuccess(highlightResult)
       ? "ready"
       : "highlighting";
 
-  return { lines, rowsJson, status, targetIndex, theme, tokens };
+  return { lines, rowsJson, status, targetIndex, theme, tokens, awaitLines };
 }
 
 function SourceHighlightStatusView(props: { readonly status: SourceHighlightStatus }) {
@@ -213,7 +270,7 @@ function NativeSourceFileSurface(
 
 function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   const { codeSurface, codeWordBreak } = useAppearanceCodeSurface();
-  const { lines, status, targetIndex, tokens } = useSourceFileModel(props);
+  const { lines, status, targetIndex, tokens, awaitLines, theme } = useSourceFileModel(props);
   const listRef = useRef<FlatList<string>>(null);
 
   useEffect(() => {
@@ -233,11 +290,14 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
         index={index}
         line={item}
         tokens={tokens?.[index] ?? null}
+        awaitBackground={
+          awaitLines.has(index + 1) ? angelScriptColors[theme].background : undefined
+        }
         highlighted={index === targetIndex}
         wordBreak={codeWordBreak}
       />
     ),
-    [codeSurface, codeWordBreak, targetIndex, tokens],
+    [codeSurface, codeWordBreak, targetIndex, tokens, awaitLines, theme],
   );
 
   const list = (

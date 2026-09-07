@@ -41,6 +41,20 @@ This document covers the unified release workflow for stable and nightly desktop
   - nightly releases are aliased to the `nightly` hosted app channel
 - Signing is optional and auto-detected per platform from secrets.
 
+## Local preview artifacts
+
+Build a desktop artifact that can run beside an installed Alpha or Nightly app by assigning a pull
+request-style version, for example `--build-version 0.0.38-pr.local.1`. Preview builds use the
+distinct **T3 Code (Preview)** app identity, Electron profile, and `~/.t3/preview` server state. This
+prevents two desktop processes from opening the same browser profile or SQLite database. Projects
+and provider settings are intentionally separate; pair the preview client to another environment
+when it needs to inspect that environment's projects.
+
+Build a customized replacement for Alpha with a version such as
+`--build-version 0.0.40+local.20260912.1`. These builds retain the Alpha app identity and
+existing profile. Automatic updates are disabled for `+local` builds so upstream releases
+do not overwrite custom features; build and install a new local version to update them.
+
 ## Required release credentials
 
 Stable releases require these GitHub Actions secrets in addition to the platform and deployment

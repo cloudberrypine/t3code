@@ -20,6 +20,8 @@ import {
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
+import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { UsageLimitsSection } from "../usage/UsageLimits";
 import {
   SidebarFooter,
   SidebarHeader,
@@ -209,11 +211,30 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               onClick={handlePullRequestsClick}
             />
           ) : null}
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label="Usage"
-            onClick={handleUsageClick}
-          />
+          <SidebarMenuItem className="shrink-0">
+            <Popover>
+              <PopoverTrigger
+                openOnHover
+                delay={50}
+                closeDelay={200}
+                render={
+                  <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
+                    <ChartNoAxesColumnIcon />
+                  </SidebarMenuButton>
+                }
+              />
+              <PopoverPopup
+                side="top"
+                align="start"
+                className="w-[580px] max-w-[calc(100vw-2rem)]"
+                viewportClassName="max-h-[min(32rem,70vh)]"
+                initialFocus={false}
+              >
+                <PopoverTitle className="mb-4 text-sm">Limits</PopoverTitle>
+                <UsageLimitsSection selectedEnvironmentIds={null} />
+              </PopoverPopup>
+            </Popover>
+          </SidebarMenuItem>
         </>
       )}
       <SidebarUpdatePill />

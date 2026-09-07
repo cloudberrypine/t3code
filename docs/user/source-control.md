@@ -91,3 +91,75 @@ reopening a declined pull request.
   remotes can require separate setup from the hosting provider's API access.
 - **A review cannot load:** open it on the host website while resolving connectivity, permissions,
   or rate limits.
+
+## Diff navigation
+
+- Show a file tree next to a review's **Code** tab, or a thread's **Diff** panel, to browse the
+  changed files as folders and jump straight to any of them. The toolbar toggle remembers your
+  choice. Use **Search files** to filter the changed-file tree by name or path, including files
+  whose diffs have not been loaded. Press **Cmd/Ctrl+F** with that file browser focused to focus
+  its search field; **Escape** clears the filter. Drag the tree’s left edge to resize it in
+  thread diffs and pull-request reviews. Its width is remembered separately from the Files panel.
+  Clicking an already-selected file scrolls back to that file’s header in the diff.
+  As you scroll, the tree highlights the file whose header is at the top of the diff view.
+- With the diff viewer focused, **Cmd/Ctrl+F** opens text search. Search loaded diff hunks,
+  including their context lines, with match-case, whole-word, and regular-expression options.
+  **Enter** moves to the next match, **Shift+Enter** to the previous match, and **Escape** closes
+  search. Matches in collapsed files open those files automatically. Load an omitted file's
+  diff before searching its contents.
+- Large working-tree and branch diffs keep every known changed file visible while limiting the
+  initial patch payload to 120 MB per source and considering up to 25,600 files. Individual files
+  can load up to 100 MB on demand. Files whose patches were omitted appear as collapsed **Not loaded** rows;
+  expand one, or select its **Load** entry in the file tree, to fetch that file on demand. The bulk
+  expand control affects only loaded files.
+- Diffs follow the selected thread’s project or worktree, including projects outside the folder
+  where the server was started.
+- Web and desktop diffs use added/removed line backgrounds without extra highlighting on changed
+  words or characters. Syntax colors and search-match highlights remain available.
+  File-header added/removed counts update with the diff, including while a file is collapsed.
+- In web and desktop diffs, each collapsed context section shows its remaining unchanged-line
+  count. Use the up and down controls to reveal 20 lines at a time above or below a change.
+  Between two changes, expand from either end of the same gap. Clicking the count reveals the
+  next 20 lines from the earlier change, or above the first change at the start of a file.
+  Context counts load when a file is viewed, including for turn and pull-request diffs.
+  If a file changes before its context loads, the existing diff stays visible. Refresh the diff
+  to load context from the updated file.
+
+### Refreshing files
+
+The **Files** browser and its file-name search include gitignored files, including generated files.
+Git metadata and files inside nested checkouts are excluded. Very large directory trees retain
+the file browser's listing limit.
+
+The web and desktop **Files** panel refreshes after file changes and completed commands reported
+by the current thread, and after its checkpoints. It does not continuously watch every file on
+disk. To see edits from another agent, thread, or application, select the file again or use the
+file browser's **Refresh files** button. Both actions reload the selected preview, including SVGs,
+other images, videos, and PDFs. Pending local text edits finish saving before a refresh is applied.
+
+Drag the left edge of the file list to resize it beside the preview. Its width is remembered.
+
+With the file browser focused, **Cmd/Ctrl+F** focuses **Search files**. When the selected file's
+source editor has focus, the same shortcut opens text search inside that file.
+
+### AngelScript highlighting
+
+AngelScript files use language-specific syntax highlighting in file previews and diffs.
+T3 Code searches the current worktree for a file named **ScriptingAPI.as** and uses its declarations
+to highlight API types, constants, globals and functions. The file can live anywhere in the worktree
+and may be gitignored. Dependencies in `node_modules`, T3 runtime data and nested checkouts are not searched.
+If more than one API file is found, basic syntax highlighting remains available without choosing
+one arbitrarily.
+
+Calls to methods annotated with `/** await */` or `/** await(State) */` have an amber line
+background. The receiver must be identifiable from the available source; unrelated methods with
+the same name are not highlighted. Added and removed lines retain their diff gutter markers.
+Both sides of a diff use the current worktree's API.
+
+The API is checked again when the pane opens, after relevant workspace updates, when the app
+regains focus and every ten seconds while visible. Only changed API files are downloaded again.
+When the API disappears, its symbol highlights are cleared and basic syntax highlighting remains.
+Semantic highlighting is limited to source segments up to two million characters.
+
+File-name headers in the diff view have a persistent background slightly brighter than the
+collapsed-context markers, making file boundaries easier to find.

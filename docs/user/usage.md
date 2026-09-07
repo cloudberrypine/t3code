@@ -37,6 +37,9 @@ marked **Not saved**. Reconnect them and choose **Retry failed saves** to finish
 without writing again to environments that already saved. Changes are not queued after you close
 the dialog.
 
+Hover over **Usage** in the lower-left sidebar to preview **Limits** without leaving your thread.
+Click **Usage** to open the full page.
+
 ## Track subscription limits
 
 **Usage → Limits** pools every subscription account it can see per provider, so with several Codex

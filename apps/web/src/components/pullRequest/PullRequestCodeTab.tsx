@@ -63,6 +63,7 @@ import { DiffFileTree } from "../diffs/DiffFileTree";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
+import { FileBrowserPane } from "../files/FileBrowserPane";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -113,17 +114,6 @@ interface DiffSlice {
   readonly nextCursor: string | null;
   readonly omittedFileStats: ReadonlyArray<PullRequestOmittedFileStat>;
 }
-
-/**
- * The viewer's own per-file counts are hidden and drawn from this side of its shadow root
- * instead: its counts are hunk sums, and a file whose hunks the host withheld would read as
- * an empty change rather than as the counts the host did report.
- */
-const REPLACE_FILE_COUNTS_CSS = `
-[data-diffs-header] [data-additions-count],
-[data-diffs-header] [data-deletions-count] {
-  display: none !important;
-}`;
 
 /** Nothing loaded yet, as one identity, so the memos below do not see a new array every render. */
 const NO_SLICES: ReadonlyArray<DiffSlice> = [];
@@ -604,6 +594,7 @@ function PullRequestCodeTab({
   );
 
   const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);
+  const [activeDiffFilePath, setActiveDiffFilePath] = useState<string | null>(null);
   const revealFile = useCallback(
     (path: string) => {
       const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
@@ -1387,6 +1378,9 @@ function PullRequestCodeTab({
             // interaction, but its native host outline clips and competes with the focus
             // indicators on its actual controls.
             className="h-full overflow-auto [scrollbar-gutter:stable]"
+            workspace={{ environmentId, cwd: detail.workspaceRoot, revision: refreshToken }}
+            onActiveFileChange={setActiveDiffFilePath}
+            onRevealItem={toggleFile}
             viewerRef={setViewer}
             items={items}
             selectedLines={selectedLines}
@@ -1399,16 +1393,20 @@ function PullRequestCodeTab({
             renderHeaderPrefix={renderHeaderPrefix}
             renderHeaderMetadata={renderHeaderMetadata}
             renderAnnotation={renderAnnotation}
-            unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
           />
           {reviewOverlay}
         </div>
         {fileTreeOpen ? (
-          <aside className="flex w-[min(20rem,40%)] min-w-48 shrink-0 border-l border-border/60">
+          <FileBrowserPane
+            besidePreview
+            storageKey="t3code.diffFileExplorerWidth"
+            defaultWidth={320}
+          >
             <DiffFileTree
               ariaLabel={`Pull request #${detail.number} files`}
               entries={fileTreeEntries}
               onSelectFile={revealFile}
+              selectedPath={activeDiffFilePath}
               // The tree lists only what has arrived; a footer says so while the diff is still
               // paging, and lets the reader pull the rest in without scrolling for it.
               footer={
@@ -1432,7 +1430,7 @@ function PullRequestCodeTab({
                 )
               }
             />
-          </aside>
+          </FileBrowserPane>
         ) : null}
       </div>
       {unstructured}

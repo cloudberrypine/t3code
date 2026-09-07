@@ -85,6 +85,27 @@ describe("DesktopUpdates", () => {
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  it.effect("keeps local builds off the upstream update feed", () => {
+    const harness = makeHarness({ appVersion: "0.0.40+local.20260912.1" });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const state = yield* updates.getState;
+        assert.equal(state.enabled, false);
+        assert.equal(state.status, "disabled");
+        assert.equal(
+          Option.getOrThrow(yield* updates.disabledReason),
+          "Automatic updates are disabled for this local build to preserve custom features.",
+        );
+        yield* TestClock.adjust(Duration.millis(60_000));
+        yield* updates.check("manual");
+        assert.equal(harness.checkCount(), 0);
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("subscribe delivers the latest state plus subsequent changes", () => {
     const harness = makeHarness();
 

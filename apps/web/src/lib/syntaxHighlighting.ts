@@ -1,11 +1,15 @@
 import {
   getSharedHighlighter,
+  registerCustomLanguage,
   type DiffsHighlighter,
   type HighlighterTypes,
   type SupportedLanguages,
 } from "@pierre/diffs";
 
 import { resolveDiffThemeName } from "./diffRendering";
+import { angelScriptGrammar } from "@t3tools/shared/angelscript";
+
+registerCustomLanguage("angelscript", async () => ({ default: [angelScriptGrammar] }));
 
 /**
  * Always highlight with the Oniguruma WASM engine — the JS regex engine can

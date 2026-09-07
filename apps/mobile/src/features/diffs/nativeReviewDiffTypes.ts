@@ -1,4 +1,5 @@
 export type NativeReviewDiffLanguage =
+  | "angelscript"
   | "bash"
   | "diff"
   | "javascript"
@@ -14,4 +15,5 @@ export interface NativeReviewDiffFile {
   readonly language: NativeReviewDiffLanguage;
   readonly additions: number;
   readonly deletions: number;
+  readonly loaded: boolean;
 }

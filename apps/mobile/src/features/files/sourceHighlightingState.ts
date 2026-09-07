@@ -12,6 +12,7 @@ const SOURCE_HIGHLIGHT_IDLE_TTL_MS = 5 * 60_000;
 
 export interface SourceHighlightInput {
   readonly path: string;
+  readonly language?: string;
   readonly contents: string;
   readonly theme: ReviewDiffTheme;
 }

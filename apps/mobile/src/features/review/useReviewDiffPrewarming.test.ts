@@ -20,6 +20,7 @@ function makeSection(index: number, diff: string | null = reviewDiff) {
   return {
     id: `turn:${index}`,
     kind: "turn",
+    source: null,
     title: `Turn ${index}`,
     subtitle: null,
     isLoading: false,

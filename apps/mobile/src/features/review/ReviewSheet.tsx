@@ -1,4 +1,8 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ReviewDiffPreviewFile, ThreadId } from "@t3tools/contracts";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import {
@@ -54,9 +58,10 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { vcsEnvironment } from "../../state/vcs";
+import { reviewEnvironment } from "../../state/review";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { ThreadGitMenu } from "../threads/ThreadGitControls";
-import { useReviewCacheForThread } from "./reviewState";
+import { setReviewGitFilePatch, useReviewCacheForThread } from "./reviewState";
 import {
   isNativeReviewDiffDrawEvent,
   type NativeReviewDiffViewHandle,
@@ -156,18 +161,33 @@ interface ReviewNavigatorFile {
   readonly path: string;
   readonly additions: number;
   readonly deletions: number;
+  readonly previewFile: ReviewDiffPreviewFile | null;
+  readonly loaded: boolean;
 }
+
+interface GitFileLoadState {
+  readonly scopeKey: string | null;
+  readonly loadingPaths: ReadonlySet<string>;
+  readonly error: string | null;
+}
+
+const EMPTY_GIT_FILE_LOAD_STATE: GitFileLoadState = {
+  scopeKey: null,
+  loadingPaths: new Set(),
+  error: null,
+};
 
 const ReviewFileNavigatorRow = memo(function ReviewFileNavigatorRow(props: {
   readonly file: ReviewNavigatorFile;
   readonly selected: boolean;
-  readonly onSelectFile: (fileId: string | null) => void;
+  readonly loading: boolean;
+  readonly onSelectFile: (file: ReviewNavigatorFile | null) => void;
 }) {
-  const { file, selected, onSelectFile } = props;
+  const { file, loading, selected, onSelectFile } = props;
   // Tapping the selected file again returns to the all-files diff.
   const handlePress = useCallback(() => {
-    onSelectFile(selected ? null : file.id);
-  }, [file.id, onSelectFile, selected]);
+    onSelectFile(selected ? null : file);
+  }, [file, onSelectFile, selected]);
 
   return (
     <Pressable
@@ -193,6 +213,11 @@ const ReviewFileNavigatorRow = memo(function ReviewFileNavigatorRow(props: {
       <View className="mt-1 flex-row gap-2">
         <Text className="text-2xs font-t3-bold text-emerald-600">+{file.additions}</Text>
         <Text className="text-2xs font-t3-bold text-rose-600">-{file.deletions}</Text>
+        {!file.loaded ? (
+          <Text className="text-2xs font-t3-medium text-foreground-muted">
+            {loading ? "Loading…" : "Tap to load"}
+          </Text>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -206,13 +231,15 @@ interface ReviewFileNavigatorProps {
   readonly files: ReadonlyArray<ReviewNavigatorFile>;
   readonly headerInset: number;
   readonly sectionId: string | null;
-  readonly onSelectFile: (fileId: string | null) => void;
+  readonly loadingPaths: ReadonlySet<string>;
+  readonly onSelectFile: (file: ReviewNavigatorFile | null) => void;
   readonly ref?: Ref<ReviewFileNavigatorHandle>;
 }
 
 function ReviewFileNavigator({
   files,
   headerInset,
+  loadingPaths,
   sectionId,
   onSelectFile,
   ref,
@@ -252,9 +279,9 @@ function ReviewFileNavigator({
   );
 
   const handleSelectFile = useCallback(
-    (fileId: string | null) => {
-      setFileSelection({ sectionId, fileId });
-      onSelectFile(fileId);
+    (file: ReviewNavigatorFile | null) => {
+      setFileSelection({ sectionId, fileId: file?.id ?? null });
+      onSelectFile(file);
     },
     [onSelectFile, sectionId],
   );
@@ -264,10 +291,11 @@ function ReviewFileNavigator({
       <ReviewFileNavigatorRow
         file={item}
         selected={selectedFileId === item.id}
+        loading={loadingPaths.has(item.path)}
         onSelectFile={handleSelectFile}
       />
     ),
-    [handleSelectFile, selectedFileId],
+    [handleSelectFile, loadingPaths, selectedFileId],
   );
 
   const fileList = (
@@ -357,6 +385,11 @@ export function ReviewSheet(props: ReviewSheetProps) {
   const isEnvironmentReady = environment.presentation?.connection.phase === "connected";
   const { draftMessage } = useThreadDraftForThread({ environmentId, threadId });
   const reviewCache = useReviewCacheForThread({ environmentId, threadId });
+  const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
+  const [gitFileLoadState, setGitFileLoadState] =
+    useState<GitFileLoadState>(EMPTY_GIT_FILE_LOAD_STATE);
+  const inFlightGitFileLoadsRef = useRef(new Set<string>());
+  const pendingGitFileRevealRef = useRef<{ scopeKey: string; filePath: string } | null>(null);
   /* ─── Git actions for the toolbar menu (commit/push without leaving review) ── */
   const { selectedThread } = useThreadSelection();
   const { selectedThreadCwd } = useSelectedThreadWorktree();
@@ -418,7 +451,41 @@ export function ReviewSheet(props: ReviewSheetProps) {
     }
   }, [refreshSelectedSection]);
   const reviewFileNavigatorRef = useRef<ReviewFileNavigatorHandle>(null);
+  const selectedGitSource = selectedSection?.source ?? null;
+  const gitFileLoadScopeKey =
+    selectedGitSource && reviewCache.threadKey
+      ? `${reviewCache.threadKey}:${selectedGitSource.kind}:${selectedGitSource.diffHash}`
+      : null;
+  const activeGitFileLoadState =
+    gitFileLoadState.scopeKey === gitFileLoadScopeKey
+      ? gitFileLoadState
+      : EMPTY_GIT_FILE_LOAD_STATE;
+  const loadingGitFilePaths = activeGitFileLoadState.loadingPaths;
+  const gitFileLoadError = activeGitFileLoadState.error;
   const reviewFiles = parsedDiff.kind === "files" ? parsedDiff.files : [];
+  const navigatorFiles = useMemo<ReadonlyArray<ReviewNavigatorFile>>(() => {
+    if (selectedGitSource?.files && selectedGitSource.files.length > 0) {
+      return selectedGitSource.files.map((previewFile) => {
+        const loadedFile = reviewFiles.find((file) => file.path === previewFile.newPath);
+        return {
+          id: loadedFile?.id ?? `pending:${previewFile.newPath}`,
+          path: previewFile.newPath,
+          additions: previewFile.additions,
+          deletions: previewFile.deletions,
+          previewFile,
+          loaded: loadedFile?.loaded === true,
+        };
+      });
+    }
+    return reviewFiles.map((file) => ({
+      id: file.id,
+      path: file.path,
+      additions: file.additions,
+      deletions: file.deletions,
+      previewFile: null,
+      loaded: true,
+    }));
+  }, [reviewFiles, selectedGitSource]);
   const fileVisibility = useReviewFileVisibility({
     threadKey: reviewCache.threadKey,
     sectionId: selectedSection?.id ?? null,
@@ -438,6 +505,9 @@ export function ReviewSheet(props: ReviewSheetProps) {
     nativeReviewDiffData,
   });
   const nativeBridge = useNativeReviewDiffBridge({
+    ...(gitMenuAvailable && selectedThread?.environmentId === environmentId && selectedThreadCwd
+      ? { workspace: { environmentId, cwd: selectedThreadCwd, revision: selectedSection?.diff } }
+      : {}),
     threadKey: reviewCache.threadKey,
     sectionId: selectedSection?.id ?? null,
     diff: selectedSection?.diff,
@@ -467,7 +537,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
     [nativeBridge.onDebug, nativeBridge.themeId, showcaseReviewKey],
   );
 
-  const handleSelectFile = useCallback(
+  const navigateToReviewFile = useCallback(
     (fileId: string | null) => {
       commentSelection.clearSelection();
       if (fileId !== null && collapsedFileIds.includes(fileId)) {
@@ -483,6 +553,138 @@ export function ReviewSheet(props: ReviewSheetProps) {
     },
     [collapsedFileIds, commentSelection, toggleExpandedFile],
   );
+  const loadGitFilePatch = useCallback(
+    async (file: ReviewNavigatorFile) => {
+      const previewFile = file.previewFile;
+      const loadKey = gitFileLoadScopeKey ? `${gitFileLoadScopeKey}\0${file.path}` : null;
+      if (
+        !previewFile ||
+        !selectedGitSource ||
+        !selectedThreadCwd ||
+        !reviewCache.threadKey ||
+        !gitFileLoadScopeKey ||
+        !loadKey ||
+        inFlightGitFileLoadsRef.current.has(loadKey)
+      ) {
+        return;
+      }
+      inFlightGitFileLoadsRef.current.add(loadKey);
+      pendingGitFileRevealRef.current = { scopeKey: gitFileLoadScopeKey, filePath: file.path };
+      setGitFileLoadState((current) => {
+        const scoped =
+          current.scopeKey === gitFileLoadScopeKey
+            ? current
+            : { scopeKey: gitFileLoadScopeKey, loadingPaths: new Set<string>(), error: null };
+        return {
+          ...scoped,
+          loadingPaths: new Set([...scoped.loadingPaths, file.path]),
+          error: null,
+        };
+      });
+      const result = await getDiffFileContents({
+        environmentId,
+        input: {
+          cwd: selectedThreadCwd,
+          sourceKind: selectedGitSource.kind,
+          changeType: previewFile.changeType,
+          baseRef: selectedGitSource.baseRef,
+          headRef: selectedGitSource.headRef,
+          oldPath: previewFile.oldPath,
+          newPath: previewFile.newPath,
+          isUntracked: previewFile.isUntracked,
+          includePatch: true,
+        },
+      });
+      inFlightGitFileLoadsRef.current.delete(loadKey);
+      if (result._tag !== "Success") {
+        if (pendingGitFileRevealRef.current?.scopeKey === gitFileLoadScopeKey) {
+          pendingGitFileRevealRef.current = null;
+        }
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setGitFileLoadState((current) => {
+            if (current.scopeKey !== gitFileLoadScopeKey) return current;
+            const loadingPaths = new Set(current.loadingPaths);
+            loadingPaths.delete(file.path);
+            return {
+              ...current,
+              loadingPaths,
+              error: error instanceof Error ? error.message : `Could not load ${file.path}.`,
+            };
+          });
+        } else {
+          setGitFileLoadState((current) => {
+            if (current.scopeKey !== gitFileLoadScopeKey) return current;
+            const loadingPaths = new Set(current.loadingPaths);
+            loadingPaths.delete(file.path);
+            return { ...current, loadingPaths };
+          });
+        }
+        return;
+      }
+      if (result.value.patch === undefined) {
+        if (pendingGitFileRevealRef.current?.scopeKey === gitFileLoadScopeKey) {
+          pendingGitFileRevealRef.current = null;
+        }
+        setGitFileLoadState((current) => {
+          if (current.scopeKey !== gitFileLoadScopeKey) return current;
+          const loadingPaths = new Set(current.loadingPaths);
+          loadingPaths.delete(file.path);
+          return {
+            ...current,
+            loadingPaths,
+            error: `The server did not return a patch for ${file.path}.`,
+          };
+        });
+        return;
+      }
+      const updated = setReviewGitFilePatch({
+        threadKey: reviewCache.threadKey,
+        sourceKind: selectedGitSource.kind,
+        diffHash: selectedGitSource.diffHash,
+        filePath: file.path,
+        patch: result.value.patch,
+      });
+      if (!updated && pendingGitFileRevealRef.current?.scopeKey === gitFileLoadScopeKey) {
+        pendingGitFileRevealRef.current = null;
+      }
+      setGitFileLoadState((current) => {
+        if (current.scopeKey !== gitFileLoadScopeKey) return current;
+        const loadingPaths = new Set(current.loadingPaths);
+        loadingPaths.delete(file.path);
+        return { ...current, loadingPaths, error: null };
+      });
+    },
+    [
+      environmentId,
+      getDiffFileContents,
+      gitFileLoadScopeKey,
+      reviewCache.threadKey,
+      selectedGitSource,
+      selectedThreadCwd,
+    ],
+  );
+  const handleSelectFile = useCallback(
+    (file: ReviewNavigatorFile | null) => {
+      if (file === null) {
+        navigateToReviewFile(null);
+      } else if (file.loaded) {
+        navigateToReviewFile(file.id);
+      } else {
+        void loadGitFilePatch(file);
+      }
+    },
+    [loadGitFilePatch, navigateToReviewFile],
+  );
+  useEffect(() => {
+    const pending = pendingGitFileRevealRef.current;
+    if (!pending || pending.scopeKey !== gitFileLoadScopeKey) return;
+    const loadedFile = reviewFiles.find((file) => file.path === pending.filePath);
+    if (!loadedFile?.loaded) return;
+    pendingGitFileRevealRef.current = null;
+    reviewFileNavigatorRef.current?.setVisibleFile(loadedFile.id);
+    navigateToReviewFile(loadedFile.id);
+  }, [gitFileLoadScopeKey, navigateToReviewFile, reviewFiles]);
   const handleVisibleFileChange = useCallback(
     (event: NativeSyntheticEvent<{ readonly fileId?: string | null }>) => {
       reviewFileNavigatorRef.current?.setVisibleFile(event.nativeEvent.fileId ?? null);
@@ -493,25 +695,31 @@ export function ReviewSheet(props: ReviewSheetProps) {
     () => (
       <ReviewFileNavigator
         ref={reviewFileNavigatorRef}
-        files={nativeReviewDiffData.files}
+        files={navigatorFiles}
         // The workspace inspector column spans the full window height, so the
         // pane clears the status bar itself.
         headerInset={insets.top}
         sectionId={selectedSection?.id ?? null}
+        loadingPaths={loadingGitFilePaths}
         onSelectFile={handleSelectFile}
       />
     ),
-    [handleSelectFile, insets.top, nativeReviewDiffData.files, selectedSection?.id],
+    [handleSelectFile, insets.top, loadingGitFilePaths, navigatorFiles, selectedSection?.id],
   );
 
   const handleNativeToggleFile = useCallback(
     (event: NativeSyntheticEvent<{ readonly fileId?: string }>) => {
       const { fileId } = event.nativeEvent;
       if (fileId) {
+        const file = navigatorFiles.find((candidate) => candidate.id === fileId);
+        if (file && !file.loaded) {
+          void loadGitFilePatch(file);
+          return;
+        }
         toggleExpandedFile(fileId);
       }
     },
-    [toggleExpandedFile],
+    [loadGitFilePatch, navigatorFiles, toggleExpandedFile],
   );
 
   const handleNativeToggleViewedFile = useCallback(
@@ -524,8 +732,16 @@ export function ReviewSheet(props: ReviewSheetProps) {
     [toggleViewedFile],
   );
 
+  const previewFiles = selectedGitSource?.files ?? [];
+  const previewLoadedFileCount = previewFiles.filter((file) => file.patchIncluded).length;
+  const previewNotice =
+    previewFiles.length > 0 &&
+    (previewLoadedFileCount < previewFiles.length || selectedGitSource?.fileListTruncated === true)
+      ? `${previewFiles.length - previewLoadedFileCount > 0 ? `${previewFiles.length - previewLoadedFileCount} file diff${previewFiles.length - previewLoadedFileCount === 1 ? " is" : "s are"} collapsed and will load when expanded.` : "All listed file diffs are loaded."}${selectedGitSource?.fileListTruncated === true ? " The changed-file manifest exceeded its safety limit, so additional filenames may be unavailable." : ""}`
+      : null;
   const parsedDiffNotice =
-    parsedDiff.kind === "files" || parsedDiff.kind === "raw" ? parsedDiff.notice : null;
+    previewNotice ??
+    (parsedDiff.kind === "files" || parsedDiff.kind === "raw" ? parsedDiff.notice : null);
   const hasCachedSelectedDiff = selectedSection?.diff != null;
   const hasAnyCachedDiff = reviewSections.some((section) => section.diff != null);
   const sectionMenu = useMemo(() => buildReviewSectionMenu(reviewSections), [reviewSections]);
@@ -610,8 +826,8 @@ export function ReviewSheet(props: ReviewSheetProps) {
   const showChangedFilesPane =
     !showConnectionNotice &&
     selectedSection !== null &&
-    parsedDiff.kind === "files" &&
-    NativeReviewDiffView !== null;
+    navigatorFiles.length > 0 &&
+    (parsedDiff.kind !== "files" || NativeReviewDiffView !== null);
   useRegisterWorkspaceInspector(showChangedFilesPane ? renderInspector : undefined);
   // Raw fallback renders the patch inline with no inspector content, so the
   // pane toggle would open an empty column — hide it in exactly that case.
@@ -636,6 +852,15 @@ export function ReviewSheet(props: ReviewSheetProps) {
       );
     }
 
+    if (gitFileLoadError) {
+      children.push(
+        <View key="review-file-error" className="border-b border-border bg-card px-4 py-3">
+          <Text className="text-sm font-t3-bold text-foreground">File diff unavailable</Text>
+          <Text className="text-xs leading-normal text-foreground-muted">{gitFileLoadError}</Text>
+        </View>,
+      );
+    }
+
     if (parsedDiffNotice) {
       children.push(<ReviewNotice key="review-notice" notice={parsedDiffNotice} />);
     }
@@ -645,7 +870,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
     }
 
     return <>{children}</>;
-  }, [error, parsedDiffNotice]);
+  }, [error, gitFileLoadError, parsedDiffNotice]);
   const headerSubtitle = [
     headerDiffSummary.additions,
     headerDiffSummary.deletions,
@@ -882,9 +1107,13 @@ export function ReviewSheet(props: ReviewSheetProps) {
               </View>
             ) : parsedDiff.kind === "empty" ? (
               <View className="border-b border-border bg-card px-4 py-5">
-                <Text className="text-sm font-t3-bold text-foreground">No changes</Text>
+                <Text className="text-sm font-t3-bold text-foreground">
+                  {navigatorFiles.length > 0 ? "File previews not loaded" : "No changes"}
+                </Text>
                 <Text className="text-xs leading-normal text-foreground-muted">
-                  {selectedSection.subtitle ?? "This diff is empty."}
+                  {navigatorFiles.length > 0
+                    ? "Open Changed files and select a file to load its diff."
+                    : (selectedSection.subtitle ?? "This diff is empty.")}
                 </Text>
               </View>
             ) : parsedDiff.kind === "raw" ? (

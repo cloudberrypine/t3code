@@ -1,3 +1,4 @@
+import { colorAngelScriptTokens, type AngelScriptSemanticToken } from "@t3tools/shared/angelscript";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -36,12 +37,13 @@ function logReviewDiffDiagnostic(message: string, details?: Record<string, unkno
 
 export function useNativeReviewDiffHighlighting(input: {
   readonly files: ReadonlyArray<NativeReviewDiffFile>;
+  readonly semantics?: ReadonlyMap<string, readonly AngelScriptSemanticToken[]>;
   readonly rows: ReadonlyArray<NativeReviewDiffRow>;
   readonly scheme: NativeReviewDiffHighlightScheme;
   readonly resetKey: string;
   readonly enabled: boolean;
 }) {
-  const { enabled, files, resetKey, rows, scheme } = input;
+  const { enabled, files, resetKey, rows, scheme, semantics } = input;
   const highlightedRowIdsRef = useRef<Set<string>>(new Set());
   const visibleRangeRef = useRef<NativeReviewVisibleRange>({
     firstRowIndex: 0,
@@ -59,7 +61,7 @@ export function useNativeReviewDiffHighlighting(input: {
     if (enabled && rows.length > 0) {
       setVisibleHighlightRequest((request) => request + 1);
     }
-  }, [enabled, resetKey, rows.length]);
+  }, [enabled, resetKey, rows.length, semantics]);
 
   useEffect(() => {
     if (!enabled || rows.length === 0) {
@@ -102,7 +104,12 @@ export function useNativeReviewDiffHighlighting(input: {
             language: "diff",
             lineCount: result.rowCount,
             durationMs: result.durationMs,
-            tokensByRowId: result.tokensByRowId,
+            tokensByRowId: Object.fromEntries(
+              Object.entries(result.tokensByRowId).map(([id, tokens]) => [
+                id,
+                colorAngelScriptTokens(tokens, semantics?.get(id) ?? [], scheme),
+              ]),
+            ),
           }),
         );
       } catch (error) {
@@ -119,7 +126,7 @@ export function useNativeReviewDiffHighlighting(input: {
     })();
 
     return () => abortController.abort();
-  }, [enabled, files, resetKey, rows, scheme, visibleHighlightRequest]);
+  }, [enabled, files, resetKey, rows, scheme, semantics, visibleHighlightRequest]);
 
   const updateVisibleRange = useCallback((nextRange: NativeReviewVisibleRange) => {
     const previousRange = visibleRangeRef.current;

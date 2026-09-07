@@ -25,6 +25,8 @@ import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 import { expandHomePathWith } from "../pathExpansion.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+import { findWorkspaceFile } from "./findWorkspaceFile.ts";
+import { listWorkspaceFiles } from "./listWorkspaceFiles.ts";
 
 export class WorkspaceEntriesWindowsPathUnsupportedError extends Schema.TaggedErrorClass<WorkspaceEntriesWindowsPathUnsupportedError>()(
   "WorkspaceEntriesWindowsPathUnsupportedError",
@@ -230,6 +232,19 @@ export const make = Effect.gen(function* () {
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+      if (input.exactFileName) {
+        return yield* Effect.tryPromise({
+          try: () => findWorkspaceFile(normalizedCwd, input.exactFileName!, input.limit),
+          catch: (cause) =>
+            new WorkspaceSearchIndex.WorkspaceSearchIndexSearchFailed({
+              cwd: normalizedCwd,
+              queryLength: input.query.length,
+              pageSize: input.limit,
+              reason: "Exact file discovery failed",
+              cause,
+            }),
+        });
+      }
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });
@@ -265,6 +280,19 @@ export const make = Effect.gen(function* () {
   const list: WorkspaceEntries["Service"]["list"] = Effect.fn("WorkspaceEntries.list")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+      if (input.includeIgnored) {
+        return yield* Effect.tryPromise({
+          try: () => listWorkspaceFiles(normalizedCwd),
+          catch: (cause) =>
+            new WorkspaceSearchIndex.WorkspaceSearchIndexSearchFailed({
+              cwd: normalizedCwd,
+              queryLength: 0,
+              pageSize: 25_000,
+              reason: "Workspace file listing failed",
+              cause,
+            }),
+        });
+      }
       return yield* Effect.gen(function* () {
         const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
         return yield* searchIndex.list();

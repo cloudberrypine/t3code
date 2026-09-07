@@ -80,7 +80,12 @@ function loadDiffPreviewHtml(theme: DiffThemeName): Promise<readonly string[]> {
   if (promise === undefined) {
     promise = preloadPatchFile({
       patch: DIFF_PREVIEW_PATCH,
-      options: { diffStyle: "unified", theme, preferredHighlighter: PREFERRED_HIGHLIGHTER },
+      options: {
+        diffStyle: "unified",
+        theme,
+        preferredHighlighter: PREFERRED_HIGHLIGHTER,
+        lineDiffType: "none",
+      },
     }).then((results) => results.map((result) => result.prerenderedHTML));
     diffPreviewHtmlByTheme.set(theme, promise);
   }

@@ -24,6 +24,26 @@ function fileDiff(type: FileDiffMetadata["type"] = "rename-changed"): FileDiffMe
 }
 
 describe("createGitDiffFileContentsLoader", () => {
+  it("loads checkpoint context from exact revisions", async () => {
+    const getDiffFileContents = vi.fn(async () =>
+      AsyncResult.success({ oldContents: "before\n", newContents: "after\n" }),
+    );
+    const load = createGitDiffFileContentsLoader(getDiffFileContents, {
+      ...SOURCE,
+      baseRefMode: "exact",
+    });
+    await load(fileDiff());
+    expect(getDiffFileContents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          baseRefMode: "exact",
+          baseRef: "main",
+          headRef: "feature",
+        }),
+      }),
+    );
+  });
+
   it("loads both sides with normalized paths and comparison-scoped cache keys", async () => {
     const getDiffFileContents = vi.fn(async () =>
       AsyncResult.success({ oldContents: "before\n", newContents: "after\n" }),

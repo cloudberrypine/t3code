@@ -35,8 +35,10 @@ export interface NativeReviewDiffRow {
     | "rename-changed";
   readonly additions?: number;
   readonly deletions?: number;
+  readonly loaded?: boolean;
   readonly text?: string;
   readonly content?: string;
+  readonly awaitBackground?: string;
   readonly change?: "context" | "add" | "delete";
   readonly oldLineNumber?: number | null;
   readonly newLineNumber?: number | null;

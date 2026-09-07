@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
 import * as Data from "effect/Data";
 import * as Crypto from "effect/Crypto";
@@ -21,8 +20,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
+  type ReviewDiffChangeType,
   type ReviewDiffFileContentsInput,
   type ReviewDiffPreviewInput,
+  type ReviewDiffPreviewFile,
   type ReviewDiffPreviewSource,
   type VcsRef,
 } from "@t3tools/contracts";
@@ -50,14 +51,14 @@ const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
-const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
-const REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES = 80_000;
-const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
+const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000_000;
+const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
+const REVIEW_DIFF_FILE_LIST_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const REVIEW_DIFF_PREVIEW_PATCH_ATTEMPT_LIMIT = 25_600;
 // Patches the clients render are parsed against git's default a/ and b/ path
 // prefixes. A repository or global diff.noprefix or diff.mnemonicPrefix would
 // otherwise leak into the patch and leave every parsed file unnamed.
 export const PATCH_RENDER_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"] as const;
-const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 
@@ -293,6 +294,83 @@ export function splitNullSeparatedGitStdoutPaths(
   result: Pick<GitVcsDriver.ExecuteGitResult, "stdout" | "stdoutTruncated">,
 ): string[] {
   return splitNullSeparatedPaths(result.stdout, result.stdoutTruncated);
+}
+
+interface ReviewDiffNameStatusEntry {
+  readonly status: string;
+  readonly oldPath: string;
+  readonly newPath: string;
+}
+
+function parseReviewDiffNameStatus(
+  stdout: string,
+  truncated: boolean,
+): ReadonlyArray<ReviewDiffNameStatusEntry> {
+  const fields = stdout.split("\0");
+  const entries: ReviewDiffNameStatusEntry[] = [];
+  let index = 0;
+
+  while (index < fields.length) {
+    const status = fields[index++] ?? "";
+    if (status.length === 0) continue;
+    const firstPath = fields[index++];
+    if (!firstPath) break;
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const secondPath = fields[index++];
+      if (!secondPath) break;
+      entries.push({ status, oldPath: firstPath, newPath: secondPath });
+      continue;
+    }
+    entries.push({ status, oldPath: firstPath, newPath: firstPath });
+  }
+
+  if (truncated && !stdout.endsWith("\0")) {
+    entries.pop();
+  }
+  return entries;
+}
+
+function parseReviewDiffNumstat(stdout: string): ReadonlyMap<
+  string,
+  {
+    readonly additions: number;
+    readonly deletions: number;
+  }
+> {
+  const fields = stdout.split("\0");
+  const entries = new Map<string, { additions: number; deletions: number }>();
+  let index = 0;
+
+  while (index < fields.length) {
+    const field = fields[index++] ?? "";
+    if (field.length === 0) continue;
+    const [addedRaw, deletedRaw, path = ""] = field.split("\t");
+    const additions = Number.parseInt(addedRaw ?? "", 10);
+    const deletions = Number.parseInt(deletedRaw ?? "", 10);
+    let newPath = path;
+    if (newPath.length === 0) {
+      index += 1;
+      newPath = fields[index++] ?? "";
+    }
+    if (newPath.length === 0) break;
+    entries.set(newPath, {
+      additions: Number.isFinite(additions) ? additions : 0,
+      deletions: Number.isFinite(deletions) ? deletions : 0,
+    });
+  }
+  return entries;
+}
+
+function reviewDiffChangeType(
+  entry: ReviewDiffNameStatusEntry,
+  stat: { readonly additions: number; readonly deletions: number },
+): ReviewDiffChangeType {
+  if (entry.status.startsWith("A") || entry.status.startsWith("C")) return "new";
+  if (entry.status.startsWith("D")) return "deleted";
+  if (entry.status.startsWith("R")) {
+    return stat.additions === 0 && stat.deletions === 0 ? "rename-pure" : "rename-changed";
+  }
+  return "change";
 }
 
 function sanitizeRemoteName(value: string): string {
@@ -2217,55 +2295,283 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
-  const readUntrackedReviewDiffs = Effect.fn("readUntrackedReviewDiffs")(function* (cwd: string) {
-    const untrackedResult = yield* executeGit(
-      "GitVcsDriver.readUntrackedReviewDiffs.list",
-      cwd,
-      ["ls-files", "--others", "--exclude-standard", "-z"],
-      {
-        maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
-        appendTruncationMarker: true,
-      },
-    );
-    const untrackedPaths = splitNullSeparatedGitStdoutPaths(untrackedResult);
-    if (untrackedPaths.length === 0) {
-      return { diff: "", truncated: untrackedResult.stdoutTruncated };
+  const readReviewDiffFiles = Effect.fn("readReviewDiffFiles")(function* (input: {
+    readonly cwd: string;
+    readonly sourceKind: ReviewDiffPreviewSource["kind"];
+    readonly baseRef: string | null;
+    readonly headRef: string | null;
+    readonly ignoreWhitespace: boolean;
+  }) {
+    const comparison =
+      input.sourceKind === "working-tree"
+        ? "HEAD"
+        : input.baseRef && input.headRef
+          ? `${input.baseRef}...${input.headRef}`
+          : null;
+    if (comparison === null) {
+      return { files: [] as ReviewDiffPreviewFile[], fileListTruncated: false };
     }
 
-    const diffs = yield* Effect.forEach(
+    const commonArgs = [
+      ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+      "-M",
+      comparison,
+      "--",
+    ];
+    const [nameStatus, numstat] = yield* Effect.all(
+      [
+        executeGit(
+          "GitVcsDriver.readReviewDiffFiles.nameStatus",
+          input.cwd,
+          ["diff", "--name-status", "-z", ...commonArgs],
+          { maxOutputBytes: REVIEW_DIFF_FILE_LIST_MAX_OUTPUT_BYTES },
+        ),
+        executeGit(
+          "GitVcsDriver.readReviewDiffFiles.numstat",
+          input.cwd,
+          ["diff", "--numstat", "-z", ...commonArgs],
+          { maxOutputBytes: REVIEW_DIFF_FILE_LIST_MAX_OUTPUT_BYTES },
+        ),
+      ],
+      { concurrency: 2 },
+    ).pipe(
+      Effect.orElseSucceed(
+        () =>
+          [
+            {
+              exitCode: 0,
+              stdout: "",
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            },
+            {
+              exitCode: 0,
+              stdout: "",
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            },
+          ] as const,
+      ),
+    );
+    const stats = parseReviewDiffNumstat(numstat.stdout);
+    const files = parseReviewDiffNameStatus(nameStatus.stdout, nameStatus.stdoutTruncated).map(
+      (entry): ReviewDiffPreviewFile => {
+        const stat = stats.get(entry.newPath) ?? { additions: 0, deletions: 0 };
+        return {
+          changeType: reviewDiffChangeType(entry, stat),
+          oldPath: entry.oldPath,
+          newPath: entry.newPath,
+          additions: stat.additions,
+          deletions: stat.deletions,
+          patchIncluded: false,
+          isUntracked: false,
+        };
+      },
+    );
+
+    if (input.sourceKind !== "working-tree") {
+      return {
+        files,
+        fileListTruncated: nameStatus.stdoutTruncated || numstat.stdoutTruncated,
+      };
+    }
+
+    const untrackedResult = yield* executeGit(
+      "GitVcsDriver.readReviewDiffFiles.untracked",
+      input.cwd,
+      ["ls-files", "--others", "--exclude-standard", "-z"],
+      { maxOutputBytes: REVIEW_DIFF_FILE_LIST_MAX_OUTPUT_BYTES },
+    ).pipe(
+      Effect.orElseSucceed(() => ({
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      })),
+    );
+    const untrackedPaths = splitNullSeparatedGitStdoutPaths(untrackedResult);
+    const untrackedStats = yield* Effect.forEach(
       untrackedPaths,
       (relativePath) =>
         executeGit(
-          "GitVcsDriver.readUntrackedReviewDiffs.diff",
-          cwd,
-          [
-            "diff",
-            "--no-index",
-            "--patch",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--minimal",
-            ...PATCH_RENDER_PREFIX_ARGS,
-            "--",
-            "/dev/null",
-            relativePath,
-          ],
-          {
-            allowNonZeroExit: true,
-            maxOutputBytes: REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES,
-            appendTruncationMarker: true,
-          },
+          "GitVcsDriver.readReviewDiffFiles.untrackedNumstat",
+          input.cwd,
+          ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", relativePath],
+          { allowNonZeroExit: true, maxOutputBytes: 4_096 },
+        ).pipe(
+          Effect.map((result) => [...parseReviewDiffNumstat(result.stdout).values()][0]),
+          Effect.orElseSucceed(() => undefined),
         ),
       { concurrency: 4 },
     );
+    for (const [index, relativePath] of untrackedPaths.entries()) {
+      const stat = untrackedStats[index] ?? { additions: 0, deletions: 0 };
+      files.push({
+        changeType: "new",
+        oldPath: relativePath,
+        newPath: relativePath,
+        additions: stat.additions,
+        deletions: stat.deletions,
+        patchIncluded: false,
+        isUntracked: true,
+      });
+    }
 
     return {
-      diff: Arr.filterMap(diffs, (result) =>
-        result.stdout.trim().length > 0 ? Result.succeed(result.stdout) : Result.failVoid,
-      ).join("\n"),
-      truncated: untrackedResult.stdoutTruncated || diffs.some((result) => result.stdoutTruncated),
+      files,
+      fileListTruncated:
+        nameStatus.stdoutTruncated || numstat.stdoutTruncated || untrackedResult.stdoutTruncated,
     };
+  });
+
+  const reviewDiffPathArgs = (file: Pick<ReviewDiffPreviewFile, "oldPath" | "newPath">) =>
+    file.oldPath === file.newPath ? [file.newPath] : [file.oldPath, file.newPath];
+
+  const readReviewDiffFilePatch = Effect.fn("readReviewDiffFilePatch")(function* (input: {
+    readonly cwd: string;
+    readonly sourceKind: ReviewDiffPreviewSource["kind"];
+    readonly baseRefMode?: "merge-base" | "exact";
+    readonly baseRef: string | null;
+    readonly headRef: string | null;
+    readonly file: Pick<ReviewDiffPreviewFile, "oldPath" | "newPath" | "isUntracked">;
+    readonly ignoreWhitespace: boolean;
+    readonly maxOutputBytes: number;
+  }) {
+    const renderArgs = [
+      "--patch",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--minimal",
+      "-M",
+      ...PATCH_RENDER_PREFIX_ARGS,
+      ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+    ];
+    if (input.file.isUntracked) {
+      return yield* executeGit(
+        "GitVcsDriver.readReviewDiffFilePatch.untracked",
+        input.cwd,
+        ["diff", "--no-index", ...renderArgs, "--", "/dev/null", input.file.newPath],
+        { allowNonZeroExit: true, maxOutputBytes: input.maxOutputBytes },
+      );
+    }
+
+    const comparison =
+      input.sourceKind === "working-tree"
+        ? "HEAD"
+        : input.baseRef && input.headRef
+          ? `${input.baseRef}${input.baseRefMode === "exact" ? ".." : "..."}${input.headRef}`
+          : null;
+    if (comparison === null) {
+      return yield* new GitCommandError({
+        operation: "GitVcsDriver.readReviewDiffFilePatch",
+        command: "git diff",
+        cwd: input.cwd,
+        detail: "Branch diff file loading requires both base and head refs.",
+      });
+    }
+    return yield* executeGit(
+      "GitVcsDriver.readReviewDiffFilePatch",
+      input.cwd,
+      ["diff", ...renderArgs, comparison, "--", ...reviewDiffPathArgs(input.file)],
+      { maxOutputBytes: input.maxOutputBytes },
+    );
+  });
+
+  const buildReviewDiffSource = Effect.fn("buildReviewDiffSource")(function* (input: {
+    readonly cwd: string;
+    readonly kind: ReviewDiffPreviewSource["kind"];
+    readonly title: string;
+    readonly baseRef: string | null;
+    readonly headRef: string | null;
+    readonly ignoreWhitespace: boolean;
+  }) {
+    const listed = yield* readReviewDiffFiles({
+      cwd: input.cwd,
+      sourceKind: input.kind,
+      baseRef: input.baseRef,
+      headRef: input.headRef,
+      ignoreWhitespace: input.ignoreWhitespace,
+    });
+    let remainingBytes = REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES;
+    let patchAttempts = 0;
+    const patches: string[] = [];
+    const files: ReviewDiffPreviewFile[] = [];
+
+    for (const file of listed.files) {
+      if (remainingBytes <= 0 || patchAttempts >= REVIEW_DIFF_PREVIEW_PATCH_ATTEMPT_LIMIT) {
+        files.push(file);
+        continue;
+      }
+      patchAttempts += 1;
+      const result = yield* readReviewDiffFilePatch({
+        cwd: input.cwd,
+        sourceKind: input.kind,
+        baseRef: input.baseRef,
+        headRef: input.headRef,
+        file,
+        ignoreWhitespace: input.ignoreWhitespace,
+        maxOutputBytes: Math.min(REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES, remainingBytes + 1),
+      }).pipe(Effect.orElseSucceed(() => null));
+      if (result === null || result.stdoutTruncated) {
+        files.push(file);
+        continue;
+      }
+      const patch = result.stdout.trimEnd();
+      const patchBytes = new TextEncoder().encode(patch).byteLength;
+      if (patchBytes > remainingBytes) {
+        files.push(file);
+        continue;
+      }
+      if (patch.length > 0) patches.push(patch);
+      remainingBytes -= patchBytes;
+      files.push({ ...file, patchIncluded: true });
+    }
+
+    const diff = patches.join("\n");
+    const hashInput = [
+      diff,
+      ...files.map((file) =>
+        [
+          file.changeType,
+          file.oldPath,
+          file.newPath,
+          file.additions,
+          file.deletions,
+          file.patchIncluded,
+          file.isUntracked,
+        ].join("\0"),
+      ),
+    ].join("\0");
+    const diffHash = yield* crypto.digest("SHA-256", new TextEncoder().encode(hashInput)).pipe(
+      Effect.map(Encoding.encodeHex),
+      Effect.mapError(
+        (cause) =>
+          new GitCommandError({
+            operation: "GitVcsDriver.getReviewDiffPreview.hash",
+            command: "crypto.digest SHA-256",
+            cwd: input.cwd,
+            detail: "Failed to hash review diff.",
+            cause,
+          }),
+      ),
+    );
+
+    return {
+      id: input.kind,
+      kind: input.kind,
+      title: input.title,
+      baseRef: input.baseRef,
+      headRef: input.headRef,
+      diff,
+      diffHash,
+      truncated: listed.fileListTruncated || files.some((file) => !file.patchIncluded),
+      files,
+      fileListTruncated: listed.fileListTruncated,
+    } satisfies ReviewDiffPreviewSource;
   });
 
   const getReviewDiffPreview = Effect.fn("getReviewDiffPreview")(function* (
@@ -2289,113 +2595,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           )
         : null);
 
-    const dirtyTrackedResult = yield* executeGit(
-      "GitVcsDriver.getReviewDiffPreview.dirtyTracked",
-      input.cwd,
-      [
-        "diff",
-        "--patch",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--minimal",
-        ...PATCH_RENDER_PREFIX_ARGS,
-        ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
-        "HEAD",
-        "--",
-      ],
+    const sourceInputs = [
       {
-        maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
-        appendTruncationMarker: true,
-      },
-    ).pipe(
-      Effect.orElseSucceed(() => ({
-        exitCode: 0,
-        stdout: "",
-        stderr: "",
-        stdoutTruncated: false,
-        stderrTruncated: false,
-      })),
-    );
-    const dirtyUntracked = yield* readUntrackedReviewDiffs(input.cwd).pipe(
-      Effect.orElseSucceed(() => ({ diff: "", truncated: false })),
-    );
-    const dirtyDiff = [dirtyTrackedResult.stdout.trimEnd(), dirtyUntracked.diff.trimEnd()]
-      .filter((diff) => diff.length > 0)
-      .join("\n");
-
-    const baseResult =
-      baseRef && branch
-        ? yield* executeGit(
-            "GitVcsDriver.getReviewDiffPreview.base",
-            input.cwd,
-            [
-              "diff",
-              "--patch",
-              "--no-color",
-              "--no-ext-diff",
-              "--no-textconv",
-              "--minimal",
-              ...PATCH_RENDER_PREFIX_ARGS,
-              ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
-              `${baseRef}...HEAD`,
-            ],
-            {
-              maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
-              appendTruncationMarker: true,
-            },
-          ).pipe(
-            Effect.orElseSucceed(() => ({
-              exitCode: 0,
-              stdout: "",
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-            })),
-          )
-        : null;
-    const baseDiff = baseResult?.stdout ?? "";
-    const hashDiff = (diff: string) =>
-      crypto.digest("SHA-256", new TextEncoder().encode(diff)).pipe(
-        Effect.map(Encoding.encodeHex),
-        Effect.mapError(
-          (cause) =>
-            new GitCommandError({
-              operation: "GitVcsDriver.getReviewDiffPreview.hash",
-              command: "crypto.digest SHA-256",
-              cwd: input.cwd,
-              detail: "Failed to hash review diff.",
-              cause,
-            }),
-        ),
-      );
-    const [dirtyDiffHash, baseDiffHash] = yield* Effect.all([
-      hashDiff(dirtyDiff),
-      hashDiff(baseDiff),
-    ]);
-
-    const sources: ReviewDiffPreviewSource[] = [
-      {
-        id: "working-tree",
-        kind: "working-tree",
+        kind: "working-tree" as const,
         title: "Dirty worktree",
         baseRef: "HEAD",
         headRef: null,
-        diff: dirtyDiff,
-        diffHash: dirtyDiffHash,
-        truncated: dirtyTrackedResult.stdoutTruncated || dirtyUntracked.truncated,
       },
       {
-        id: "branch-range",
-        kind: "branch-range",
+        kind: "branch-range" as const,
         title: baseRef ? `Against ${baseRef}` : "Against base branch",
         baseRef,
         headRef: branch ?? "HEAD",
-        diff: baseDiff,
-        diffHash: baseDiffHash,
-        truncated: baseResult?.stdoutTruncated ?? false,
       },
-    ];
+    ].filter((source) => input.sourceKind === undefined || source.kind === input.sourceKind);
+    const sources = yield* Effect.forEach(
+      sourceInputs,
+      (source) =>
+        buildReviewDiffSource({
+          cwd: input.cwd,
+          ...source,
+          ignoreWhitespace: input.ignoreWhitespace === true,
+        }),
+      { concurrency: 2 },
+    );
 
     return {
       cwd: input.cwd,
@@ -2490,7 +2713,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (info.size > BigInt(REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES)) {
       return yield* fileError(
         "fs.stat",
-        `Diff file '${input.newPath}' exceeds the 1 MB expansion limit.`,
+        `Diff file '${input.newPath}' exceeds the 100 MB expansion limit.`,
       );
     }
 
@@ -2510,6 +2733,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const getReviewDiffFileContents = Effect.fn("getReviewDiffFileContents")(function* (
     input: ReviewDiffFileContentsInput,
   ) {
+    const loadPatch = Effect.fn("getReviewDiffFileContents.loadPatch")(function* () {
+      const result = yield* readReviewDiffFilePatch({
+        cwd: input.cwd,
+        sourceKind: input.sourceKind,
+        ...(input.baseRefMode ? { baseRefMode: input.baseRefMode } : {}),
+        baseRef: input.baseRef,
+        headRef: input.headRef,
+        file: {
+          oldPath: input.oldPath,
+          newPath: input.newPath,
+          isUntracked: input.isUntracked === true,
+        },
+        ignoreWhitespace: input.ignoreWhitespace === true,
+        maxOutputBytes: REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES,
+      });
+      if (result.stdoutTruncated) {
+        return yield* reviewDiffFileError(
+          input,
+          `Diff for '${input.newPath}' exceeds the 100 MB load limit.`,
+        );
+      }
+      return result.stdout;
+    });
+
     if (input.sourceKind === "working-tree") {
       const repositoryRoot = yield* runGitStdout(
         "GitVcsDriver.getReviewDiffFileContents.repositoryRoot",
@@ -2519,7 +2766,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (repositoryRoot.length === 0) {
         return yield* reviewDiffFileError(input, "Could not resolve the Git repository root.");
       }
-      const [oldContents, newContents] = yield* Effect.all(
+      const [oldContents, newContents, patch] = yield* Effect.all(
         [
           input.changeType === "new"
             ? Effect.succeed("")
@@ -2527,10 +2774,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           input.changeType === "deleted"
             ? Effect.succeed("")
             : readWorkingTreeReviewFile(input, repositoryRoot),
+          input.includePatch === true ? loadPatch() : Effect.succeed(undefined),
         ],
-        { concurrency: 2 },
+        { concurrency: 3 },
       );
-      return { oldContents, newContents };
+      return { oldContents, newContents, ...(patch === undefined ? {} : { patch }) };
     }
 
     if (!input.baseRef || !input.headRef) {
@@ -2539,15 +2787,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "Branch diff file expansion requires both base and head refs.",
       );
     }
-    const mergeBase = yield* runGitStdout(
-      "GitVcsDriver.getReviewDiffFileContents.mergeBase",
-      input.cwd,
-      ["merge-base", input.baseRef, input.headRef],
-    ).pipe(Effect.map((value) => value.trim()));
+    const mergeBase =
+      input.baseRefMode === "exact"
+        ? input.baseRef
+        : yield* runGitStdout("GitVcsDriver.getReviewDiffFileContents.mergeBase", input.cwd, [
+            "merge-base",
+            input.baseRef,
+            input.headRef,
+          ]).pipe(Effect.map((value) => value.trim()));
     if (mergeBase.length === 0) {
       return yield* reviewDiffFileError(input, "Could not resolve the branch comparison base.");
     }
-    const [oldContents, newContents] = yield* Effect.all(
+    const [oldContents, newContents, patch] = yield* Effect.all(
       [
         input.changeType === "new"
           ? Effect.succeed("")
@@ -2555,10 +2806,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.changeType === "deleted"
           ? Effect.succeed("")
           : readReviewFileAtRevision(input, input.headRef, input.newPath),
+        input.includePatch === true ? loadPatch() : Effect.succeed(undefined),
       ],
-      { concurrency: 2 },
+      { concurrency: 3 },
     );
-    return { oldContents, newContents };
+    return { oldContents, newContents, ...(patch === undefined ? {} : { patch }) };
   });
 
   const readConfigValue: GitVcsDriver.GitVcsDriver["Service"]["readConfigValue"] = (cwd, key) =>

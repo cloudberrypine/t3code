@@ -245,6 +245,7 @@ function shouldBroadcastDownloadProgress(
 }
 
 function getAutoUpdateDisabledReason(args: {
+  appVersion: string;
   isDevelopment: boolean;
   isPackaged: boolean;
   platform: NodeJS.Platform;
@@ -252,6 +253,9 @@ function getAutoUpdateDisabledReason(args: {
   disabledByEnv: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
+  if (/\+local(?:\.|$)/.test(args.appVersion)) {
+    return "Automatic updates are disabled for this local build to preserve custom features.";
+  }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";
   }
@@ -339,6 +343,7 @@ export const make = Effect.gen(function* () {
     const hasFeedConfig = yield* hasUpdateFeedConfig;
     return Option.fromNullishOr(
       getAutoUpdateDisabledReason({
+        appVersion: environment.appVersion,
         isDevelopment: environment.isDevelopment,
         isPackaged: environment.isPackaged,
         platform: environment.platform,

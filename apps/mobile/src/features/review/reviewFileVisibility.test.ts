@@ -21,6 +21,7 @@ function makeFile(id: string): ReviewRenderableFile {
     additionLines: [],
     deletionLines: [],
     rows: [],
+    loaded: true,
   };
 }
 
@@ -29,6 +30,15 @@ describe("review file visibility", () => {
 
   it("defaults expanded files to every renderable file", () => {
     expect(getValidReviewFileIds(files, undefined)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("keeps unloaded manifest placeholders collapsed by default", () => {
+    expect(
+      getValidReviewFileIds(
+        [makeFile("loaded.ts"), { ...makeFile("unloaded.ts"), loaded: false }],
+        undefined,
+      ),
+    ).toEqual(["loaded.ts"]);
   });
 
   it("filters stale cached file ids", () => {

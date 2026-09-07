@@ -1,4 +1,5 @@
 import { Spinner } from "~/components/ui/spinner";
+import { useAngelScript } from "~/hooks/useAngelScript";
 import type { ProjectContentMatch } from "@t3tools/contracts";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -120,6 +121,9 @@ function OpenContentSearchDialog(props: {
     wholeWord,
     useRegex,
   });
+  const api = useAngelScript(
+    search.matches.some((match) => /\.as$/i.test(match.path)) ? target : undefined,
+  );
   const canOpenMatches = !search.isPending;
   const matches = search.matches;
   const visibleMatches = useMemo(() => matches.slice(0, visibleCount), [matches, visibleCount]);
@@ -286,6 +290,7 @@ function OpenContentSearchDialog(props: {
                       </span>
                       <span className="min-w-0 flex-1 truncate whitespace-pre">
                         <HighlightedSearchLine
+                          api={api}
                           match={match}
                           path={group.path}
                           theme={resolvedTheme}
