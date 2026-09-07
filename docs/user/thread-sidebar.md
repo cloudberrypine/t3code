@@ -46,7 +46,9 @@ Drag within the pinned or active section to change its order. Other rows slide a
 spot where the thread will land. Drops into either section keep the position you choose. On
 mobile, open a pinned or active thread's menu and choose **Arrange threads** to drag handles
 within that section. Each drop saves the order; **Done** returns to the thread list.
-**Move up** and **Move down** are also available in the thread menu. The server
+**Move up** and **Move down** are also available in the thread menu. On iOS, you can
+also hold a thread and drag it within its section, even after the context menu appears,
+without lifting your finger. The server
 saves the order, so it survives a refresh and appears on your other connected devices.
 
 On web and desktop, the list also animates section changes made with thread actions such as
