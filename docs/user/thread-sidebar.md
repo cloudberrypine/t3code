@@ -111,3 +111,17 @@ On web and desktop, use **Agents** to follow work delegated to subagents.
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
+
+## Desktop completion notifications
+
+In **Settings → General → Agent completion notifications**, enable or disable native desktop
+notifications when an agent finishes a turn. They are enabled by default. Notifications cover
+all connected environments while the desktop app is running, including threads you are not viewing.
+Click a notification to bring T3 Code forward and open its thread.
+
+Only successfully completed turns notify; interrupted or failed turns do not. Opening the app or
+reconnecting an environment does not replay old completions. Web and mobile clients keep their
+existing notification behavior.
+
+On macOS, allow notifications for **T3 Code (Alpha)** in **System Settings → Notifications**.
+Focus settings and your chosen alert style can suppress banners or sounds.

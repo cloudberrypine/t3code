@@ -536,6 +536,10 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Diff whitespace changes"]
         : []),
       ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? ["Diff layout"] : []),
+      ...(settings.desktopCompletionNotificationsEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.desktopCompletionNotificationsEnabled
+        ? ["Agent completion notifications"]
+        : []),
       ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
         ? ["Proactive panels"]
         : []),
@@ -608,6 +612,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.newWorktreesStartFromOrigin,
       settings.diffIgnoreWhitespace,
       settings.diffLayout,
+      settings.desktopCompletionNotificationsEnabled,
       settings.proactivePanelsEnabled,
       settings.environmentIdentificationMode,
       settings.contextWindowMeterEnabled,
@@ -705,6 +710,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
+      desktopCompletionNotificationsEnabled:
+        DEFAULT_UNIFIED_SETTINGS.desktopCompletionNotificationsEnabled,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
@@ -2290,6 +2297,36 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+
+        {isElectron ? (
+          <SettingsRow
+            {...searchableSetting("completion-notifications")}
+            description="Show a native notification when an agent finishes a turn in any connected environment. Click it to open the thread."
+            resetAction={
+              settings.desktopCompletionNotificationsEnabled !==
+              DEFAULT_UNIFIED_SETTINGS.desktopCompletionNotificationsEnabled ? (
+                <SettingResetButton
+                  label="agent completion notifications"
+                  onClick={() =>
+                    updateSettings({
+                      desktopCompletionNotificationsEnabled:
+                        DEFAULT_UNIFIED_SETTINGS.desktopCompletionNotificationsEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.desktopCompletionNotificationsEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ desktopCompletionNotificationsEnabled: Boolean(checked) })
+                }
+                aria-label="Agent completion notifications"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           {...searchableSetting("proactive-panels")}

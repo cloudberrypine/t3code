@@ -169,6 +169,15 @@ describe("ClientSettings word wrap", () => {
 
 describe("ClientSettings proactive panels", () => {
   it("is opt-in and accepts client-local updates", () => {
+    expect(decodeClientSettings({}).desktopCompletionNotificationsEnabled).toBe(true);
+    expect(
+      decodeClientSettings({ desktopCompletionNotificationsEnabled: false })
+        .desktopCompletionNotificationsEnabled,
+    ).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ desktopCompletionNotificationsEnabled: false })
+        .desktopCompletionNotificationsEnabled,
+    ).toBe(false);
     expect(decodeClientSettings({}).proactivePanelsEnabled).toBe(false);
     expect(decodeClientSettingsPatch({ proactivePanelsEnabled: true }).proactivePanelsEnabled).toBe(
       true,

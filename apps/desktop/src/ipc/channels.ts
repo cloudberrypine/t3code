@@ -90,3 +90,6 @@ export const PREVIEW_RECORDING_SAVE_CHANNEL = "desktop:preview-recording-save";
 export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame";
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
+
+export const COMPLETION_NOTIFICATION_CHANNEL = "desktop:completion-notification";
+export const COMPLETION_NOTIFICATION_CLICK_CHANNEL = "desktop:completion-notification-click";

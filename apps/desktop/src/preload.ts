@@ -1,5 +1,6 @@
 import type {
   DesktopBridge,
+  DesktopCompletionNotification,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -31,6 +32,16 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  showCompletionNotification: (input) =>
+    ipcRenderer.invoke(IpcChannels.COMPLETION_NOTIFICATION_CHANNEL, input),
+  onCompletionNotificationClick: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, input: DesktopCompletionNotification) =>
+      listener(input);
+    ipcRenderer.on(IpcChannels.COMPLETION_NOTIFICATION_CLICK_CHANNEL, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.COMPLETION_NOTIFICATION_CLICK_CHANNEL, wrapped);
+    };
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

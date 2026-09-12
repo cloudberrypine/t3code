@@ -201,6 +201,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["stacked split side by side unified inline view"],
   },
   {
+    id: "completion-notifications",
+    title: "Agent completion notifications",
+    to: "/settings/general",
+    desktopOnly: true,
+    searchTerms: ["macOS native desktop alert done finished agent notification"],
+  },
+  {
     id: "proactive-panels",
     title: "Proactive panels",
     to: "/settings/general",

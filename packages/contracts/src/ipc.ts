@@ -87,7 +87,7 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { EnvironmentId } from "./baseSchemas.ts";
+import { EnvironmentId, ThreadId, TurnId } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
   BrowserImportResult,
@@ -1059,7 +1059,19 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+export const DesktopCompletionNotification = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  title: Schema.String,
+});
+export type DesktopCompletionNotification = typeof DesktopCompletionNotification.Type;
+
 export interface DesktopBridge {
+  showCompletionNotification?: (input: DesktopCompletionNotification) => Promise<boolean>;
+  onCompletionNotificationClick?: (
+    listener: (input: DesktopCompletionNotification) => void,
+  ) => () => void;
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;
