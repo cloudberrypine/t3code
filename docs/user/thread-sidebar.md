@@ -116,7 +116,9 @@ finishes; the call's own result shows its status.
 
 In **Settings → General → Agent completion notifications**, enable or disable native desktop
 notifications when an agent finishes a turn. They are enabled by default. Notifications cover
-all connected environments while the desktop app is running, including threads you are not viewing.
+all connected environments while a T3 Code window is open, including threads you are not viewing.
+The window can be minimized or in the background. Closing every window stops notification
+monitoring until you open a window again.
 Click a notification to bring T3 Code forward and open its thread.
 
 Only successfully completed turns notify; interrupted or failed turns do not. Opening the app or
