@@ -190,4 +190,62 @@ describe("diff tree file activation", () => {
     expect(model().getSelectedPaths()).toEqual(["03-medium.ts"]);
     expect(targets).toHaveLength(1);
   });
+
+  it.each([false, true])(
+    "keeps a replacement file and old descendants selectable (reversed: %s)",
+    async (reverse) => {
+      const files: DiffFileTreeEntry[] = [
+        { path: ".claude/skills/image-url-checker", status: "added", loadState: "unloaded" },
+        { path: ".claude/skills/image-url-checker/SKILL.md", status: "deleted" },
+        { path: ".claude/skills/image-url-checker/scripts/check.py", status: "deleted" },
+      ];
+      await mount({ files: reverse ? files.toReversed() : files });
+      await activate(".claude/skills/image-url-checker (file)");
+      await activate(".claude/skills/image-url-checker (file)");
+      await activate(".claude/skills/image-url-checker/SKILL.md");
+      await activate(".claude/skills/image-url-checker/");
+      expect(targets.map((target) => ("id" in target ? target.id : null))).toEqual([
+        ".claude/skills/image-url-checker\0.claude/skills/image-url-checker",
+        ".claude/skills/image-url-checker\0.claude/skills/image-url-checker",
+        ".claude/skills/image-url-checker/SKILL.md\0.claude/skills/image-url-checker/SKILL.md",
+      ]);
+    },
+  );
+
+  it("updates controlled selection as a collision appears and disappears during refresh", async () => {
+    const replacement: DiffFileTreeEntry = { path: "skill", status: "added" };
+    const child: DiffFileTreeEntry = { path: "skill/SKILL.md", status: "deleted" };
+    await mount({ files: [replacement], selectedPath: "skill" });
+    expect(model().getSelectedPaths()).toEqual(["skill"]);
+    await act(async () =>
+      renderer!.update(<Panel files={[replacement, child]} selectedPath="skill" />),
+    );
+    expect(model().getSelectedPaths()).toEqual(["skill (file)"]);
+    await act(async () => renderer!.update(<Panel files={[replacement]} selectedPath="skill" />));
+    expect(model().getSelectedPaths()).toEqual(["skill"]);
+    expect(targets).toEqual([]);
+    await activate("skill");
+    expect(targets).toHaveLength(1);
+  });
+
+  it("handles directory-to-file and file-to-directory refreshes", async () => {
+    const file: DiffFileTreeEntry = { path: "skill", status: "deleted" };
+    const child: DiffFileTreeEntry = { path: "skill/SKILL.md", status: "added" };
+    await mount({ files: [child] });
+    for (const files of [[file, child], [file], [child], [file, child]]) {
+      await act(async () => renderer!.update(<Panel files={files} />));
+    }
+    await activate("skill (file)");
+    await activate("skill/SKILL.md");
+    expect(targets).toHaveLength(2);
+  });
+
+  it("avoids display names already occupied by real files or directories", async () => {
+    const paths = ["skill", "skill/SKILL.md", "skill (file)", "skill (file 2)/real.ts"];
+    await mount({ files: paths.map((path) => ({ path, status: "modified" })) });
+    for (const path of ["skill (file 3)", ...paths.slice(1)]) await activate(path);
+    expect(targets.map((target) => ("id" in target ? target.id : null))).toEqual(
+      paths.map((path) => `${path}\0${path}`),
+    );
+  });
 });

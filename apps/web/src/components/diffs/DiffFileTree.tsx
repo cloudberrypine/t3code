@@ -16,6 +16,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildDiffFileTreeUpdates,
   collectDirectoryPaths,
+  diffFileTreeRows,
   type DiffFileTreeEntry,
 } from "./diffFileTree.logic";
 
@@ -69,16 +70,19 @@ export function DiffFileTree({
     searchInputRef.current?.focus();
     searchInputRef.current?.select();
   });
-  const paths = useMemo(() => entries.map((entry) => entry.path), [entries]);
+  const rows = useMemo(() => diffFileTreeRows(entries), [entries]);
+  const paths = useMemo(() => rows.map((row) => row.treePath), [rows]);
+  const treePathByFile = useMemo(
+    () => new Map(rows.map((row) => [row.path, row.treePath])),
+    [rows],
+  );
   const directoryPaths = useMemo(() => collectDirectoryPaths(paths), [paths]);
   const gitStatus = useMemo<ReadonlyArray<GitStatusEntry>>(
-    () => entries.map((entry) => ({ path: entry.path, status: entry.status })),
-    [entries],
+    () => rows.map((row) => ({ path: row.treePath, status: row.status })),
+    [rows],
   );
-  const filePathsRef = useRef<ReadonlySet<string>>(new Set(paths));
-  const loadStatesRef = useRef(
-    new Map(entries.map((entry) => [entry.path, entry.loadState] as const)),
-  );
+  const filePathsRef = useRef(new Map(rows.map((row) => [row.treePath, row.path])));
+  const loadStatesRef = useRef(new Map(rows.map((row) => [row.treePath, row.loadState] as const)));
   const onSelectFileRef = useRef(onSelectFile);
   // Selection driven by `selectedPath` below is an echo of a file already on screen, not a
   // request to scroll to it again.
@@ -87,10 +91,10 @@ export function DiffFileTree({
   const mountedPathsRef = useRef<ReadonlyArray<string> | null>(null);
 
   useEffect(() => {
-    filePathsRef.current = new Set(paths);
-    loadStatesRef.current = new Map(entries.map((entry) => [entry.path, entry.loadState] as const));
+    filePathsRef.current = new Map(rows.map((row) => [row.treePath, row.path]));
+    loadStatesRef.current = new Map(rows.map((row) => [row.treePath, row.loadState] as const));
     onSelectFileRef.current = onSelectFile;
-  }, [entries, onSelectFile, paths]);
+  }, [rows, onSelectFile]);
 
   const { model } = useFileTree({
     density: "compact",
@@ -100,8 +104,9 @@ export function DiffFileTree({
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
       if (syncingSelectionRef.current) return;
-      const path = selectedPaths.at(-1)?.replace(/\/$/, "");
-      if (path && filePathsRef.current.has(path)) onSelectFileRef.current(path);
+      const treePath = selectedPaths.at(-1);
+      const path = treePath === undefined ? undefined : filePathsRef.current.get(treePath);
+      if (path !== undefined) onSelectFileRef.current(path);
     },
     renderRowDecoration: ({ row }) => {
       const loadState = loadStatesRef.current.get(row.path);
@@ -122,13 +127,13 @@ export function DiffFileTree({
   useEffect(() => {
     const mountedPaths = mountedPathsRef.current;
     if (mountedPaths === paths) return;
-    mountedPathsRef.current = paths;
     if (mountedPaths === null) {
       model.resetPaths(paths);
     } else {
       const updates = buildDiffFileTreeUpdates(mountedPaths, paths);
       if (updates.length > 0) model.batch(updates);
     }
+    mountedPathsRef.current = paths;
     model.setGitStatus(gitStatus);
   }, [gitStatus, model, paths]);
 
@@ -139,32 +144,33 @@ export function DiffFileTree({
     }
     // A path list that changes under an already-revealed file (a refresh, a later slice) must
     // not pull the tree back to it over whatever the reader has picked since.
-    const item = model.getItem(selectedPath);
-    if (item === null || item.isDirectory()) {
+    const treePath = treePathByFile.get(selectedPath);
+    const item = treePath === undefined ? null : model.getItem(treePath);
+    if (treePath === undefined || item === null || item.isDirectory()) {
       // A file that left the diff has to be revealed again when it comes back.
       handledRevealRef.current = null;
       return;
     }
     const handled = handledRevealRef.current;
-    if (handled?.path === selectedPath && handled.revealRequestId === revealRequestId) return;
-    handledRevealRef.current = { path: selectedPath, revealRequestId };
+    if (handled?.path === treePath && handled.revealRequestId === revealRequestId) return;
+    handledRevealRef.current = { path: treePath, revealRequestId };
     syncingSelectionRef.current = true;
     for (const path of model.getSelectedPaths()) {
-      if (path !== selectedPath) model.getItem(path)?.deselect();
+      if (path !== treePath) model.getItem(path)?.deselect();
     }
     let ancestor = "";
-    for (const segment of selectedPath.split("/").slice(0, -1)) {
+    for (const segment of treePath.split("/").slice(0, -1)) {
       ancestor += `${segment}/`;
       const directory = model.getItem(ancestor);
       if (directory !== null && "expand" in directory) directory.expand();
     }
     item.select();
-    model.scrollToPath(selectedPath, { offset: "nearest" });
+    model.scrollToPath(treePath, { offset: "nearest" });
     queueMicrotask(() => {
       syncingSelectionRef.current = false;
     });
-    // `paths` is a dependency so a file that arrives after it was asked for is still revealed.
-  }, [model, paths, revealRequestId, selectedPath]);
+    // The path map changes when a file arrives or its display name changes after a refresh.
+  }, [model, revealRequestId, selectedPath, treePathByFile]);
 
   return (
     <div
@@ -232,13 +238,14 @@ export function DiffFileTree({
           // Read selection before the row handles the click so new selections reveal only once.
           const selected = model.getSelectedPaths();
           const path = selected.length === 1 ? selected[0] : undefined;
-          if (!path || !filePathsRef.current.has(path)) return;
+          const filePath = path === undefined ? undefined : filePathsRef.current.get(path);
+          if (filePath === undefined) return;
           const clickedSelectedRow = event.nativeEvent
             .composedPath()
             .some(
               (node) => node instanceof HTMLElement && node.getAttribute("data-item-path") === path,
             );
-          if (clickedSelectedRow) onSelectFileRef.current(path);
+          if (clickedSelectedRow) onSelectFileRef.current(filePath);
         }}
         className="min-h-0 flex-1 overflow-hidden"
         style={pierreTreeStyle(resolvedTheme)}

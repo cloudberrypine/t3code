@@ -102,6 +102,9 @@ reopening a declined pull request.
   thread diffs and pull-request reviews. Its width is remembered separately from the Files panel.
   Clicking an already-selected file scrolls back to that file’s header in the diff.
   As you scroll, the tree highlights the file whose header is at the top of the diff view.
+- When a directory is replaced by a file or symlink (or the reverse), the web and desktop diff
+  tree keeps both changes visible. The file row gets a **(file)** suffix to distinguish it from
+  the folder; selecting it still opens the diff for its original path.
 - With the diff viewer focused, **Cmd/Ctrl+F** opens text search. Search loaded diff hunks,
   including their context lines, with match-case, whole-word, and regular-expression options.
   **Enter** moves to the next match, **Shift+Enter** to the previous match, and **Escape** closes

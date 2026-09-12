@@ -77,6 +77,27 @@ export function collectDirectoryPaths(paths: ReadonlyArray<string>): ReadonlyArr
   return [...directories];
 }
 
+/**
+ * A diff can contain a file and descendants of that same path when a directory is replaced
+ * by a file or symlink (or vice versa). Pierre requires distinct names for those siblings.
+ * Give only the conflicting file a display suffix; callers still use its original diff path.
+ */
+export function diffFileTreeRows(entries: ReadonlyArray<DiffFileTreeEntry>) {
+  const paths = entries.map((entry) => entry.path);
+  const directories = new Set(collectDirectoryPaths(paths).map((path) => path.slice(0, -1)));
+  const occupied = new Set([...paths, ...directories]);
+  return entries.map((entry) => {
+    let treePath = entry.path;
+    if (directories.has(treePath)) {
+      treePath = `${entry.path} (file)`;
+      let suffix = 2;
+      while (occupied.has(treePath)) treePath = `${entry.path} (file ${suffix++})`;
+      occupied.add(treePath);
+    }
+    return { ...entry, treePath };
+  });
+}
+
 function pathDepth(path: string): number {
   return path.split("/").filter(Boolean).length;
 }
