@@ -282,6 +282,10 @@
     "./angelscript": {
       "types": "./src/angelscript.ts",
       "import": "./src/angelscript.ts"
+    },
+    "./markdownFrontMatter": {
+      "types": "./src/markdownFrontMatter.ts",
+      "import": "./src/markdownFrontMatter.ts"
     }
   },
   "scripts": {

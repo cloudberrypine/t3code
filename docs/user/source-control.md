@@ -142,6 +142,17 @@ Drag the left edge of the file list to resize it beside the preview. Its width i
 With the file browser focused, **Cmd/Ctrl+F** focuses **Search files**. When the selected file's
 source editor has focus, the same shortcut opens text search inside that file.
 
+### Markdown front matter
+
+Rendered Markdown files display a leading YAML front-matter block separately above the document.
+Metadata keeps its line breaks and indentation, and long values wrap to fit the preview. It is
+shown as literal text, so Markdown-like characters in values do not become headings, links, or
+checkboxes. This works in web, desktop, and mobile file previews.
+
+The opening delimiter must be `---` on the first line. Close the block with `---` or `...` on its
+own line. A missing closing delimiter leaves the document rendered as ordinary Markdown. Source
+view preserves the original file, and task checkboxes below the metadata still update that file.
+
 ### AngelScript highlighting
 
 AngelScript files use language-specific syntax highlighting in file previews and diffs.

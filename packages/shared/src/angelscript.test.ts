@@ -4,7 +4,7 @@ import {
   parseAngelScriptApi,
   usesAngelScript,
   colorAngelScriptTokens,
-} from "./angelscript";
+} from "./angelscript.ts";
 
 const apiText = `
 const float PI;

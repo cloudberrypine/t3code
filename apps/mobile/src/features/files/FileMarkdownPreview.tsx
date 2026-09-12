@@ -1,4 +1,5 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { splitMarkdownFrontMatter } from "@t3tools/shared/markdownFrontMatter";
 import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
 import { getBrowseDirectoryPath } from "@t3tools/client-runtime/state/projects";
 import { useCallback, useMemo, useState } from "react";
@@ -197,6 +198,7 @@ export function FileMarkdownPreview(props: {
   readonly threadId: ThreadId;
   readonly onRefresh?: () => Promise<void> | void;
 }) {
+  const document = useMemo(() => splitMarkdownFrontMatter(props.markdown), [props.markdown]);
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const handlePullToRefresh = useCallback(async () => {
     if (!props.onRefresh) {
@@ -257,9 +259,25 @@ export function FileMarkdownPreview(props: {
       }
     >
       <View className="mx-auto w-full max-w-[760px]">
+        {document.frontMatter !== null ? (
+          <View className="mb-4 rounded-lg border border-border bg-card p-4">
+            <NativeText
+              accessibilityRole="header"
+              className="font-t3-medium text-xs text-foreground-muted"
+            >
+              Front matter
+            </NativeText>
+            <NativeText
+              selectable
+              className="mt-2 font-mono text-xs leading-relaxed text-foreground"
+            >
+              {document.frontMatter}
+            </NativeText>
+          </View>
+        ) : null}
         {hasNativeSelectableMarkdownText() ? (
           <SelectableMarkdownText
-            markdown={props.markdown}
+            markdown={document.body}
             onLinkPress={onLinkPress}
             renderImage={renderImage}
             textStyle={styles.nativeTextStyle}
@@ -271,7 +289,7 @@ export function FileMarkdownPreview(props: {
             styles={styles.styles}
             theme={styles.theme}
           >
-            {props.markdown}
+            {document.body}
           </Markdown>
         )}
       </View>

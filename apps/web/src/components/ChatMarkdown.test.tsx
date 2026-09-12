@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
@@ -8,6 +8,7 @@ import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
+import { FileMarkdownPreview } from "./files/FileMarkdownPreview";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
@@ -279,6 +280,63 @@ describe("ChatMarkdown streaming", () => {
       expect(input).toBe(originalInput);
       expect(editedText).toBe("- [ ] A longer first task\n- [x] Second");
       expect(mounted.root.findAllByType("input")[1]!.props.checked).toBe(true);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("file preview front matter", () => {
+  it("keeps metadata literal and edits body tasks at their original source offsets after updates", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    let editedText: string | undefined;
+    const prefix =
+      "\uFEFF---\r\nname: check-script\r\ndescription: 🍃 [ ] **literal** <b>YAML</b>\r\n---\r\n";
+    const body = "# Instructions\r\n\r\n- [ ] Run tests\r\n";
+    const preview = (text: string) => (
+      <FileMarkdownPreview
+        cwd="/tmp/project"
+        relativePath="skills/check-script.md"
+        text={text}
+        threadRef={{ environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("thread") }}
+        onTaskListChange={({ markerOffset, checked }) => {
+          editedText = setMarkdownTaskChecked(text, markerOffset, checked);
+          renderer!.update(preview(editedText));
+        }}
+      />
+    );
+    try {
+      await act(async () => {
+        renderer = create(preview(prefix + body));
+      });
+      const mounted = renderer!;
+      expect(mounted.root.findAllByType("input")).toHaveLength(1);
+      expect(mounted.root.findByType("code").children.join("")).toContain(
+        "[ ] **literal** <b>YAML</b>",
+      );
+      expect(mounted.root.findAllByType("hr")).toHaveLength(0);
+      expect(mounted.root.findByType("h1").children.join("")).toBe("Instructions");
+      const updatedPrefix = prefix.replace("name: check-script", "name: longer-script-name");
+      await act(async () => {
+        mounted.update(preview(updatedPrefix + body));
+      });
+      const listItem = mounted.root.findByType("li");
+      const { onChange } = mounted.root.findByType("input").props as ComponentProps<"input">;
+      if (!onChange) throw new Error("Missing task checkbox handler");
+      await act(async () => {
+        onChange({
+          currentTarget: {
+            checked: true,
+            closest: () => ({
+              dataset: { taskMarkerOffset: String(listItem.props["data-task-marker-offset"]) },
+            }),
+          },
+        } as unknown as Parameters<typeof onChange>[0]);
+      });
+      expect(editedText).toBe(updatedPrefix + body.replace("- [ ]", "- [x]"));
+      expect(mounted.root.findByType("input").props.checked).toBe(true);
     } finally {
       await act(async () => renderer?.unmount());
       vi.unstubAllGlobals();
