@@ -70,6 +70,9 @@ messages, review titles, and descriptions from your changes.
 Choose the writing style and model in **Settings → Source Control**. **Repository conventions**
 uses the project's instructions and recent commit subjects.
 
+Committing or pushing on the default branch, such as `main`, runs without an extra branch warning
+or confirmation. The commit dialog still shows the current branch and selected files.
+
 ## Review and merge
 
 Open **Pull requests** to review changes and comments, request reviewers, check out a branch,

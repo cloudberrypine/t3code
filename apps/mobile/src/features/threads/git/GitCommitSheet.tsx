@@ -37,7 +37,6 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   );
 
   const busy = gitState.gitOperationLabel !== null;
-  const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
   const allFiles = gitStatus.data?.workingTree?.files ?? [];
 
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
@@ -84,11 +83,6 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
               {gitStatus.data?.refName ?? "(detached HEAD)"}
             </Text>
           </View>
-          {isDefaultRef ? (
-            <Text className="text-xs leading-normal text-warning-foreground">
-              Warning: this is the default branch.
-            </Text>
-          ) : null}
         </View>
 
         <View className="gap-3 rounded-[22px] border border-border bg-card px-4 py-4">

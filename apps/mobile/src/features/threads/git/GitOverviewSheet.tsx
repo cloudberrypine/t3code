@@ -2,7 +2,6 @@ import {
   type GitActionRequestInput,
   buildMenuItems,
   getGitActionDisabledReason,
-  requiresDefaultBranchConfirmation,
 } from "@t3tools/client-runtime/state/vcs";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
@@ -73,7 +72,6 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus.data?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus.data?.hasPrimaryRemote ?? false;
-  const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
 
   const menuItems = useMemo(
     () => (isRepo ? buildMenuItems(gitStatus.data, busy, hasPrimaryRemote) : []),
@@ -109,40 +107,14 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
     }
   }, [gitStatus.data]);
 
-  const runActionWithPrompt = useCallback(
+  const runAction = useCallback(
     async (input: GitActionRequestInput) => {
-      const confirmableAction =
-        input.action === "push" ||
-        input.action === "create_pr" ||
-        input.action === "commit_push" ||
-        input.action === "commit_push_pr"
-          ? input.action
-          : null;
-      const branchName = gitStatus.data?.refName;
-      if (
-        branchName &&
-        confirmableAction &&
-        !input.featureBranch &&
-        requiresDefaultBranchConfirmation(input.action, isDefaultRef)
-      ) {
-        navigation.navigate("GitConfirm", {
-          environmentId: String(environmentId),
-          threadId: String(threadId),
-          confirmAction: confirmableAction,
-          branchName,
-          includesCommit: String(
-            input.action === "commit_push" || input.action === "commit_push_pr",
-          ),
-        });
-        return;
-      }
-
       if (!isInspector) {
         navigation.goBack();
       }
       await gitActions.onRunSelectedThreadGitAction(input);
     },
-    [environmentId, gitActions, gitStatus.data, isDefaultRef, isInspector, navigation, threadId],
+    [gitActions, isInspector, navigation],
   );
 
   const onPressMenuItem = useCallback(
@@ -160,14 +132,14 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         return;
       }
       if (item.dialogAction === "push") {
-        await runActionWithPrompt({ action: "push" });
+        await runAction({ action: "push" });
         return;
       }
       if (item.dialogAction === "create_pr") {
-        await runActionWithPrompt({ action: "create_pr" });
+        await runAction({ action: "create_pr" });
       }
     },
-    [environmentId, openExistingPr, navigation, runActionWithPrompt, threadId],
+    [environmentId, openExistingPr, navigation, runAction, threadId],
   );
 
   // Status facts live on the relevant rows instead of crowding the header

@@ -28,7 +28,6 @@ import { ReviewSheet } from "./features/review/ReviewSheet";
 import { ThreadTerminalRouteScreen } from "./features/terminal/ThreadTerminalRouteScreen";
 import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
-import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
@@ -332,7 +331,6 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "ConnectionsNew",
   "GitBranches",
   "GitCommit",
-  "GitConfirm",
   "GitOverview",
   "NewTaskSheet",
   "SettingsLegal",
@@ -546,15 +544,6 @@ export const RootStack = createNativeStackNavigator({
       options: {
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.55, 0.92],
-        sheetGrabberVisible: true,
-      },
-    }),
-    GitConfirm: createNativeStackScreen({
-      screen: GitConfirmSheet,
-      linking: `${THREAD_LINKING_PREFIX}/git-confirm`,
-      options: {
-        ...FORM_SHEET_PRESENTATION_OPTIONS,
-        sheetAllowedDetents: [0.45, 0.7],
         sheetGrabberVisible: true,
       },
     }),

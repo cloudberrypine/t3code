@@ -5,11 +5,7 @@ import {
   ThreadId,
   type VcsStatusResult,
 } from "@t3tools/contracts";
-import {
-  type GitActionRequestInput,
-  requiresDefaultBranchConfirmation,
-  resolveQuickAction,
-} from "@t3tools/client-runtime/state/vcs";
+import { type GitActionRequestInput, resolveQuickAction } from "@t3tools/client-runtime/state/vcs";
 import { useNavigation } from "@react-navigation/native";
 import { NativeHeaderToolbar } from "../../native/StackHeader";
 import { useCallback, useMemo } from "react";
@@ -157,39 +153,6 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     }
   }, [gitStatus]);
 
-  const runActionWithPrompt = useCallback(
-    async (input: GitActionRequestInput) => {
-      const confirmableAction =
-        input.action === "push" ||
-        input.action === "create_pr" ||
-        input.action === "commit_push" ||
-        input.action === "commit_push_pr"
-          ? input.action
-          : null;
-      const branchName = gitStatus?.refName;
-      if (
-        branchName &&
-        confirmableAction &&
-        !input.featureBranch &&
-        requiresDefaultBranchConfirmation(input.action, isDefaultRef)
-      ) {
-        navigation.navigate("GitConfirm", {
-          environmentId: String(environmentId),
-          threadId: String(threadId),
-          confirmAction: confirmableAction,
-          branchName,
-          includesCommit: String(
-            input.action === "commit_push" || input.action === "commit_push_pr",
-          ),
-        });
-        return;
-      }
-
-      await onRunAction(input);
-    },
-    [environmentId, gitStatus, isDefaultRef, onRunAction, navigation, threadId],
-  );
-
   const runQuickAction = useCallback(async () => {
     if (quickAction.kind === "open_pr") {
       await openExistingPr();
@@ -200,9 +163,9 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
       return;
     }
     if (quickAction.kind === "run_action" && quickAction.action) {
-      await runActionWithPrompt({ action: quickAction.action });
+      await onRunAction({ action: quickAction.action });
     }
-  }, [onPull, openExistingPr, quickAction, runActionWithPrompt]);
+  }, [onPull, openExistingPr, quickAction, onRunAction]);
 
   const openFiles = useCallback(() => {
     if (props.onOpenFilesInspector) {
