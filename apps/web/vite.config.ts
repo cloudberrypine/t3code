@@ -11,6 +11,7 @@ import pkg from "./package.json" with { type: "json" };
 
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
+import { buildTaskCache } from "../../scripts/lib/build-task-cache";
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
@@ -155,6 +156,13 @@ const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {
+    run: {
+      tasks: {
+        // The `build` package script stays for hosted deploys; t3#build depends on this
+        // task instead when the opt-in desktop build cache is on.
+        "build:cached": { command: "vp build", cache: buildTaskCache() },
+      },
+    },
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),

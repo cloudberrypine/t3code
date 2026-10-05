@@ -3471,6 +3471,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
+    // A `vp run` cache hit restores files over what is already there, so start empty
+    // to keep hashed assets from an earlier build out of the package.
+    for (const dir of [distDirs.serverDist, path.join(repoRoot, "apps/web/dist")]) {
+      yield* fs.remove(dir, { recursive: true, force: true });
+    }
     const spawnCommand = yield* resolveSpawnCommand("vp", ["run", "build:desktop"]);
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
@@ -3903,14 +3908,22 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageEntries = yield* fs.readDirectory(stageDistDir);
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
 
+  // The `dir` target leaves an unpacked app in a folder such as `mac-arm64/`.
+  // Moving it keeps the bundle's relative symlinks intact, which a copy would not.
   const copiedArtifacts: string[] = [];
   for (const entry of stageEntries) {
     const from = path.join(stageDistDir, entry);
     const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
+    const isUnpackedApp = options.target === "dir" && stat?.type === "Directory";
+    if (!stat || (stat.type !== "File" && !isUnpackedApp)) continue;
 
     const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
+    if (isUnpackedApp) {
+      yield* fs.remove(to, { recursive: true, force: true });
+      yield* fs.rename(from, to);
+    } else {
+      yield* fs.copyFile(from, to);
+    }
     copiedArtifacts.push(to);
   }
 
@@ -3934,7 +3947,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   target: Flag.String("target").pipe(
     Flag.withDescription(
-      "Artifact target, for example dmg/AppImage/nsis (env: T3CODE_DESKTOP_TARGET).",
+      "Artifact target, for example dmg/AppImage/nsis, or dir for an unpacked app (env: T3CODE_DESKTOP_TARGET).",
     ),
     Flag.optional,
   ),

@@ -2,6 +2,7 @@ import "vite-plus/test/config";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
+import { buildTaskCache, buildTaskCacheEnabled } from "../../scripts/lib/build-task-cache.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
@@ -70,8 +71,9 @@ export default mergeConfig(
       tasks: {
         build: {
           command: "node scripts/cli.ts build",
-          dependsOn: ["@t3tools/web#build"],
-          cache: false,
+          dependsOn: [buildTaskCacheEnabled ? "@t3tools/web#build:cached" : "@t3tools/web#build"],
+          // The task cleans and rewrites dist, so it is output only.
+          cache: buildTaskCache({ input: [{ auto: true }, "!dist", "!dist/**"] }),
         },
       },
     },

@@ -60,15 +60,27 @@ chords to the shell. The diff reset we fixed originated upstream in #15005.
 
 ## Building
 
-Commit first (when authorized) so the embedded commit identifies the source, then:
+Dependencies are installed with `vp install`; pnpm is not on PATH in agent shells. Commit first
+(when authorized) so the embedded commit identifies the source, then:
 
 ```sh
-vp run dist:desktop:artifact --platform mac --target zip --arch arm64 \
+T3CODE_BUILD_CACHE=1 vp run dist:desktop:artifact --platform mac --target dir --arch arm64 \
   --build-version <0.0.46+local.YYYYMMDD.label.N> --output-dir release/<unique-build-folder>
 ```
 
+This leaves `release/<folder>/mac-arm64/T3 Code (Alpha).app`. `--target zip` still produces a ZIP,
+which takes about 30 seconds longer.
+
+`T3CODE_BUILD_CACHE=1` turns on our opt-in `vp run` cache for the web and server bundles (see
+`scripts/lib/build-task-cache.ts`; upstream leaves them uncached). Unchanged bundles are restored
+from `node_modules/.vite/task-cache` of that checkout. The build version and embedded commit are
+written after the cached steps, so every build gets its own. vp keeps one entry per task, so going
+back to older sources rebuilds; `vp cache clean` clears it. Measured on 5 October 2026: about 34
+seconds after a web change, 14 after a server-only change and 12 with no change, against 63 for
+the old uncached ZIP build.
+
 Use a unique `+local` version. Local builds disable automatic updates so custom features stay.
-As of 5 October 2026 the installed build is `0.0.46+local.20261005.diff-focus.1`.
+As of 5 October 2026 the installed build is `0.0.46+local.20261005.installer.1`.
 
 ## Installing while T3 Code is running
 
@@ -76,9 +88,11 @@ Installing quits T3 Code, which would kill every agent run inside it, including 
 install. `scripts/local-install.mjs` therefore waits for an idle app and runs outside T3:
 
 ```sh
-node scripts/local-install.mjs --launchd --zip release/<folder>/T3-Code-0.0.46-arm64.zip \
+node scripts/local-install.mjs --launchd --app "release/<folder>/mac-arm64/T3 Code (Alpha).app" \
   --version <build version> [--commit <sha>] [--max-wait-minutes 180]
 ```
+
+Pass `--zip <file>` instead of `--app` for a ZIP build.
 
 - `--launchd` resubmits the command with `launchctl submit` under a
   `com.t3code.local-install.*` label, using absolute paths, so it survives T3 quitting. The
@@ -89,7 +103,7 @@ node scripts/local-install.mjs --launchd --zip release/<folder>/T3-Code-0.0.46-a
   (read-only) every 15 seconds and proceeds only after two consecutive polls with no run in
   `queued`, `preparing`, `starting`, `running`, or `waiting`. After `--max-wait-minutes` it gives up
   without changing anything.
-- Before waiting, it stages the ZIP on the Applications volume, checks app.asar's version, the
+- Before waiting, it copies the app (or unpacks the ZIP) onto the Applications volume, checks app.asar's version, the
   embedded `t3codeCommitHash` (against `--commit` when given), and markers for our custom
   features, then signs with the stable identity and verifies.
 - Once idle, it backs up the installed app to
@@ -99,6 +113,8 @@ node scripts/local-install.mjs --launchd --zip release/<folder>/T3-Code-0.0.46-a
   relaunches the previous app. Backups are kept.
 - Each step is logged to `~/Library/Logs/t3-local-install/<timestamp>.log`, and macOS
   notifications announce waiting, installing, and success or failure.
+- `launchctl remove <label>` stops a waiting job. Before T3 is quit it removes its stage and
+  exits; once the swap has started it finishes the swap or the restore first.
 - `--dry-run` runs the gate once and every verification, including a backup copy inside the
   staging folder, without quitting or replacing anything.
 
@@ -107,6 +123,17 @@ M6Z4YG5SD6, certificate SHA-1 `9996FD65608B18E540C4FE341030A5E801214B56`. Keepin
 recurring Keychain access prompts. Older backups use names such as `20261005-before-diff-focus`.
 
 Only install when the active conversation authorizes it; past installs are not blanket permission.
+
+## Several t3code threads at once
+
+- Task threads do not build or install the app. They commit on their branch, run scoped checks
+  (and installer `--dry-run`s when they touch it), and report to the orchestrator.
+- The orchestrator lands branches onto `polyzonia` one at a time in the main checkout, then
+  builds once from the landed head and installs once with `--launchd`.
+- If another branch lands while an installer still waits for idle T3, the orchestrator finds the
+  waiting job with `launchctl list | grep com.t3code.local-install.`, checks that its latest log
+  line under `~/Library/Logs/t3-local-install/` is still a `Gate:` line, removes it with
+  `launchctl remove <label>`, then builds and submits a new installer for the newer head.
 
 ## Settings and appearance
 

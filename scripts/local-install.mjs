@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Replaces the installed local fork build once no T3 thread has an active run.
 // See docs/local-fork.md. Usage:
-//   node scripts/local-install.mjs --zip <artifact.zip> --version <build version>
-//     [--commit <sha prefix>] [--dry-run] [--max-wait-minutes N] [--launchd]
+//   node scripts/local-install.mjs (--app <T3 Code (Alpha).app> | --zip <artifact.zip>)
+//     --version <build version> [--commit <sha prefix>] [--dry-run] [--max-wait-minutes N] [--launchd]
 // --launchd resubmits this command under launchd so it survives T3 quitting.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -53,6 +53,7 @@ const TOOLS = {
 
 const { values: options } = NodeUtil.parseArgs({
   options: {
+    app: { type: "string" },
     zip: { type: "string" },
     version: { type: "string" },
     commit: { type: "string" },
@@ -61,13 +62,14 @@ const { values: options } = NodeUtil.parseArgs({
     launchd: { type: "boolean", default: false },
   },
 });
-if (!options.zip || !options.version) {
+if (!options.app === !options.zip || !options.version) {
   console.error(
-    "Usage: node scripts/local-install.mjs --zip <artifact.zip> --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd]",
+    "Usage: node scripts/local-install.mjs (--app <T3 Code (Alpha).app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd]",
   );
   process.exit(2);
 }
-const zipPath = NodePath.resolve(options.zip);
+const sourceFlag = options.app ? "--app" : "--zip";
+const sourcePath = NodePath.resolve(options.app ?? options.zip);
 const expectedVersion = options.version;
 const dryRun = options["dry-run"];
 const maxWaitMinutes = Number(options["max-wait-minutes"]);
@@ -123,8 +125,19 @@ const finish = (code) => {
 
 if (options.launchd) {
   const label = `${LAUNCHD_LABEL_PREFIX}${stamp}`;
-  const args = process.argv.slice(2).filter((arg) => arg !== "--launchd");
-  const command = [process.execPath, NodeURL.fileURLToPath(import.meta.url), ...args];
+  // launchd starts jobs in /, so pass every path absolute.
+  const command = [
+    process.execPath,
+    NodeURL.fileURLToPath(import.meta.url),
+    sourceFlag,
+    sourcePath,
+    "--version",
+    expectedVersion,
+    ...(options.commit ? ["--commit", options.commit] : []),
+    ...(dryRun ? ["--dry-run"] : []),
+    "--max-wait-minutes",
+    String(maxWaitMinutes),
+  ];
   run("launchctl", [
     "submit",
     "-l",
@@ -215,9 +228,24 @@ async function quitApp() {
   throw new Error("T3 Code did not quit within 60 seconds");
 }
 
+// `launchctl remove` sends SIGTERM, which is how a newer build replaces a waiting job.
+// Before the swap starts nothing has changed, so drop the stage and stop; once T3 is
+// being quit, finish the swap or the restore instead of leaving a half-installed app.
+let stagePath = null;
+let replacing = false;
+process.on("SIGTERM", () => {
+  if (replacing) {
+    log("SIGTERM during the swap; finishing it first");
+    return;
+  }
+  log("Stopped by SIGTERM before replacing anything");
+  if (stagePath) NodeFS.rmSync(stagePath, { recursive: true, force: true });
+  finish(143);
+});
+
 async function main() {
-  log(`${dryRun ? "Dry run" : "Install"}: ${zipPath} as ${expectedVersion}`);
-  if (!NodeFS.existsSync(zipPath)) throw new Error(`Missing artifact ${zipPath}`);
+  log(`${dryRun ? "Dry run" : "Install"}: ${sourcePath} as ${expectedVersion}`);
+  if (!NodeFS.existsSync(sourcePath)) throw new Error(`Missing artifact ${sourcePath}`);
   if (!NodeFS.existsSync(INSTALLED_APP)) throw new Error(`Missing installed app ${INSTALLED_APP}`);
   const installedVersion = readPackage(INSTALLED_APP).version;
   log(`Installed version: ${installedVersion}`);
@@ -229,9 +257,12 @@ async function main() {
 
   // Stage on the Applications volume so the final swap is an atomic rename.
   const stage = NodeFS.mkdtempSync("/Applications/.t3-local-install.");
+  stagePath = stage;
   log(`Staging in ${stage}`);
   try {
-    run("ditto", ["-x", "-k", zipPath, stage]);
+    if (options.app)
+      run("ditto", [sourcePath, NodePath.join(stage, NodePath.basename(sourcePath))]);
+    else run("ditto", ["-x", "-k", sourcePath, stage]);
     const name = NodeFS.readdirSync(stage).find((entry) => entry.endsWith(".app"));
     if (!name) throw new Error("Artifact contains no .app");
     const next = NodePath.join(stage, name);
@@ -272,6 +303,7 @@ async function main() {
       return;
     }
 
+    replacing = true;
     notify(`Installing ${expectedVersion}. T3 Code will restart.`);
     await quitApp();
     if (hash(archive(INSTALLED_APP)) !== oldHash) {
