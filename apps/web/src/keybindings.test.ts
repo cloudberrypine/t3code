@@ -14,6 +14,7 @@ import {
 import {
   formatShortcutLabel,
   isDiffToggleShortcut,
+  isThreadNavigationShortcut,
   isRichTextBoldShortcut,
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
@@ -548,8 +549,8 @@ describe("thread navigation helpers", () => {
     );
   });
 
-  it("never shows jump hints while the terminal is focused, even with an unrestricted binding", () => {
-    assert.isFalse(
+  it("shows available jump hints while the terminal is focused", () => {
+    assert.isTrue(
       shouldShowThreadJumpHintsForModifiers(event({ metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: true },
@@ -560,6 +561,63 @@ describe("thread navigation helpers", () => {
         platform: "MacIntel",
         context: { terminalFocus: false },
       }),
+    );
+  });
+
+  it("routes session jumps and traversal out of a focused terminal without stealing other chords", () => {
+    const options = {
+      platform: "MacIntel",
+      context: { terminalFocus: true, terminalOpen: true, isDesktop: true },
+    };
+    for (const key of ["1", "2", "9"]) {
+      assert.isTrue(
+        isThreadNavigationShortcut(
+          event({ key, metaKey: true }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          options,
+        ),
+      );
+    }
+    assert.isTrue(
+      isThreadNavigationShortcut(
+        event({ key: "]", metaKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        options,
+      ),
+    );
+    assert.isFalse(
+      isThreadNavigationShortcut(
+        event({ key: "c", ctrlKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        options,
+      ),
+    );
+    assert.isFalse(
+      isThreadNavigationShortcut(
+        event({ key: "d", metaKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        options,
+      ),
+    );
+    assert.isFalse(
+      isThreadNavigationShortcut(event({ key: "1", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        ...options,
+        context: { ...options.context, isDesktop: false },
+      }),
+    );
+    assert.isFalse(
+      isThreadNavigationShortcut(event({ key: "1", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        ...options,
+        context: { ...options.context, modelPickerOpen: true },
+      }),
+    );
+    const restricted = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "mod+1", command: "thread.jump.1", when: "!terminalFocus" },
+      ]),
+    );
+    assert.isFalse(
+      isThreadNavigationShortcut(event({ key: "1", metaKey: true }), restricted, options),
     );
   });
 

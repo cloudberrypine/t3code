@@ -33,6 +33,34 @@ beforeEach(() => {
   });
 });
 
+it.each(["unstaged", "turn", "branch"] as const)(
+  "keeps the %s diff selection across panel reopenings and thread-reference updates",
+  (kind) => {
+    const diffs = useDiffPanelStore.getState();
+    if (kind === "turn") diffs.selectTurn(refA, RunId.make("reviewed-run"), "Actor.as");
+    else if (kind === "branch") diffs.selectBranchBaseRef(refA, "origin/release");
+    else diffs.selectGitScope(refA, "unstaged");
+    const selection = selectThreadDiffPanelSelection(
+      useDiffPanelStore.getState().byThreadKey,
+      refA,
+    );
+    const panels = useRightPanelStore.getState();
+    panels.open(refA, "diff");
+    panels.open(refB, "diff");
+    panels.close(refA);
+    const refreshedRef = { ...refA };
+    panels.open(refreshedRef, "diff");
+    diffs.reconcileTurnSelection(refreshedRef, [RunId.make("new-run"), RunId.make("reviewed-run")]);
+    expect(
+      selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, refreshedRef),
+    ).toEqual(selection);
+    expect(selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, refB)).toEqual({
+      kind: "branch",
+      baseRef: null,
+    });
+  },
+);
+
 describe("file definition jump history", () => {
   const location = (path: string, line: number) => ({ path, line });
   const active = (ref = refA) =>

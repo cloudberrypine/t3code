@@ -60,6 +60,7 @@ import { useOpenInPreferredEditor } from "../editorPreferences";
 import { isTerminalUrl, resolvePathLinkTarget } from "../terminal-links";
 import {
   isDiffToggleShortcut,
+  isThreadNavigationShortcut,
   isTerminalClearShortcut,
   isTerminalNewShortcut,
   isTerminalSplitShortcut,
@@ -753,7 +754,8 @@ export function TerminalViewport({
           isTerminalSplitShortcut(event, currentKeybindings, options) ||
           isTerminalSplitVerticalShortcut(event, currentKeybindings, options) ||
           isTerminalNewShortcut(event, currentKeybindings, options) ||
-          isDiffToggleShortcut(event, currentKeybindings, options)
+          isDiffToggleShortcut(event, currentKeybindings, options) ||
+          isThreadNavigationShortcut(event, currentKeybindings, options)
         ) {
           return false;
         }

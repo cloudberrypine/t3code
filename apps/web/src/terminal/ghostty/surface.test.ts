@@ -1,3 +1,5 @@
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import { isThreadNavigationShortcut } from "../../keybindings";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { GhosttyTerminalCore, type GhosttyCell, type GhosttyRow } from "./core";
@@ -208,6 +210,49 @@ describe("GhosttyTerminalSurface visibility", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("leaves session navigation for the sidebar and sends neither press nor release to the shell", async () => {
+    const harness = createHarness();
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    const surface = await harness.create({
+      beforeKey: (event) =>
+        !isThreadNavigationShortcut(event, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "MacIntel",
+          context: { terminalFocus: true, terminalOpen: true, isDesktop: true },
+        }),
+    });
+    // Request Kitty key releases too: a delegated press must not leak its release.
+    surface.write("\x1b[>3u");
+    harness.onData.mockClear();
+    for (const key of ["2", "1"]) {
+      for (const type of ["keydown", "keyup"]) {
+        const event = Object.assign(new Event(type, { cancelable: true }), {
+          getModifierState: () => false,
+          key,
+          code: `Digit${key}`,
+          metaKey: true,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+        });
+        surface.input.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+      }
+    }
+    expect(harness.onData).not.toHaveBeenCalled();
+    const interrupt = Object.assign(new Event("keydown", { cancelable: true }), {
+      getModifierState: () => false,
+      key: "c",
+      code: "KeyC",
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+    });
+    surface.input.dispatchEvent(interrupt);
+    expect(interrupt.defaultPrevented).toBe(true);
+    expect(harness.onData).toHaveBeenCalled();
   });
 
   it("stops hidden snapshots and paint while preserving live VT replies and the next cursor", async () => {
