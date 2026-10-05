@@ -45,7 +45,26 @@ buttons overlaying line numbers without shifting code; diff search, navigation, 
 filtered statistics, and a selected diff mode that survives updates and reopening; Markdown front
 matter; usage adjustments; desktop completion and question notifications; generated-image
 rendering; and Cmd+1–9 / session traversal while a terminal has focus, without sending those
-chords to the shell. The diff reset we fixed originated upstream in #15005.
+chords to the shell. The diff reset we fixed originated upstream in #15005. The Polyzonia `/play`
+proxy is described below.
+
+## Polyzonia play proxy
+
+`apps/server/src/play/` proxies `/play/*` to Polyzonia's play server on `127.0.0.1:8790`, so the
+phone plays any worktree's web build over the same T3 Connect, Tailscale or LAN connection
+(Polyzonia's `docs/remote_play.md` has the whole picture). It is two lines in `server.ts`.
+
+- Access is a T3 session (read scope; operate for writes) or the `t3_play` cookie (`Path=/play`,
+  HttpOnly, SameSite=Strict, 90 days, renewed on use). A browser gets the cookie from a one-time
+  link `https://<host>/play/<worktree>/#ticket=<ticket>` that an agent posts in a thread.
+- Links come from `POST /play/__auth/ticket`, with an operate session or the hex of
+  `userdata/secrets/play-proxy.bin` in `x-t3-play-key` (Polyzonia's `scripts/play_web.sh` reads it).
+  Replacing that file and restarting revokes every link and cookie.
+- Every response is `Cache-Control: private`: Cloudflare caches public responses on the T3 Connect
+  hostname. The client is node:http, so precompressed bodies pass through untouched.
+- Optional `userdata/play-proxy.json`: `{"enabled": false}` turns it off; `"upstream"` (loopback
+  http only) and `"publicOrigin"` (for minted links) override the defaults.
+- Tests: `vp test run src/play/PlayProxy.test.ts` in `apps/server`.
 
 ## Verification
 
