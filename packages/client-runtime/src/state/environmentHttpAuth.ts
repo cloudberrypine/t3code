@@ -1,14 +1,18 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import {
+  ORCHESTRATION_PROTOCOL_HEADER,
+  ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+} from "@t3tools/contracts";
 import * as Result from "effect/Result";
-import { FetchHttpClient, type HttpClient, type HttpMethod } from "effect/unstable/http";
+import { FetchHttpClient, type HttpMethod } from "effect/unstable/http";
 
 import type { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection, PreparedHttpAuthorization } from "../connection/model.ts";
 import type { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
   executeEnvironmentHttpRequest,
-  makeEnvironmentHttpApiClient,
+  makeEnvironmentHttpApiGroupClient,
   RemoteEnvironmentAuthFetchError,
   RemoteEnvironmentAuthTimeoutError,
   type RemoteEnvironmentRequestError,
@@ -17,6 +21,17 @@ import {
 export interface EnvironmentHttpAuthHeaders {
   readonly authorization?: string;
   readonly dpop?: string;
+}
+
+export function withOrchestrationProtocolHeader(
+  headers: EnvironmentHttpAuthHeaders,
+): EnvironmentHttpAuthHeaders & {
+  readonly [ORCHESTRATION_PROTOCOL_HEADER]: typeof ORCHESTRATION_PROTOCOL_VERSION_TEXT;
+} {
+  return {
+    ...headers,
+    [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+  };
 }
 
 /**
@@ -86,20 +101,30 @@ const buildEnvironmentAuthHeaders = (
  */
 export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
   "clientRuntime.state.executeAuthenticatedEnvironmentHttpRequest",
-)(function* <A, E, R>(input: {
+)(function* <
+  Group extends Parameters<typeof makeEnvironmentHttpApiGroupClient>[1],
+  A,
+  E,
+  R,
+>(input: {
   readonly prepared: PreparedConnection;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly method: HttpMethod.HttpMethod;
   readonly url: (httpBaseUrl: string) => string;
   readonly timeoutMs: number;
+  readonly group: Group;
   readonly request: (input: {
-    readonly client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiClient>>;
+    readonly client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>>;
     readonly headers: EnvironmentHttpAuthHeaders;
   }) => Effect.Effect<A, E, R>;
   /** Some endpoints report rejected credentials in a successful response. */
   readonly isUnauthorizedResponse?: (response: NoInfer<A>) => boolean;
-}): Effect.fn.Return<A, RemoteEnvironmentRequestError, HttpClient.HttpClient | R> {
+}): Effect.fn.Return<
+  A,
+  RemoteEnvironmentRequestError,
+  Effect.Services<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>> | R
+> {
   let httpBaseUrl = input.prepared.httpBaseUrl;
   return yield* Effect.gen(function* () {
     let rejectedAccessToken: string | undefined;
@@ -127,12 +152,15 @@ export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
                 }),
             ),
           );
-        httpBaseUrl = current.httpBaseUrl;
+        // A learned direct route keeps its own origin; only the token renews.
+        if (input.prepared.target._tag === "RelayConnectionTarget") {
+          httpBaseUrl = current.httpBaseUrl;
+        }
         authorization = current.httpAuthorization;
       }
 
       const requestUrl = input.url(httpBaseUrl);
-      const client = yield* makeEnvironmentHttpApiClient(httpBaseUrl);
+      const client = yield* makeEnvironmentHttpApiGroupClient(httpBaseUrl, input.group);
       const headers = yield* buildEnvironmentAuthHeaders(
         authorization,
         input.method,

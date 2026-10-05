@@ -1,29 +1,31 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
+import { preloadFileTree } from "@pierre/trees";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildDiffFileTreeUpdates,
+  compareDiffFileTreeEntries,
   collectDirectoryPaths,
+  diffFileTreePositions,
   diffFileTreeEntries,
-  reviewDiffFileTreeEntries,
 } from "./diffFileTree.logic";
 
 function file(type: FileDiffMetadata["type"], name: string, prevName = name): FileDiffMetadata {
-  return { type, name: `b/${name}`, prevName: `a/${prevName}` } as FileDiffMetadata;
+  return { type, name, prevName } as FileDiffMetadata;
 }
 
 describe("diffFileTreeEntries", () => {
   it("maps each change type to its git status under the file's current path", () => {
     expect(
       diffFileTreeEntries([
-        file("new", "src/a.ts"),
+        file("new", "a/src/a.ts"),
         file("deleted", "src/b.ts"),
         file("rename-pure", "src/c.ts", "src/old-c.ts"),
         file("rename-changed", "src/d.ts", "src/old-d.ts"),
         file("change", "README.md"),
       ]),
     ).toEqual([
-      { path: "src/a.ts", status: "added" },
+      { path: "a/src/a.ts", status: "added" },
       { path: "src/b.ts", status: "deleted" },
       { path: "src/c.ts", status: "renamed" },
       { path: "src/d.ts", status: "renamed" },
@@ -32,77 +34,19 @@ describe("diffFileTreeEntries", () => {
   });
 });
 
-describe("reviewDiffFileTreeEntries", () => {
-  it("lists manifest files even when their patches were omitted", () => {
+describe("diffFileTreeEntries", () => {
+  it("folds a file-to-symlink type change into one modified entry", () => {
     expect(
-      reviewDiffFileTreeEntries([
-        {
-          changeType: "rename-changed",
-          oldPath: "src/old.ts",
-          newPath: "src/new.ts",
-          additions: 2,
-          deletions: 1,
-          patchIncluded: false,
-          isUntracked: false,
-        },
-        {
-          changeType: "new",
-          oldPath: "notes.txt",
-          newPath: "notes.txt",
-          additions: 4,
-          deletions: 0,
-          patchIncluded: true,
-          isUntracked: true,
-        },
+      diffFileTreeEntries([
+        file("change", "CLAUDE.md"),
+        file("deleted", "AGENTS.md"),
+        file("new", "AGENTS.md"),
+        file("new", "docs/new.md"),
       ]),
     ).toEqual([
-      { path: "src/new.ts", status: "renamed", loadState: "unloaded" },
-      { path: "notes.txt", status: "added", loadState: "loaded" },
-    ]);
-  });
-
-  it("identifies files that are loading, loaded on demand, or ready to retry", () => {
-    const files = [
-      {
-        changeType: "change" as const,
-        oldPath: "loaded.ts",
-        newPath: "loaded.ts",
-        additions: 1,
-        deletions: 1,
-        patchIncluded: false,
-        isUntracked: false,
-      },
-      {
-        changeType: "change" as const,
-        oldPath: "loading.ts",
-        newPath: "loading.ts",
-        additions: 1,
-        deletions: 1,
-        patchIncluded: false,
-        isUntracked: false,
-      },
-      {
-        changeType: "change" as const,
-        oldPath: "failed.ts",
-        newPath: "failed.ts",
-        additions: 1,
-        deletions: 1,
-        patchIncluded: false,
-        isUntracked: false,
-      },
-    ];
-
-    expect(
-      reviewDiffFileTreeEntries(
-        files,
-        new Set(["loaded.ts"]),
-        new Set(["loading.ts"]),
-        "failed.ts",
-      ).map((entry) => [entry.path, entry.loadState]),
-    ).toEqual([
-      ["loaded.ts", "loaded"],
-      ["loading.ts", "loading"],
-      ["failed.ts", "error"],
+      { path: "CLAUDE.md", status: "modified" },
+      { path: "AGENTS.md", status: "modified" },
+      { path: "docs/new.md", status: "added" },
     ]);
   });
 });
@@ -113,6 +57,34 @@ describe("collectDirectoryPaths", () => {
       "apps/",
       "apps/web/",
       "apps/web/src/",
+    ]);
+  });
+});
+
+describe("diff tree reading order", () => {
+  it("places folders and files where their first diff appears", () => {
+    const paths = [
+      "apps/mobile/src/state/shell.ts",
+      "apps/mobile/src/features/threads/route.ts",
+      "apps/mobile/src/features/threads/screen.tsx",
+    ];
+    const positions = diffFileTreePositions(paths);
+    const tree = preloadFileTree({
+      paths,
+      initialExpansion: "open",
+      flattenEmptyDirectories: true,
+      sort: compareDiffFileTreeEntries(() => positions),
+    });
+    const rows = [...tree.shadowHtml.matchAll(/data-item-path="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(rows).toEqual([
+      "apps/mobile/src/",
+      "apps/mobile/src/state/",
+      "apps/mobile/src/state/shell.ts",
+      "apps/mobile/src/features/threads/",
+      "apps/mobile/src/features/threads/route.ts",
+      "apps/mobile/src/features/threads/screen.tsx",
     ]);
   });
 });

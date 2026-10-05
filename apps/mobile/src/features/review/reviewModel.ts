@@ -1,19 +1,17 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { ChangeTypes, FileDiffMetadata } from "@pierre/diffs/types";
-import type {
-  OrchestrationCheckpointSummary,
-  ReviewDiffPreviewFile,
-  ReviewDiffPreviewSource,
-} from "@t3tools/contracts";
+import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import type { ReviewDiffPreviewSource } from "@t3tools/contracts";
+import { unquoteGitPatchPath } from "@t3tools/shared/gitPatchPath";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Order from "effect/Order";
 
 export type ReviewSectionKind = "turn" | "working-tree" | "branch-range";
 
-const DIRTY_WORKTREE_SECTION_ID = "git:working-tree";
-const DIRTY_WORKTREE_TITLE = "Dirty worktree";
-const DIRTY_WORKTREE_SUBTITLE = "Tracked, staged, and untracked worktree changes";
+const CHANGES_SECTION_ID = "git:branch-range";
+const CHANGES_TITLE = "Changes";
+const UNCOMMITTED_SUBTITLE = "Staged, unstaged, and untracked files";
 
 export interface ReviewSectionItem {
   readonly id: string;
@@ -22,7 +20,9 @@ export interface ReviewSectionItem {
   readonly subtitle: string | null;
   readonly diff: string | null;
   readonly isLoading: boolean;
-  readonly source: ReviewDiffPreviewSource | null;
+  readonly files?: ReviewDiffPreviewSource["files"];
+  readonly truncated?: boolean;
+  readonly source?: ReviewDiffPreviewSource;
 }
 
 export interface ReviewRenderableHunkRow {
@@ -52,6 +52,7 @@ export type ReviewRenderableRow = ReviewRenderableHunkRow | ReviewRenderableLine
 export interface ReviewRenderableFile {
   readonly id: string;
   readonly cacheKey: string;
+  readonly notice?: string;
   readonly path: string;
   readonly previousPath: string | null;
   readonly changeType: ChangeTypes;
@@ -61,7 +62,6 @@ export interface ReviewRenderableFile {
   readonly additionLines: ReadonlyArray<string>;
   readonly deletionLines: ReadonlyArray<string>;
   readonly rows: ReadonlyArray<ReviewRenderableRow>;
-  readonly loaded: boolean;
 }
 
 export type ReviewFilePreviewState =
@@ -95,11 +95,11 @@ export type ReviewParsedDiff =
       readonly notice: string | null;
     };
 
-function checkpointTitle(checkpoint: OrchestrationCheckpointSummary): string {
+function checkpointTitle(checkpoint: ThreadCheckpointSummary): string {
   return `Turn ${checkpoint.checkpointTurnCount}`;
 }
 
-function checkpointSubtitle(checkpoint: OrchestrationCheckpointSummary): string {
+function checkpointSubtitle(checkpoint: ThreadCheckpointSummary): string {
   const fileCount = checkpoint.files.length;
   if (checkpoint.status !== "ready") {
     return `Diff ${checkpoint.status}`;
@@ -108,8 +108,8 @@ function checkpointSubtitle(checkpoint: OrchestrationCheckpointSummary): string 
 }
 
 function compareCheckpointTurnCountDescending(
-  left: OrchestrationCheckpointSummary,
-  right: OrchestrationCheckpointSummary,
+  left: ThreadCheckpointSummary,
+  right: ThreadCheckpointSummary,
 ): -1 | 0 | 1 {
   if (left.checkpointTurnCount === right.checkpointTurnCount) {
     return 0;
@@ -118,28 +118,18 @@ function compareCheckpointTurnCountDescending(
   return left.checkpointTurnCount > right.checkpointTurnCount ? -1 : 1;
 }
 
-const readyCheckpointOrder = Order.make<OrchestrationCheckpointSummary>(
+const readyCheckpointOrder = Order.make<ThreadCheckpointSummary>(
   compareCheckpointTurnCountDescending,
 );
 
 function gitSubtitle(section: ReviewDiffPreviewSource): string | null {
   if (section.kind === "working-tree") {
-    return DIRTY_WORKTREE_SUBTITLE;
+    return UNCOMMITTED_SUBTITLE;
   }
   if (section.baseRef) {
     return `${section.baseRef} ... ${section.headRef ?? "HEAD"}`;
   }
   return "Base branch unavailable";
-}
-
-function stripGitPrefix(pathValue: string | undefined): string | null {
-  if (!pathValue) {
-    return null;
-  }
-  if (pathValue.startsWith("a/") || pathValue.startsWith("b/")) {
-    return pathValue.slice(2);
-  }
-  return pathValue;
 }
 
 function stripTrailingNewline(value: string): string {
@@ -384,8 +374,8 @@ function buildRenderableRows(file: FileDiffMetadata): ReadonlyArray<ReviewRender
 }
 
 function mapRenderableFile(file: FileDiffMetadata): ReviewRenderableFile {
-  const path = stripGitPrefix(file.name) ?? stripGitPrefix(file.prevName) ?? file.name;
-  const previousPath = stripGitPrefix(file.prevName);
+  const path = unquoteGitPatchPath(file.name || file.prevName || "");
+  const previousPath = file.prevName ? unquoteGitPatchPath(file.prevName) : null;
   const additions = file.hunks.reduce((total, hunk) => total + hunk.additionLines, 0);
   const deletions = file.hunks.reduce((total, hunk) => total + hunk.deletionLines, 0);
   const cacheKey = file.cacheKey ?? `${previousPath ?? "none"}:${path}:${file.type}`;
@@ -402,71 +392,18 @@ function mapRenderableFile(file: FileDiffMetadata): ReviewRenderableFile {
     additionLines: file.additionLines,
     deletionLines: file.deletionLines,
     rows: buildRenderableRows(file),
-    loaded: true,
-  };
-}
-
-/** Adds collapsed header-only entries for manifest files whose patches were omitted. */
-export function mergeReviewDiffPreviewFiles(
-  parsedDiff: ReviewParsedDiff,
-  previewFiles: ReadonlyArray<ReviewDiffPreviewFile> | undefined,
-  cacheScope: string,
-): ReviewParsedDiff {
-  if (!previewFiles || previewFiles.length === 0 || parsedDiff.kind === "raw") {
-    return parsedDiff;
-  }
-
-  const loadedFiles =
-    parsedDiff.kind === "files"
-      ? new Map(parsedDiff.files.map((file) => [file.path, file] as const))
-      : new Map<string, ReviewRenderableFile>();
-  const files = previewFiles
-    .toSorted((left, right) =>
-      left.newPath.localeCompare(right.newPath, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }),
-    )
-    .map<ReviewRenderableFile>((previewFile) => {
-      const loadedFile = loadedFiles.get(previewFile.newPath);
-      if (loadedFile) return loadedFile;
-      const loaded = previewFile.patchIncluded;
-      const id = `${cacheScope}:manifest:${previewFile.oldPath}\0${previewFile.newPath}`;
-      return {
-        id,
-        cacheKey: id,
-        path: previewFile.newPath,
-        previousPath: previewFile.oldPath === previewFile.newPath ? null : previewFile.oldPath,
-        changeType: previewFile.changeType,
-        additions: previewFile.additions,
-        deletions: previewFile.deletions,
-        languageHint: null,
-        additionLines: [],
-        deletionLines: [],
-        rows: [],
-        loaded,
-      };
-    });
-
-  return {
-    kind: "files",
-    files,
-    fileCount: files.length,
-    additions: previewFiles.reduce((total, file) => total + file.additions, 0),
-    deletions: previewFiles.reduce((total, file) => total + file.deletions, 0),
-    notice: parsedDiff.kind === "files" ? parsedDiff.notice : null,
   };
 }
 
 export function getReviewSectionIdForCheckpoint(
-  checkpoint: Pick<OrchestrationCheckpointSummary, "checkpointTurnCount">,
+  checkpoint: Pick<ThreadCheckpointSummary, "checkpointTurnCount">,
 ): string {
   return `turn:${checkpoint.checkpointTurnCount}`;
 }
 
 export function getReadyReviewCheckpoints(
-  checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>,
-): ReadonlyArray<OrchestrationCheckpointSummary> {
+  checkpoints: ReadonlyArray<ThreadCheckpointSummary>,
+): ReadonlyArray<ThreadCheckpointSummary> {
   return pipe(
     checkpoints,
     Arr.filter((checkpoint) => checkpoint.status === "ready"),
@@ -475,7 +412,7 @@ export function getReadyReviewCheckpoints(
 }
 
 export function buildReviewSectionItems(input: {
-  readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+  readonly checkpoints: ReadonlyArray<ThreadCheckpointSummary>;
   readonly gitSections: ReadonlyArray<ReviewDiffPreviewSource>;
   readonly turnDiffById: Readonly<Record<string, string | undefined>>;
   readonly loadingTurnIds: Readonly<Record<string, boolean | undefined>>;
@@ -491,7 +428,6 @@ export function buildReviewSectionItems(input: {
         subtitle: checkpointSubtitle(checkpoint),
         diff: input.turnDiffById[id] ?? null,
         isLoading: input.loadingTurnIds[id] === true,
-        source: null,
       };
     },
   );
@@ -502,21 +438,23 @@ export function buildReviewSectionItems(input: {
     title: section.title,
     subtitle: gitSubtitle(section),
     diff: section.diff,
-    isLoading: false,
     source: section,
+    ...(section.files ? { files: section.files } : {}),
+    truncated: section.truncated,
+    isLoading: false,
   }));
-  const hasDirtyWorktreeItem = gitItems.some((item) => item.id === DIRTY_WORKTREE_SECTION_ID);
+  // Changes is the default section, so it holds the place while git sources load.
+  const hasChangesItem = gitItems.some((item) => item.id === CHANGES_SECTION_ID);
   const visibleGitItems =
-    input.loadingGitSections && !hasDirtyWorktreeItem
+    input.loadingGitSections && !hasChangesItem
       ? [
           {
-            id: DIRTY_WORKTREE_SECTION_ID,
-            kind: "working-tree",
-            title: DIRTY_WORKTREE_TITLE,
-            subtitle: DIRTY_WORKTREE_SUBTITLE,
+            id: CHANGES_SECTION_ID,
+            kind: "branch-range",
+            title: CHANGES_TITLE,
+            subtitle: null,
             diff: null,
             isLoading: true,
-            source: null,
           } satisfies ReviewSectionItem,
           ...gitItems,
         ]
@@ -525,10 +463,11 @@ export function buildReviewSectionItems(input: {
   return [...turnItems, ...visibleGitItems];
 }
 
+/** Prefers Changes, then the first section (a turn when the project is not a git repo). */
 export function getDefaultReviewSectionId(
   sections: ReadonlyArray<ReviewSectionItem>,
 ): string | null {
-  return sections[0]?.id ?? null;
+  return (sections.find((section) => section.id === CHANGES_SECTION_ID) ?? sections[0])?.id ?? null;
 }
 
 export function buildReviewParsedDiff(
@@ -588,4 +527,28 @@ export function buildReviewParsedDiff(
       notice,
     };
   }
+}
+
+export function applyReviewDiffMetadata(
+  previewDiff: ReviewParsedDiff,
+  selectedSection: Pick<ReviewSectionItem, "files" | "truncated"> | null,
+): ReviewParsedDiff {
+  if (previewDiff.kind === "empty") return previewDiff;
+  const notice = selectedSection?.truncated
+    ? `This preview exceeds the size limit. Changes shown are incomplete.${selectedSection.files ? " Counts include all changes." : ""}`
+    : previewDiff.notice;
+  if (previewDiff.kind !== "files" || !selectedSection?.files) return { ...previewDiff, notice };
+  const totals = selectedSection.files.reduce(
+    (total, file) => ({
+      additions: total.additions + file.additions,
+      deletions: total.deletions + file.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+  const stats = new Map(selectedSection.files.map((file) => [file.path, file]));
+  const files = previewDiff.files.map((file) => {
+    const stat = stats.get(file.path);
+    return stat ? { ...file, additions: stat.additions, deletions: stat.deletions } : file;
+  });
+  return { ...previewDiff, ...totals, files, fileCount: selectedSection.files.length, notice };
 }

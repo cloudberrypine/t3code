@@ -55,10 +55,10 @@ function renderDiffHeaderMetadata(item: CodeViewItem<unknown>) {
   if (item.type !== "diff") return null;
   const { additions, deletions } = getDiffLineStat([item.fileDiff]);
   return (
-    <span className="inline-flex items-center gap-2 font-mono text-[11px] leading-none tabular-nums">
+    <span className="inline-flex items-center gap-2 font-mono text-2xs leading-none tabular-nums">
       {(deletions > 0 || additions === 0) && <span className="text-destructive">-{deletions}</span>}
       {(additions > 0 || deletions === 0) && (
-        <span className="text-emerald-600 dark:text-emerald-300/90">+{additions}</span>
+        <span className="text-diff-addition">+{additions}</span>
       )}
     </span>
   );
@@ -257,6 +257,13 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   line-height: 1 !important;
 }
 
+/* Pierre clips file names with overflow: hidden for its start ellipsis. A 1em line box cuts off
+   descenders. Only the clipped names get room: 16px plus the header's 12px of padding stays
+   inside its 32px min-height, which diffHeaderHeight assumes. */
+[data-diffs-header] :is([data-title], [data-prev-name]) {
+  line-height: 16px !important;
+}
+
 [data-diffs-header] [data-metadata] {
   align-items: center !important;
   line-height: 1 !important;
@@ -276,18 +283,12 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 
 [data-title] {
   cursor: pointer;
-  transition:
-    color 120ms ease,
-    text-decoration-color 120ms ease;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-underline-offset: 2px;
+  transition: color 120ms ease;
   font-family: var(--font-sans) !important;
 }
 
 [data-title]:hover {
   color: color-mix(in srgb, var(--code-foreground) 84%, var(--primary)) !important;
-  text-decoration-color: currentColor;
 }
 
 /* Expanding a file mounts its body all at once; easing it in matches the 200ms the app's

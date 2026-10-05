@@ -70,7 +70,7 @@ export function MeshAnimationControls({
             value={animation.time}
             onChange={(event) => animation.seek(Number(event.target.value))}
           />
-          <span className="text-[11px] tabular-nums text-muted-foreground">
+          <span className="text-2xs tabular-nums text-muted-foreground">
             {animation.time.toFixed(2)} / {animation.clip.duration.toFixed(2)}s
           </span>
         </>

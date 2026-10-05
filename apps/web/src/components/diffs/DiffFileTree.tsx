@@ -1,7 +1,7 @@
 import type { GitStatusEntry } from "@pierre/trees";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
-import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { ChevronsDownUp, ChevronsUpDown } from "lucide";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { usePaneFindShortcut } from "~/hooks/usePaneFindShortcut";
 import { FileSearchField } from "../files/FileSearchField";
@@ -12,11 +12,14 @@ import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
 import { Button } from "../ui/button";
+import { MorphIcon } from "~/components/MorphIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildDiffFileTreeUpdates,
+  compareDiffFileTreeEntries,
   collectDirectoryPaths,
   diffFileTreeRows,
+  diffFileTreePositions,
   type DiffFileTreeEntry,
 } from "./diffFileTree.logic";
 
@@ -77,12 +80,21 @@ export function DiffFileTree({
     [rows],
   );
   const directoryPaths = useMemo(() => collectDirectoryPaths(paths), [paths]);
+  const positions = useMemo(() => diffFileTreePositions(paths), [paths]);
+  const [ordering] = useState(() => {
+    let currentPositions: ReadonlyMap<string, number> = new Map();
+    return {
+      sort: compareDiffFileTreeEntries(() => currentPositions),
+      update: (nextPositions: ReadonlyMap<string, number>) => {
+        currentPositions = nextPositions;
+      },
+    };
+  });
   const gitStatus = useMemo<ReadonlyArray<GitStatusEntry>>(
     () => rows.map((row) => ({ path: row.treePath, status: row.status })),
     [rows],
   );
   const filePathsRef = useRef(new Map(rows.map((row) => [row.treePath, row.path])));
-  const loadStatesRef = useRef(new Map(rows.map((row) => [row.treePath, row.loadState] as const)));
   const onSelectFileRef = useRef(onSelectFile);
   // Selection driven by `selectedPath` below is an echo of a file already on screen, not a
   // request to scroll to it again.
@@ -92,7 +104,6 @@ export function DiffFileTree({
 
   useEffect(() => {
     filePathsRef.current = new Map(rows.map((row) => [row.treePath, row.path]));
-    loadStatesRef.current = new Map(rows.map((row) => [row.treePath, row.loadState] as const));
     onSelectFileRef.current = onSelectFile;
   }, [rows, onSelectFile]);
 
@@ -108,15 +119,9 @@ export function DiffFileTree({
       const path = treePath === undefined ? undefined : filePathsRef.current.get(treePath);
       if (path !== undefined) onSelectFileRef.current(path);
     },
-    renderRowDecoration: ({ row }) => {
-      const loadState = loadStatesRef.current.get(row.path);
-      if (loadState === "loading") return { text: "Loading", title: "Loading file diff" };
-      if (loadState === "error") return { text: "Retry", title: "Retry loading file diff" };
-      if (loadState === "unloaded") return { text: "Load", title: "File diff not loaded" };
-      return null;
-    },
     paths: [],
     search: false,
+    sort: ordering.sort,
     unsafeCSS: DIFF_FILE_TREE_UNSAFE_CSS,
   });
   const search = useFileTreeSearch(model);
@@ -125,17 +130,31 @@ export function DiffFileTree({
   );
 
   useEffect(() => {
+    ordering.update(positions);
     const mountedPaths = mountedPathsRef.current;
     if (mountedPaths === paths) return;
     if (mountedPaths === null) {
       model.resetPaths(paths);
-    } else {
+    } else if (mountedPaths.every((path, index) => paths[index] === path)) {
+      // PR slices only append files, so keep the existing tree and its open folders.
       const updates = buildDiffFileTreeUpdates(mountedPaths, paths);
       if (updates.length > 0) model.batch(updates);
+    } else {
+      // A refreshed diff can change the rank of existing siblings. Mutations do not reorder
+      // those rows, so rebuild while carrying the reader's folder expansion forward.
+      const collapsedDirectories = directoryPaths.filter((path) => {
+        const directory = model.getItem(path);
+        return directory !== null && "isExpanded" in directory && !directory.isExpanded();
+      });
+      model.resetPaths(paths);
+      for (const path of collapsedDirectories) {
+        const directory = model.getItem(path);
+        if (directory !== null && "collapse" in directory) directory.collapse();
+      }
     }
     mountedPathsRef.current = paths;
     model.setGitStatus(gitStatus);
-  }, [gitStatus, model, paths]);
+  }, [directoryPaths, gitStatus, model, ordering, paths, positions]);
 
   useEffect(() => {
     if (selectedPath === null) {
@@ -208,11 +227,10 @@ export function DiffFileTree({
                 />
               }
             >
-              {allDirectoriesExpanded ? (
-                <ChevronsDownUpIcon className="size-3.5" />
-              ) : (
-                <ChevronsUpDownIcon className="size-3.5" />
-              )}
+              <MorphIcon
+                className="size-3.5"
+                icon={allDirectoriesExpanded ? ChevronsDownUp : ChevronsUpDown}
+              />
             </TooltipTrigger>
             <TooltipPopup>
               {allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"}

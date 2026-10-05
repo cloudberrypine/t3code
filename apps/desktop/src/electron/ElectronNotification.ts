@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AGENT_NOTIFICATION_CLICK_CHANNEL } from "../ipc/channels.ts";
 
-export class NotificationError extends Schema.TaggedErrorClass<NotificationError>()(
+export class NotificationError extends Schema.TaggedError<NotificationError>()(
   "NotificationError",
   { cause: Schema.Defect() },
 ) {}

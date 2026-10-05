@@ -1,20 +1,20 @@
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
-import { ThreadId, TurnId, type OrchestrationLatestTurnState } from "@t3tools/contracts";
+import {
+  ThreadId,
+  RunId,
+  RuntimeRequestId,
+  type OrchestrationV2ShellThreadStatus,
+} from "@t3tools/contracts";
 import { createCompletionTracker, createQuestionTracker } from "./completionNotifications";
 
-function thread(id: string, state: OrchestrationLatestTurnState, turn = "turn-1") {
+function thread(id: string, state: OrchestrationV2ShellThreadStatus, turn = "turn-1") {
   return {
     id: ThreadId.make(id),
     title: `Thread ${id}`,
     archivedAt: null,
-    latestTurn: {
-      turnId: TurnId.make(turn),
-      state,
-      requestedAt: "2026-09-12T10:00:00Z",
-      startedAt: null,
-      completedAt: state === "completed" ? "2026-09-12T10:01:00Z" : null,
-      assistantMessageId: null,
-    },
+    latestRunId: RunId.make(turn),
+    status: state,
   };
 }
 
@@ -33,12 +33,20 @@ describe("completion notifications", () => {
     const track = createCompletionTracker();
     track([thread("a", "running"), thread("b", "running")], true);
     expect(
-      track([thread("a", "error"), thread("b", "interrupted"), thread("old", "completed")], true),
+      track([thread("a", "failed"), thread("b", "interrupted"), thread("old", "completed")], true),
     ).toEqual([]);
     expect(track([thread("a", "completed")], false)).toEqual([]);
     expect(track([thread("a", "completed")], true)).toEqual([]);
     expect(
-      track([{ ...thread("a", "completed", "turn-2"), archivedAt: "2026-09-12T10:02:00Z" }], true),
+      track(
+        [
+          {
+            ...thread("a", "completed", "turn-2"),
+            archivedAt: DateTime.makeUnsafe("2026-09-12T10:02:00Z"),
+          },
+        ],
+        true,
+      ),
     ).toEqual([]);
   });
 
@@ -60,8 +68,14 @@ function questionThread(requestId: string | null, overrides = {}) {
   return {
     ...thread("a", "running"),
     updatedAt: "2026-09-12T15:17:24.255Z",
-    hasPendingUserInput: requestId !== null,
-    ...(requestId === null ? {} : { latestUserInputRequestId: requestId }),
+    pendingRuntimeRequest:
+      requestId === null
+        ? null
+        : {
+            id: RuntimeRequestId.make(requestId),
+            kind: "user_input" as const,
+            createdAt: DateTime.makeUnsafe("2026-09-12T15:17:24.255Z"),
+          },
     ...overrides,
   };
 }
@@ -74,7 +88,7 @@ describe("question notifications", () => {
     expect(track([question], true)).toEqual([
       { thread: question, requestId: "codex-async:thread:item-1" },
     ]);
-    expect(track([{ ...question, updatedAt: "2026-09-12T15:18:00.000Z" }], true)).toEqual([]);
+    expect(track([question], true)).toEqual([]);
     expect(track([questionThread("codex-async:thread:item-2")], true)).toHaveLength(1);
     expect(track([questionThread(null)], true)).toEqual([]);
     expect(track([questionThread("codex-async:thread:item-3")], true)).toHaveLength(1);
@@ -82,8 +96,8 @@ describe("question notifications", () => {
 
   it("does not require a materialized turn and supports blocking questions", () => {
     const track = createQuestionTracker();
-    track([questionThread(null, { latestTurn: null })], true);
-    expect(track([questionThread("request-1", { latestTurn: null })], true)).toHaveLength(1);
+    track([questionThread(null, { latestRunId: null })], true);
+    expect(track([questionThread("request-1", { latestRunId: null })], true)).toHaveLength(1);
   });
 
   it("does not replay questions on initial load, reconnect, enabling, or unarchiving", () => {
@@ -110,13 +124,20 @@ describe("question notifications", () => {
     expect(local([questionThread("other", { id: ThreadId.make("other") })], true)).toEqual([]);
   });
 
-  it("falls back to pending transitions on older servers without repeating during updates", () => {
+  it("does not treat approval requests as questions", () => {
     const track = createQuestionTracker();
     track([questionThread(null)], true);
-    const pending = { ...questionThread(null), hasPendingUserInput: true };
-    expect(track([pending], true)).toHaveLength(1);
-    expect(track([{ ...pending, updatedAt: "2026-09-12T15:18:00.000Z" }], true)).toEqual([]);
-    track([questionThread(null)], true);
-    expect(track([{ ...pending, updatedAt: "2026-09-12T15:19:00.000Z" }], true)).toHaveLength(1);
+    const request = questionThread("approval");
+    expect(
+      track(
+        [
+          {
+            ...request,
+            pendingRuntimeRequest: { ...request.pendingRuntimeRequest!, kind: "command" },
+          },
+        ],
+        true,
+      ),
+    ).toEqual([]);
   });
 });

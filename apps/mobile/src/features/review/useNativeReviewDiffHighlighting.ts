@@ -1,5 +1,5 @@
 import { colorAngelScriptTokens, type AngelScriptSemanticToken } from "@t3tools/shared/angelscript";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   highlightNativeReviewDiffVisibleRows,
@@ -9,10 +9,10 @@ import {
 import type { NativeReviewDiffRow } from "../diffs/nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "../diffs/nativeReviewDiffTypes";
 
-interface NativeReviewVisibleRange {
-  readonly firstRowIndex: number;
-  readonly lastRowIndex: number;
-}
+import {
+  createReviewDiffHighlightScheduler,
+  type NativeReviewVisibleRange,
+} from "./reviewDiffHighlightScheduler";
 
 function createEmptyTokenPatch(resetKey: string): string {
   return JSON.stringify({ resetKey, tokensByRowId: {} });
@@ -45,29 +45,27 @@ export function useNativeReviewDiffHighlighting(input: {
 }) {
   const { enabled, files, resetKey, rows, scheme, semantics } = input;
   const highlightedRowIdsRef = useRef<Set<string>>(new Set());
-  const visibleRangeRef = useRef<NativeReviewVisibleRange>({
+  const [visibleRange, setVisibleRange] = useState<NativeReviewVisibleRange>({
     firstRowIndex: 0,
     lastRowIndex: 80,
   });
   const visibleChunkIndexRef = useRef(0);
   const [tokensPatchJson, setTokensPatchJson] = useState(() => createEmptyTokenPatch(resetKey));
-  const [visibleHighlightRequest, setVisibleHighlightRequest] = useState(0);
+  const [scheduler] = useState(() => createReviewDiffHighlightScheduler(setVisibleRange));
 
   useEffect(() => {
+    scheduler.reset();
     highlightedRowIdsRef.current = new Set();
     visibleChunkIndexRef.current = 0;
-    visibleRangeRef.current = { firstRowIndex: 0, lastRowIndex: 80 };
+    setVisibleRange({ firstRowIndex: 0, lastRowIndex: 80 });
     setTokensPatchJson(createEmptyTokenPatch(resetKey));
-    if (enabled && rows.length > 0) {
-      setVisibleHighlightRequest((request) => request + 1);
-    }
-  }, [enabled, resetKey, rows.length]);
+    return () => scheduler.cancel();
+  }, [enabled, resetKey, rows.length, scheduler]);
 
   useEffect(() => {
     // Full-revision semantics may arrive while scrolled deep into the file.
     // Repaint the current viewport without moving the highlight request to row zero.
     highlightedRowIdsRef.current = new Set();
-    if (enabled) setVisibleHighlightRequest((request) => request + 1);
   }, [enabled, semantics]);
 
   useEffect(() => {
@@ -76,7 +74,7 @@ export function useNativeReviewDiffHighlighting(input: {
     }
 
     const abortController = new AbortController();
-    const requestRange = visibleRangeRef.current;
+    const requestRange = visibleRange;
     const engine: NativeReviewDiffHighlightEngine = "native";
 
     void (async () => {
@@ -133,22 +131,10 @@ export function useNativeReviewDiffHighlighting(input: {
     })();
 
     return () => abortController.abort();
-  }, [enabled, files, resetKey, rows, scheme, semantics, visibleHighlightRequest]);
-
-  const updateVisibleRange = useCallback((nextRange: NativeReviewVisibleRange) => {
-    const previousRange = visibleRangeRef.current;
-    const movedRows =
-      Math.abs(nextRange.firstRowIndex - previousRange.firstRowIndex) +
-      Math.abs(nextRange.lastRowIndex - previousRange.lastRowIndex);
-
-    visibleRangeRef.current = nextRange;
-    if (movedRows >= 20) {
-      setVisibleHighlightRequest((request) => request + 1);
-    }
-  }, []);
+  }, [enabled, files, resetKey, rows, scheme, semantics, visibleRange]);
 
   return {
     tokensPatchJson,
-    updateVisibleRange,
+    updateVisibleRange: scheduler.update,
   };
 }

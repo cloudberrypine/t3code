@@ -202,7 +202,7 @@ export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
         >
           Fit
         </Button>
-        <span className="ml-auto text-[11px] text-muted-foreground">
+        <span className="ml-auto text-2xs text-muted-foreground">
           {mesh.vertices.length} vertices · {colors.length} triangles
         </span>
       </div>
@@ -325,7 +325,7 @@ export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
           }}
         />
       </div>
-      <div className="shrink-0 border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+      <div className="shrink-0 border-t border-border/60 px-3 py-1.5 text-2xs text-muted-foreground">
         {selected !== null && pose[selected]
           ? `${pose[selected]!.name || `Joint ${selected}`} · `
           : ""}

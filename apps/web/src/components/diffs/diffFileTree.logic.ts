@@ -1,6 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { FileTreeBatchOperation, GitStatus } from "@pierre/trees";
-import type { ReviewDiffPreviewFile } from "@t3tools/contracts";
+import type { FileTreeBatchOperation, FileTreeSortComparator, GitStatus } from "@pierre/trees";
 
 import { resolveFileDiffPath } from "~/lib/diffRendering";
 
@@ -8,7 +7,6 @@ import { resolveFileDiffPath } from "~/lib/diffRendering";
 export interface DiffFileTreeEntry {
   readonly path: string;
   readonly status: GitStatus;
-  readonly loadState?: "loaded" | "loading" | "unloaded" | "error";
 }
 
 function toGitStatus(file: FileDiffMetadata): GitStatus {
@@ -25,39 +23,22 @@ function toGitStatus(file: FileDiffMetadata): GitStatus {
   }
 }
 
-/** Maps parsed diff files to tree entries, keeping the diff's own order. */
+/**
+ * Maps parsed diff files to tree entries, keeping the diff's own order. A path
+ * appears once: a type change (regular file to symlink) is a deletion plus an
+ * addition of the same path, and the tree shows the surviving file as modified.
+ */
 export function diffFileTreeEntries(
   files: ReadonlyArray<FileDiffMetadata>,
 ): ReadonlyArray<DiffFileTreeEntry> {
-  return files.map((file) => ({ path: resolveFileDiffPath(file), status: toGitStatus(file) }));
-}
-
-/** Builds the complete tree from the server's file manifest, including patches not yet loaded. */
-export function reviewDiffFileTreeEntries(
-  files: ReadonlyArray<ReviewDiffPreviewFile>,
-  loadedPaths: ReadonlySet<string> = new Set(),
-  loadingPaths: ReadonlySet<string> = new Set(),
-  errorPath: string | null = null,
-): ReadonlyArray<DiffFileTreeEntry> {
-  return files.map((file) => ({
-    path: file.newPath,
-    status:
-      file.changeType === "new"
-        ? "added"
-        : file.changeType === "deleted"
-          ? "deleted"
-          : file.changeType === "rename-pure" || file.changeType === "rename-changed"
-            ? "renamed"
-            : "modified",
-    loadState:
-      file.patchIncluded || loadedPaths.has(file.newPath)
-        ? "loaded"
-        : loadingPaths.has(file.newPath)
-          ? "loading"
-          : errorPath === file.newPath
-            ? "error"
-            : "unloaded",
-  }));
+  const statusByPath = new Map<string, GitStatus>();
+  for (const file of files) {
+    const path = resolveFileDiffPath(file);
+    const status = toGitStatus(file);
+    const previous = statusByPath.get(path);
+    statusByPath.set(path, previous === undefined || previous === status ? status : "modified");
+  }
+  return [...statusByPath].map(([path, status]) => ({ path, status }));
 }
 
 /**
@@ -96,6 +77,34 @@ export function diffFileTreeRows(entries: ReadonlyArray<DiffFileTreeEntry>) {
     }
     return { ...entry, treePath };
   });
+}
+
+/** A folder takes the position of its first file in the diff. */
+export function diffFileTreePositions(paths: ReadonlyArray<string>): ReadonlyMap<string, number> {
+  const positions = new Map<string, number>();
+  paths.forEach((path, index) => {
+    positions.set(path, index);
+    let directory = "";
+    for (const segment of path.split("/").slice(0, -1)) {
+      directory += `${segment}/`;
+      if (!positions.has(directory)) positions.set(directory, index);
+    }
+  });
+  return positions;
+}
+
+export function compareDiffFileTreeEntries(
+  getPositions: () => ReadonlyMap<string, number>,
+): FileTreeSortComparator {
+  return (left, right) => {
+    const positions = getPositions();
+    return (
+      (positions.get(left.path) ?? Number.MAX_SAFE_INTEGER) -
+        (positions.get(right.path) ?? Number.MAX_SAFE_INTEGER) ||
+      left.depth - right.depth ||
+      left.path.localeCompare(right.path)
+    );
+  };
 }
 
 function pathDepth(path: string): number {

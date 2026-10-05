@@ -76,7 +76,7 @@ it.effect(
           ),
         ),
       );
-      const files = createProjectEnvironmentAtoms(runtime);
+      const files = createProjectEnvironmentAtoms(runtime, { projectAtom: () => Atom.make(null) });
       const registry = AtomRegistry.make();
       yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
       const target = { environmentId, input: { cwd: "/repo", relativePath: "Actor.as" } };

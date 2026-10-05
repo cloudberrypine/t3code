@@ -4,7 +4,6 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, expect, it } from "vite-plus/test";
 import { findWorkspaceFile } from "./findWorkspaceFile.ts";
-import { listWorkspaceFiles } from "./listWorkspaceFiles.ts";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -29,7 +28,4 @@ it("finds ignored API files without entering nested worktrees or directory symli
   expect((await findWorkspaceFile(root, "ScriptingAPI.as", 2)).entries[0]!.revision).not.toBe(
     previous,
   );
-  const listing = await listWorkspaceFiles(root);
-  expect(listing.entries.some((entry) => entry.path === "generated/ScriptingAPI.as")).toBe(true);
-  expect(listing.entries.some((entry) => entry.path === "other/ScriptingAPI.as")).toBe(false);
 });

@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { TurnId, type EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { useEffect, useState } from "react";
 import { useClientSettings, useClientSettingsHydrated } from "~/hooks/useSettings";
@@ -20,13 +20,13 @@ function EnvironmentAgentNotifications({ environmentId }: { environmentId: Envir
         ? shell.snapshot.value.threads
         : null;
     for (const thread of track(threads, hydrated && enabled)) {
-      if (!thread.latestTurn) continue;
+      if (!thread.latestRunId) continue;
       void window.desktopBridge
         ?.showAgentNotification?.({
           kind: "completed",
           environmentId,
           threadId: thread.id,
-          turnId: thread.latestTurn.turnId,
+          turnId: TurnId.make(thread.latestRunId),
           title: thread.title,
         })
         .catch((error) => console.error("Could not show completion notification", error));

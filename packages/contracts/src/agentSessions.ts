@@ -20,11 +20,6 @@ export const AgentSessionImportSource = Schema.Struct({
 });
 export type AgentSessionImportSource = typeof AgentSessionImportSource.Type;
 
-/** Imported message ids retain their origin after event metadata is projected into SQLite. */
-export function isImportedAgentSessionMessageId(messageId: string): boolean {
-  return messageId.startsWith("import:");
-}
-
 /**
  * Empty for now. Kept as a struct so future scan options (source filters,
  * explicit roots) can be added without a new method.
@@ -79,7 +74,7 @@ export const AgentSessionImportInput = Schema.Struct({
 });
 export type AgentSessionImportInput = typeof AgentSessionImportInput.Type;
 
-export class AgentSessionImportProjectNotFoundError extends Schema.TaggedErrorClass<AgentSessionImportProjectNotFoundError>()(
+export class AgentSessionImportProjectNotFoundError extends Schema.TaggedError<AgentSessionImportProjectNotFoundError>()(
   "AgentSessionImportProjectNotFoundError",
   { projectId: ProjectId },
 ) {
@@ -88,7 +83,7 @@ export class AgentSessionImportProjectNotFoundError extends Schema.TaggedErrorCl
   }
 }
 
-export class AgentSessionImportProjectChangedError extends Schema.TaggedErrorClass<AgentSessionImportProjectChangedError>()(
+export class AgentSessionImportProjectChangedError extends Schema.TaggedError<AgentSessionImportProjectChangedError>()(
   "AgentSessionImportProjectChangedError",
   { projectId: ProjectId },
 ) {
@@ -103,7 +98,7 @@ export const AgentSessionImportResult = Schema.Struct({
 });
 export type AgentSessionImportResult = typeof AgentSessionImportResult.Type;
 
-export class AgentSessionScanError extends Schema.TaggedErrorClass<AgentSessionScanError>()(
+export class AgentSessionScanError extends Schema.TaggedError<AgentSessionScanError>()(
   "AgentSessionScanError",
   {
     operation: Schema.Literals(["read-settings", "read-projects"]),
