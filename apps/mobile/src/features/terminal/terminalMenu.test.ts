@@ -208,21 +208,27 @@ describe("previousLiveTerminalId", () => {
 });
 
 describe("resolveProjectScriptTerminalId", () => {
-  it("reuses the default shell when no terminal is running", () => {
+  it("uses the default shell when no terminal exists", () => {
     expect(
       resolveProjectScriptTerminalId({
-        existingTerminalIds: [DEFAULT_TERMINAL_ID],
-        hasRunningTerminal: false,
+        existingTerminalIds: [],
       }),
     ).toBe(DEFAULT_TERMINAL_ID);
   });
 
-  it("opens a new terminal when a shell is already running", () => {
+  it("reuses the first existing terminal when shells are already running", () => {
     expect(
       resolveProjectScriptTerminalId({
         existingTerminalIds: [DEFAULT_TERMINAL_ID, "term-2", "term-4"],
-        hasRunningTerminal: true,
       }),
-    ).toBe("term-3");
+    ).toBe(DEFAULT_TERMINAL_ID);
+  });
+
+  it("reuses an existing terminal when the default shell was closed", () => {
+    expect(
+      resolveProjectScriptTerminalId({
+        existingTerminalIds: ["term-2", "term-4"],
+      }),
+    ).toBe("term-2");
   });
 });

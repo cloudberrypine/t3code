@@ -6770,6 +6770,36 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
 
+  it.effect("notifies open file previews of external writes over websocket rpc", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-watch-file-" });
+      const relativePath = "Actor.as";
+      const target = path.join(cwd, relativePath);
+      yield* fs.writeFileString(target, "before");
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsWatchFile]({ cwd, relativePath }).pipe(
+            Stream.take(2),
+            Stream.runForEach((event) =>
+              Effect.gen(function* () {
+                if (event.revision === 0) {
+                  yield* fs.writeFileString(target, "external edit");
+                } else {
+                  const file = yield* client[WS_METHODS.projectsReadFile]({ cwd, relativePath });
+                  assert.equal(file.contents, "external edit");
+                }
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
+  );
+
   it.effect("routes websocket rpc projects.searchEntries excludes gitignored files", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

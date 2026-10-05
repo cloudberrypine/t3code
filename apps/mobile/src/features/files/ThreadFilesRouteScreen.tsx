@@ -1,5 +1,12 @@
+import { parsePolyzoniaMesh, type PolyzoniaMesh } from "@t3tools/client-runtime/polyzonia-mesh";
+import { PolyzoniaMeshPreview } from "./PolyzoniaMeshPreview";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import {
+  StackActions,
+  useIsFocused,
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Platform, View } from "react-native";
@@ -96,7 +103,8 @@ function normalizeRouteLine(value: string | null): number | null {
 
 function defaultViewMode(path: string | null): FileViewMode {
   return path !== null &&
-    (isWorkspaceBrowserPreviewPath(path) ||
+    (/\.json$/i.test(path) ||
+      isWorkspaceBrowserPreviewPath(path) ||
       isWorkspaceImagePreviewPath(path) ||
       isVideoPreviewFile(path))
     ? "preview"
@@ -105,6 +113,7 @@ function defaultViewMode(path: string | null): FileViewMode {
 
 function FileContent(props: {
   readonly activeMode: FileViewMode;
+  readonly mesh: PolyzoniaMesh | null;
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
   readonly previewUri: string | null;
@@ -195,11 +204,16 @@ function FileContent(props: {
             Partial file
           </Text>
           <Text className="text-xs leading-snug text-warning-foreground">
-            Preview limited to the first 1 MB of a truncated file.
+            This file exceeds the preview size limit. Only part of the source is shown.
           </Text>
         </View>
       ) : null}
-      {props.activeMode === "preview" && isMarkdown ? (
+      {props.activeMode === "preview" && props.mesh ? (
+        <PolyzoniaMeshPreview
+          key={`${props.environmentId}:${props.cwd}:${props.relativePath}`}
+          mesh={props.mesh}
+        />
+      ) : props.activeMode === "preview" && isMarkdown ? (
         <FileMarkdownPreview
           cwd={props.cwd}
           environmentId={props.environmentId}
@@ -536,6 +550,7 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
 }
 
 export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
+  const focused = useIsFocused();
   useAdaptiveWorkspacePaneRole("inspector");
   const navigation = useNavigation();
   const { fileInspector, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
@@ -559,13 +574,40 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
     relativePath !== null && !isVideoFile && isWorkspaceBrowserPreviewPath(relativePath);
   const isImageFile =
     relativePath !== null && !isVideoFile && isWorkspaceImagePreviewPath(relativePath);
-  const canPreview =
-    relativePath !== null &&
-    (isMarkdownPreviewFile(relativePath) || isBrowserFile || isImageFile || isVideoFile);
+  const isJsonFile = relativePath !== null && /\.json$/i.test(relativePath);
   const activeMode =
     relativePath !== null && modeOverride?.path === relativePath
       ? modeOverride.mode
-      : defaultViewMode(relativePath);
+      : targetLine !== null
+        ? "source"
+        : defaultViewMode(relativePath);
+  const needsFileContents =
+    relativePath !== null &&
+    !isVideoFile &&
+    ((!isBrowserFile && !isImageFile) || activeMode === "source");
+  const fileQuery = useEnvironmentQuery(
+    environmentId !== null && cwd !== null && relativePath !== null && needsFileContents
+      ? (focused ? projectEnvironment.liveFile : projectEnvironment.readFile)({
+          environmentId,
+          input: { cwd, relativePath, ...(isJsonFile ? { maxBytes: 4 * 1024 * 1024 } : {}) },
+        })
+      : null,
+  );
+  const fileData = fileQuery.data as ProjectReadFileResult | null;
+  const mesh = useMemo(
+    () =>
+      isJsonFile && fileData && relativePath
+        ? parsePolyzoniaMesh(relativePath, fileData.contents, fileData.truncated)
+        : null,
+    [isJsonFile, fileData, relativePath],
+  );
+  const canPreview =
+    relativePath !== null &&
+    (isMarkdownPreviewFile(relativePath) ||
+      isBrowserFile ||
+      isImageFile ||
+      isVideoFile ||
+      mesh !== null);
   const resolvedActiveMode = isVideoFile ? "preview" : canPreview ? activeMode : "source";
   const assetPreviewPath = isBrowserFile || isImageFile || isVideoFile ? relativePath : null;
   const assetPreview = useWorkspaceFileAssetUrlState({
@@ -622,20 +664,6 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   const handleRetryPreview = () => {
     void assetPreview.refresh().finally(() => setPreviewRevision((current) => current + 1));
   };
-  const needsFileContents =
-    relativePath !== null &&
-    !isVideoFile &&
-    (resolvedActiveMode === "source" || isMarkdownPreviewFile(relativePath));
-  const fileQuery = useEnvironmentQuery(
-    environmentId !== null && cwd !== null && relativePath !== null && needsFileContents
-      ? projectEnvironment.readFile({
-          environmentId,
-          input: { cwd, relativePath },
-        })
-      : null,
-  );
-  const fileData = fileQuery.data as ProjectReadFileResult | null;
-
   const handleSelectFile = useCallback(
     (path: string) => {
       navigation.navigate("ThreadFile", {
@@ -922,6 +950,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       <FileContent
         key={previewKey}
         activeMode={resolvedActiveMode}
+        mesh={mesh}
         cwd={cwd}
         environmentId={environmentId}
         previewUri={previewUri}

@@ -1,3 +1,4 @@
+import { useDiffPanelStore } from "./diffPanelStore";
 /**
  * Thread-scoped right-panel surface state.
  *
@@ -13,6 +14,12 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
+import {
+  recordFileJump,
+  traverseFileJumps,
+  type FileJumpHistory,
+  type FileJumpLocation,
+} from "./lib/fileJumpHistory";
 
 const RIGHT_PANEL_KINDS = [
   "diff",
@@ -90,6 +97,19 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   /** Session-only count of user panel choices per thread. Automatic updates do not advance it. */
   userActionRevisionByThreadKey: Record<string, number>;
+  /** Session-only navigation; each environment/thread owns its own jump stack. */
+  fileJumpHistoryByThreadKey: Record<string, FileJumpHistory>;
+  jumpToFile: (
+    ref: ScopedThreadRef,
+    cwd: string,
+    from: FileJumpLocation,
+    to: FileJumpLocation,
+  ) => void;
+  traverseFileJumpHistory: (
+    ref: ScopedThreadRef,
+    cwd: string,
+    direction: "back" | "forward",
+  ) => boolean;
   getUserActionRevision: (ref: ScopedThreadRef) => number;
   /**
    * Open a surface on behalf of the app, not the user. Refused when the user
@@ -106,6 +126,7 @@ interface RightPanelStoreState {
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
+  replaceActiveFile: (ref: ScopedThreadRef, relativePath: string) => void;
   openAttachment: (ref: ScopedThreadRef, attachment: ChatFileAttachment) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
@@ -181,6 +202,45 @@ const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface =>
   revealRequestId: 0,
   attachment,
 });
+
+// A file view retains handled reveals after its tab closes. IDs must outlive the tab,
+// including Back/Forward reopening it and switching threads in the same workspace.
+let fileRevealRequestSequence = 0;
+
+function openFileInPanel(
+  current: ThreadRightPanelState,
+  relativePath: string,
+  line?: number,
+  replaceActive = false,
+): ThreadRightPanelState {
+  const surfaces = current.surfaces.filter((surface) => surface.kind !== "files");
+  const existing = surfaces.find(
+    (surface) => surface.kind === "file" && surface.id === `file:${relativePath}`,
+  );
+  const replaced = replaceActive
+    ? surfaces.find(
+        (entry) =>
+          entry.id === current.activeSurfaceId && entry.kind === "file" && !entry.attachment,
+      )
+    : undefined;
+  const surface = fileSurface(
+    relativePath,
+    normalizeRevealLine(line),
+    (fileRevealRequestSequence = Math.max(
+      fileRevealRequestSequence + 1,
+      (existing?.kind === "file" ? existing.revealRequestId : 0) + 1,
+    )),
+  );
+  return {
+    isOpen: true,
+    activeSurfaceId: surface.id,
+    surfaces: existing
+      ? surfaces.map((entry) => (entry.id === surface.id ? surface : entry))
+      : replaced
+        ? surfaces.map((entry) => (entry.id === replaced.id ? surface : entry))
+        : [...surfaces, surface],
+  };
+}
 
 const terminalSurface = (terminalId: string): RightPanelSurface => ({
   id: `terminal:${terminalId}`,
@@ -397,6 +457,69 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
     (set, get) => ({
       byThreadKey: {},
       userActionRevisionByThreadKey: {},
+      fileJumpHistoryByThreadKey: {},
+      jumpToFile: (ref, cwd, from, to) =>
+        set((state) => {
+          const key = scopedThreadKey(ref);
+          return {
+            ...userAction(state, key, (current) => openFileInPanel(current, to.path, to.line)),
+            fileJumpHistoryByThreadKey: {
+              ...state.fileJumpHistoryByThreadKey,
+              [key]: recordFileJump(
+                state.fileJumpHistoryByThreadKey[key],
+                cwd,
+                from,
+                to,
+                !state.byThreadKey[key]?.surfaces.some(
+                  (surface) => surface.id === `file:${to.path}`,
+                ),
+              ),
+            },
+          };
+        }),
+      traverseFileJumpHistory: (ref, cwd, direction) => {
+        let moved = false;
+        set((state) => {
+          const key = scopedThreadKey(ref);
+          const next = traverseFileJumps(state.fileJumpHistoryByThreadKey[key], cwd, direction);
+          if (!next) return state;
+          moved = true;
+          const diffState = useDiffPanelStore.getState();
+          if (next.location.diff) {
+            diffState.restoreJump(ref, {
+              path: next.location.path,
+              line: next.location.line,
+              ...next.location.diff,
+            });
+          } else {
+            const pending = diffState.jumpRevealByThreadKey[key];
+            if (pending) diffState.consumeJump(ref, pending);
+          }
+          return {
+            ...userAction(state, key, (current) => {
+              const panel =
+                next.closePath &&
+                (next.location.diff || next.location.path !== next.closePath) &&
+                current.activeSurfaceId === `file:${next.closePath}`
+                  ? {
+                      ...current,
+                      surfaces: current.surfaces.filter(
+                        (surface) => surface.id !== `file:${next.closePath}`,
+                      ),
+                    }
+                  : current;
+              return next.location.diff
+                ? upsertSurface(panel, { id: "diff", kind: "diff" })
+                : openFileInPanel(panel, next.location.path, next.location.line);
+            }),
+            fileJumpHistoryByThreadKey: {
+              ...state.fileJumpHistoryByThreadKey,
+              [key]: next.history,
+            },
+          };
+        });
+        return moved;
+      },
       getUserActionRevision: (ref) =>
         get().userActionRevisionByThreadKey[scopedThreadKey(ref)] ?? 0,
       openProactive: (ref, surface, expectedUserActionRevision) => {
@@ -449,30 +572,15 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       openFile: (ref, relativePath, line) =>
         set((state) =>
-          userAction(state, scopedThreadKey(ref), (current) => {
-            const withoutStandaloneExplorer = current.surfaces.filter(
-              (surface) => surface.kind !== "files",
-            );
-            const surfaceId = `file:${relativePath}` as const;
-            const existing = withoutStandaloneExplorer.find(
-              (surface): surface is Extract<RightPanelSurface, { kind: "file" }> =>
-                surface.id === surfaceId && surface.kind === "file",
-            );
-            const surface = fileSurface(
-              relativePath,
-              normalizeRevealLine(line),
-              (existing?.revealRequestId ?? 0) + 1,
-            );
-            return {
-              isOpen: true,
-              activeSurfaceId: surface.id,
-              surfaces: existing
-                ? withoutStandaloneExplorer.map((entry) =>
-                    entry.id === surface.id ? surface : entry,
-                  )
-                : [...withoutStandaloneExplorer, surface],
-            };
-          }),
+          userAction(state, scopedThreadKey(ref), (current) =>
+            openFileInPanel(current, relativePath, line),
+          ),
+        ),
+      replaceActiveFile: (ref, relativePath) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            openFileInPanel(current, relativePath, undefined, true),
+          ),
         ),
       openAttachment: (ref, attachment) =>
         set((state) =>
@@ -720,14 +828,17 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           const threadKey = scopedThreadKey(ref);
           if (
             !(threadKey in state.byThreadKey) &&
-            !(threadKey in state.userActionRevisionByThreadKey)
+            !(threadKey in state.userActionRevisionByThreadKey) &&
+            !(threadKey in state.fileJumpHistoryByThreadKey)
           ) {
             return state;
           }
           const { [threadKey]: _removed, ...rest } = state.byThreadKey;
           const { [threadKey]: _revision, ...userActionRevisionByThreadKey } =
             state.userActionRevisionByThreadKey;
-          return { byThreadKey: rest, userActionRevisionByThreadKey };
+          const { [threadKey]: _history, ...fileJumpHistoryByThreadKey } =
+            state.fileJumpHistoryByThreadKey;
+          return { byThreadKey: rest, userActionRevisionByThreadKey, fileJumpHistoryByThreadKey };
         }),
     }),
     {

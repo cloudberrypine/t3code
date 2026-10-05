@@ -1,6 +1,7 @@
 import { useAngelScript, type AngelScriptWorkspace } from "../../lib/useAngelScript";
 import { prepareAngelScriptReview } from "./angelScriptReview";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createAngelScriptRevisionSemantics, isAngelScriptPath } from "@t3tools/shared/angelscript";
 import type { NativeSyntheticEvent } from "react-native";
 
 import { createNativeReviewDiffTheme, type NativeReviewDiffData } from "./nativeReviewDiffAdapter";
@@ -22,6 +23,9 @@ export function useNativeReviewDiffBridge(input: {
   readonly viewedFileIds: ReadonlyArray<string>;
   readonly selectedRowIds: ReadonlyArray<string>;
   readonly canHighlight: boolean;
+  readonly loadScriptRevision?: (
+    path: string,
+  ) => Promise<{ oldContents: string; newContents: string } | null>;
 }) {
   const {
     canHighlight,
@@ -39,9 +43,55 @@ export function useNativeReviewDiffBridge(input: {
   const api = useAngelScript(
     rawData.files.some((file) => /\.as$/i.test(file.path)) ? input.workspace : undefined,
   );
+  const loadScriptRevision = input.loadScriptRevision;
+  const revisions = useMemo(
+    () => ({
+      requested: new Set<string>(),
+      values: new Map<string, ReturnType<typeof createAngelScriptRevisionSemantics>>(),
+    }),
+    [loadScriptRevision, api],
+  );
+  const activeRevisions = useRef<typeof revisions | null>(revisions);
+  useEffect(() => {
+    activeRevisions.current = revisions;
+    return () => {
+      activeRevisions.current = null;
+    };
+  }, [revisions]);
+  const [revisionVersion, setRevisionVersion] = useState(0);
+  const visible = useRef<{ start: number; end: number } | null>(null);
+  const loadVisibleScripts = useCallback(
+    (start: number, end: number) => {
+      if (!api || !loadScriptRevision || !canHighlight) return;
+      const ids = new Set(rawData.rows.slice(Math.max(0, start), end + 1).map((row) => row.fileId));
+      for (const file of rawData.files) {
+        if (
+          !ids.has(file.id) ||
+          collapsedFileIds.includes(file.id) ||
+          !isAngelScriptPath(file.path) ||
+          revisions.requested.has(file.path)
+        )
+          continue;
+        revisions.requested.add(file.path);
+        void loadScriptRevision(file.path)
+          .then((contents) => {
+            if (!contents || activeRevisions.current !== revisions) return;
+            revisions.values.set(file.path, createAngelScriptRevisionSemantics(contents, api));
+            setRevisionVersion((version) => version + 1);
+          })
+          .catch(() => {
+            /* Preserve hunk highlighting when a revision is unavailable. */
+          });
+      }
+    },
+    [api, loadScriptRevision, canHighlight, rawData, collapsedFileIds, revisions],
+  );
+  useEffect(() => {
+    if (visible.current) loadVisibleScripts(visible.current.start, visible.current.end);
+  }, [loadVisibleScripts]);
   const { data, semantics } = useMemo(
-    () => prepareAngelScriptReview(rawData, api, scheme),
-    [rawData, api, scheme],
+    () => prepareAngelScriptReview(rawData, api, scheme, revisions.values),
+    [rawData, api, scheme, revisions, revisionVersion],
   );
   const [collapsedCommentIds, setCollapsedCommentIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -95,9 +145,11 @@ export function useNativeReviewDiffBridge(input: {
           firstRowIndex: payload.firstRowIndex,
           lastRowIndex: payload.lastRowIndex,
         });
+        visible.current = { start: payload.firstRowIndex, end: payload.lastRowIndex };
+        loadVisibleScripts(payload.firstRowIndex, payload.lastRowIndex);
       }
     },
-    [updateVisibleRange],
+    [updateVisibleRange, loadVisibleScripts],
   );
 
   const onToggleComment = useCallback(

@@ -1166,7 +1166,7 @@ private class DiffCanvasView(context: Context) : View(context) {
     }
     fill(canvas, background, 0f, top.toFloat(), width.toFloat(), bottom.toFloat())
     row.awaitBackground?.let { color ->
-      fill(canvas, color, style.changeBarWidthPx + style.gutterWidthPx, top.toFloat(), width.toFloat(), bottom.toFloat())
+      fill(canvas, (color and 0x00FFFFFF) or (128 shl 24), style.changeBarWidthPx + style.gutterWidthPx, top.toFloat(), width.toFloat(), bottom.toFloat())
     }
     if (style.changeBarWidthPx > 0) {
       when (row.change) {

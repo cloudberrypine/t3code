@@ -69,6 +69,17 @@ and prevents automatic settlement until new activity resumes the usual rules.
 Manually settling an idle thread dismisses unanswered async questions without
 sending an answer or restarting the agent.
 
+Settling also removes the thread's clean worktree, including all Git-ignored files,
+after stopping its agent and terminals. The conversation and Git branch are kept.
+**Un-settle thread** recreates the checkout at the same location from its saved branch;
+you will need to rebuild artifacts and reinstall any dependencies stored there.
+This applies to both manual and automatic settlement. Worktrees with uncommitted
+or untracked files, locked worktrees, and worktrees still used by an active thread
+are kept. A changed or missing saved branch also prevents cleanup. Check the thread's
+activity for cleanup failures, resolve them, and settle again to retry.
+The project's main checkout is never removed. Snoozing a thread leaves its worktree
+and ignored files intact.
+
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
 thread. Work in progress, pending questions or approvals, and live background work
@@ -112,17 +123,18 @@ Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
 
-## Desktop completion notifications
+## Desktop agent notifications
 
-In **Settings → General → Agent completion notifications**, enable or disable native desktop
-notifications when an agent finishes a turn. They are enabled by default. Notifications cover
+In **Settings → General → Agent notifications**, enable or disable native desktop
+notifications when an agent finishes a turn or asks you a question, including async questions
+asked while it continues working. They are enabled by default. Notifications cover
 all connected environments while a T3 Code window is open, including threads you are not viewing.
 The window can be minimized or in the background. Closing every window stops notification
 monitoring until you open a window again.
 Click a notification to bring T3 Code forward and open its thread.
 
-Only successfully completed turns notify; interrupted or failed turns do not. Opening the app or
-reconnecting an environment does not replay old completions. Web and mobile clients keep their
+Only successfully completed turns produce completion alerts; interrupted or failed turns do not.
+Opening the app or reconnecting an environment does not replay old completions or questions. Web and mobile clients keep their
 existing notification behavior.
 
 On macOS, allow notifications for **T3 Code (Alpha)** in **System Settings → Notifications**.

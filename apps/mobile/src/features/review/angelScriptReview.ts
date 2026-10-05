@@ -5,6 +5,7 @@ import {
   usesAngelScript,
   type AngelScriptApi,
   type AngelScriptSemanticToken,
+  type createAngelScriptRevisionSemantics,
 } from "@t3tools/shared/angelscript";
 import type { NativeReviewDiffData } from "./nativeReviewDiffAdapter";
 import type { NativeReviewDiffRow } from "../diffs/nativeReviewDiffSurface";
@@ -13,6 +14,7 @@ export function prepareAngelScriptReview(
   data: NativeReviewDiffData,
   api: AngelScriptApi | null,
   scheme: "light" | "dark",
+  revisions?: ReadonlyMap<string, ReturnType<typeof createAngelScriptRevisionSemantics>>,
 ) {
   const semantics = new Map<string, AngelScriptSemanticToken[]>();
   if (!api) {
@@ -38,6 +40,7 @@ export function prepareAngelScriptReview(
   const scriptIds = new Set(
     data.files.filter((file) => isAngelScriptPath(file.path)).map((file) => file.id),
   );
+  const paths = new Map(data.files.map((file) => [file.id, file.path]));
   for (const side of ["add", "delete"] as const) {
     let segment: NativeReviewDiffRow[] = [];
     let currentFile = "";
@@ -61,6 +64,15 @@ export function prepareAngelScriptReview(
       }
       if (row.change === (side === "add" ? "delete" : "add")) continue;
       const line = (side === "add" ? row.newLineNumber : row.oldLineNumber) ?? -1;
+      const revision = revisions?.get(paths.get(row.fileId ?? "") ?? "");
+      if (revision) {
+        flush();
+        semantics.set(
+          row.id,
+          revision(side === "add" ? "additions" : "deletions", line, row.content ?? ""),
+        );
+        continue;
+      }
       if (currentFile !== row.fileId || line !== lastLine + 1) flush();
       currentFile = row.fileId ?? "";
       lastLine = line;

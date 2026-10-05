@@ -202,10 +202,12 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "completion-notifications",
-    title: "Agent completion notifications",
+    title: "Agent notifications",
     to: "/settings/general",
     desktopOnly: true,
-    searchTerms: ["macOS native desktop alert done finished agent notification"],
+    searchTerms: [
+      "macOS native desktop alert done finished completion agent notification question input async",
+    ],
   },
   {
     id: "proactive-panels",

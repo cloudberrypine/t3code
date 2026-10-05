@@ -111,6 +111,7 @@ const TOOL_LIFECYCLE_ITEM_TYPES = [
   "collab_agent_tool_call",
   "web_search",
   "image_view",
+  "image_generation",
 ] as const;
 
 export const ToolLifecycleItemType = Schema.Literals(TOOL_LIFECYCLE_ITEM_TYPES);
@@ -486,6 +487,8 @@ export const ItemLifecyclePayload = Schema.Struct({
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Generated output on the environment host, loaded through signed media URLs. */
+  imagePath: Schema.optional(TrimmedNonEmptyStringSchema),
   toolSurface: Schema.optional(ToolActivitySurface),
   toolIcon: Schema.optional(ToolActivityIcon),
   toolSource: Schema.optional(ToolActivitySource),

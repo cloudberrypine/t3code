@@ -1341,6 +1341,94 @@ describe("ProviderRuntimeIngestion", () => {
     expect(await harness.readModel()).toEqual(initial);
   });
 
+  it.each([false, true])(
+    "persists generated images independently of assistant text (streaming: %s)",
+    async (enableLegacyTokenStreaming) => {
+      const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming } });
+      const base = {
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-image"),
+      };
+      const imageEvent = {
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("evt-generated-image"),
+        itemId: asItemId("otter-image"),
+        payload: {
+          itemType: "image_generation",
+          status: "completed",
+          imagePath: "/home/user/.codex/generated_images/otter #1 (final).png",
+        },
+      } as const;
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("evt-commentary"),
+          itemId: asItemId("commentary"),
+          payload: { streamKind: "assistant_text", delta: "Generating an otter." },
+        },
+        imageEvent,
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("evt-commentary-complete"),
+          itemId: asItemId("commentary"),
+          payload: { itemType: "assistant_message", status: "completed" },
+        },
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("evt-final"),
+          itemId: asItemId("final"),
+          payload: {
+            itemType: "assistant_message",
+            status: "completed",
+            detail: "Here is your otter.",
+          },
+        },
+      ]);
+      // A reconnected provider may repeat completion under a different event id.
+      await harness.emitAndDrain([
+        { ...imageEvent, eventId: asEventId("evt-generated-image-replayed") },
+      ]);
+      const thread = (await harness.readModel()).threads.find((entry) => entry.id === "thread-1");
+      const messages = thread?.messages.filter((message) => message.turnId === "turn-image") ?? [];
+      expect(messages.map((message) => message.text).sort()).toEqual(
+        [
+          "![Generated image](</home/user/.codex/generated_images/otter%20%231%20(final).png>)",
+          "Generating an otter.",
+          "Here is your otter.",
+        ].sort(),
+      );
+      expect(messages.every((message) => !message.streaming)).toBe(true);
+    },
+  );
+
+  it("does not display image inputs, failed generations, or missing outputs as generated images", async () => {
+    const harness = await createHarness();
+    await harness.emitAndDrain(
+      [
+        { itemType: "image_view", status: "completed", imagePath: "/tmp/reference.png" },
+        { itemType: "image_generation", status: "failed", imagePath: "/tmp/incomplete.png" },
+        { itemType: "image_generation", status: "completed" },
+      ].map((payload, index) => ({
+        type: "item.completed",
+        eventId: asEventId(`evt-not-generated-${index}`),
+        itemId: asItemId(`not-generated-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-image"),
+        payload,
+      })),
+    );
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(thread?.messages.filter((message) => message.role === "assistant")).toEqual([]);
+  });
+
   it("maps canonical content delta/item completed into finalized assistant messages", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

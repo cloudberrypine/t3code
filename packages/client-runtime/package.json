@@ -3,6 +3,18 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./polyzonia-animation": {
+      "types": "./src/polyzoniaAnimation.ts",
+      "default": "./src/polyzoniaAnimation.ts"
+    },
+    "./polyzonia-mesh": {
+      "types": "./src/polyzoniaMesh.ts",
+      "default": "./src/polyzoniaMesh.ts"
+    },
+    "./cpp-navigation": {
+      "types": "./src/cppNavigation.ts",
+      "default": "./src/cppNavigation.ts"
+    },
     "./load-balancing": {
       "types": "./src/load-balancing.ts",
       "default": "./src/load-balancing.ts"

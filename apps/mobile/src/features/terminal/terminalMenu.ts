@@ -145,13 +145,8 @@ export function previousLiveTerminalId(input: {
 
 export function resolveProjectScriptTerminalId(input: {
   readonly existingTerminalIds: ReadonlyArray<string>;
-  readonly hasRunningTerminal: boolean;
 }): string {
-  if (!input.hasRunningTerminal) {
-    return DEFAULT_TERMINAL_ID;
-  }
-
-  return nextTerminalId(input.existingTerminalIds);
+  return input.existingTerminalIds[0] ?? DEFAULT_TERMINAL_ID;
 }
 
 export function projectScriptMenuLabel(script: ProjectScript): string {

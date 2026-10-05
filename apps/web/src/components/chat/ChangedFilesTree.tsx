@@ -1,11 +1,7 @@
 import { type TurnId } from "@t3tools/contracts";
 import { memo, useCallback, useMemo, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
-import {
-  buildTurnDiffTree,
-  summarizeTurnDiffStats,
-  type TurnDiffTreeNode,
-} from "../../lib/turnDiffTree";
+import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
 import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
@@ -16,6 +12,8 @@ import {
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
+import { FilteredDiffStatLabel } from "./FilteredDiffStatLabel";
+import { getDiffStatTotals } from "../../lib/diffStatFilter";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -25,6 +23,7 @@ const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   turnId: TurnId;
   files: ReadonlyArray<TurnDiffFileChange>;
+  diffStatIgnorePatterns?: string | undefined;
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
   onToggleAllDirectories: () => void;
@@ -33,13 +32,18 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   const {
     turnId,
     files,
+    diffStatIgnorePatterns,
     allDirectoriesExpanded,
     resolvedTheme,
     onToggleAllDirectories,
     onOpenTurnDiff,
   } = props;
-  const summaryStat = useMemo(() => summarizeTurnDiffStats(files), [files]);
-  const hasDirectories = files.some((file) => /[/\\]/.test(file.path));
+  const { full: summaryStat, filtered: filteredSummaryStat } = useMemo(
+    () => getDiffStatTotals(files, diffStatIgnorePatterns),
+    [files, diffStatIgnorePatterns],
+  );
+  const treeNodes = useMemo(() => buildTurnDiffTree(files), [files]);
+  const hasDirectories = treeNodes.some((node) => node.kind === "directory");
 
   return (
     <div
@@ -54,13 +58,16 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
           <span>
             {files.length} changed file{files.length === 1 ? "" : "s"}
           </span>
-          {hasNonZeroStat(summaryStat) && (
-            <DiffStatLabel
-              additions={summaryStat.additions}
-              deletions={summaryStat.deletions}
-              layout="inline"
-              className="text-xs leading-4"
-            />
+          {(hasNonZeroStat(summaryStat) || filteredSummaryStat) && (
+            <span className="inline-flex items-center gap-1">
+              <DiffStatLabel
+                additions={summaryStat.additions}
+                deletions={summaryStat.deletions}
+                layout="inline"
+                className="text-xs leading-4"
+              />
+              {filteredSummaryStat && <FilteredDiffStatLabel {...filteredSummaryStat} />}
+            </span>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -113,7 +120,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
       <ChangedFilesTree
         key={`${turnId}:${allDirectoriesExpanded}`}
         turnId={turnId}
-        files={files}
+        treeNodes={treeNodes}
         allDirectoriesExpanded={allDirectoriesExpanded}
         resolvedTheme={resolvedTheme}
         onOpenTurnDiff={onOpenTurnDiff}
@@ -124,13 +131,12 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 
 export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   turnId: TurnId;
-  files: ReadonlyArray<TurnDiffFileChange>;
+  treeNodes: ReadonlyArray<TurnDiffTreeNode>;
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }) {
-  const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, turnId } = props;
-  const treeNodes = useMemo(() => buildTurnDiffTree(files), [files]);
+  const { treeNodes, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, turnId } = props;
   const directoryPathsKey = useMemo(
     () => collectDirectoryPaths(treeNodes).join("\u0000"),
     [treeNodes],
@@ -194,7 +200,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             <span className="truncate font-mono text-[11px] text-muted-foreground/90 group-hover:text-foreground/90">
               {node.name}
             </span>
-            {hasNonZeroStat(node.stat) && (
+            {!isExpanded && hasNonZeroStat(node.stat) && (
               <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
                 <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
               </span>

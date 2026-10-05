@@ -75,6 +75,7 @@ import { useSelectedThreadRequests } from "../../state/use-selected-thread-reque
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { threadEnvironment } from "../../state/threads";
+import { terminalEnvironment } from "../../state/terminal";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import {
   useAdaptiveWorkspaceLayout,
@@ -231,6 +232,7 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const restartTerminal = useAtomCommand(terminalEnvironment.restart, "terminal restart");
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -575,9 +577,6 @@ function ThreadRouteContent(
 
       const targetTerminalId = resolveProjectScriptTerminalId({
         existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
-        hasRunningTerminal: terminalMenuSessions.some(
-          (session) => session.status === "running" || session.status === "starting",
-        ),
       });
       const preferredWorktreePath = resolvePreferredThreadWorktreePath({
         threadShellWorktreePath: selectedThread.worktreePath ?? null,
@@ -591,6 +590,26 @@ function ThreadRouteContent(
         project: { cwd: selectedThreadProject.workspaceRoot },
         worktreePath: preferredWorktreePath,
       });
+      const targetSession = terminalMenuSessions.find(
+        (session) => session.terminalId === targetTerminalId,
+      );
+      if (targetSession?.hasRunningSubprocess) {
+        const result = await restartTerminal({
+          environmentId: selectedThread.environmentId,
+          input: {
+            threadId: selectedThread.id,
+            terminalId: targetTerminalId,
+            cwd,
+            worktreePath: preferredWorktreePath,
+            env,
+            cols: 80,
+            rows: 24,
+          },
+        });
+        if (result._tag === "Failure") {
+          return;
+        }
+      }
       stagePendingTerminalLaunch({
         target: {
           environmentId: selectedThread.environmentId,
@@ -619,6 +638,7 @@ function ThreadRouteContent(
     },
     [
       navigation,
+      restartTerminal,
       selectedThread,
       selectedThreadDetailWorktreePath,
       selectedThreadProject,

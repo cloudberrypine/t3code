@@ -13,6 +13,8 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 
 import type {
+  ProjectFileChange,
+  ProjectWatchFileInput,
   ProjectReadFileInput,
   ProjectReadFileResult,
   ProjectWriteFileInput,
@@ -24,6 +26,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as Queue from "effect/Queue";
 
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -107,10 +111,14 @@ export type WorkspaceFileSystemError = typeof WorkspaceFileSystemError.Type;
 export class WorkspaceFileSystem extends Context.Service<
   WorkspaceFileSystem,
   {
-    /**
-     * Read a UTF-8 text file relative to the workspace root, or any host file by
-     * absolute path.
-     */
+    /** Notify an open preview when its file changes without transferring contents. */
+    readonly watchFile: (
+      input: ProjectWatchFileInput,
+    ) => Stream.Stream<
+      ProjectFileChange,
+      WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
+    >;
+    /** Read a UTF-8 workspace file, or any host file by absolute path. */
     readonly readFile: (
       input: ProjectReadFileInput,
     ) => Effect.Effect<
@@ -255,7 +263,8 @@ export const make = Effect.gen(function* () {
             });
           }
 
-          const bytesToRead = Math.min(stat.size, PROJECT_READ_FILE_MAX_BYTES);
+          const maxBytes = input.maxBytes ?? PROJECT_READ_FILE_MAX_BYTES;
+          const bytesToRead = Math.min(stat.size, maxBytes);
           const buffer = Buffer.alloc(bytesToRead);
           const { bytesRead } = yield* Effect.tryPromise({
             try: () => handle.read(buffer, 0, bytesToRead, 0),
@@ -282,7 +291,7 @@ export const make = Effect.gen(function* () {
             relativePath: target.relativePath,
             contents: new TextDecoder("utf-8").decode(fileBytes),
             byteLength: stat.size,
-            truncated: stat.size > PROJECT_READ_FILE_MAX_BYTES,
+            truncated: stat.size > maxBytes,
           };
         }),
       (handle) =>
@@ -300,6 +309,33 @@ export const make = Effect.gen(function* () {
         }),
     );
   });
+
+  const watchFile: WorkspaceFileSystem["Service"]["watchFile"] = (input) =>
+    Stream.callback<
+      ProjectFileChange,
+      WorkspaceFileSystemError | WorkspacePaths.WorkspacePathOutsideRootError
+    >(
+      (queue) =>
+        Effect.gen(function* () {
+          // Apply the same path/symlink checks as reading. Watch the requested path,
+          // not its inode, so atomic saves and deletion/recreation stay observable.
+          yield* resolveReadTarget(input);
+          const requestedPath = path.resolve(input.cwd, input.relativePath.trim());
+          let revision = 0;
+          const changed = () => Queue.offerUnsafe(queue, { revision: ++revision });
+          yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              // Node shares stat watchers for the same path. Only metadata is read;
+              // contents cross the wire only after a change. This also works on
+              // filesystems where native watch events miss replacements.
+              NodeFS.watchFile(requestedPath, { interval: 1000, persistent: false }, changed);
+            }),
+            () => Effect.sync(() => NodeFS.unwatchFile(requestedPath, changed)),
+          );
+          yield* Queue.offer(queue, { revision });
+        }).pipe(Effect.catchCause((cause) => Queue.failCause(queue, cause))),
+      { bufferSize: 1, strategy: "sliding" },
+    );
 
   const writeFile: WorkspaceFileSystem["Service"]["writeFile"] = Effect.fn(
     "WorkspaceFileSystem.writeFile",
@@ -339,7 +375,7 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath };
   });
 
-  return WorkspaceFileSystem.of({ readFile, writeFile });
+  return WorkspaceFileSystem.of({ readFile, watchFile, writeFile });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);

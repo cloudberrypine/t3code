@@ -172,6 +172,7 @@ export function useReviewSections(input: {
   );
 
   return {
+    checkpoints: readyCheckpoints,
     error: diffPreview.error ?? activeTurnDiff.error ?? reviewCache.asyncState.error,
     loadingGitDiffs: diffPreview.isPending,
     loadingTurnIds,

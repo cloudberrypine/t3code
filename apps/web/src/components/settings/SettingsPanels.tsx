@@ -2301,12 +2301,12 @@ export function GeneralSettingsPanel() {
         {isElectron ? (
           <SettingsRow
             {...searchableSetting("completion-notifications")}
-            description="Show a native notification when an agent finishes a turn in any connected environment. Click it to open the thread."
+            description="Show a native notification when an agent finishes a turn or asks a question, including while it keeps working. Click it to open the thread."
             resetAction={
               settings.desktopCompletionNotificationsEnabled !==
               DEFAULT_UNIFIED_SETTINGS.desktopCompletionNotificationsEnabled ? (
                 <SettingResetButton
-                  label="agent completion notifications"
+                  label="agent notifications"
                   onClick={() =>
                     updateSettings({
                       desktopCompletionNotificationsEnabled:
@@ -2322,7 +2322,7 @@ export function GeneralSettingsPanel() {
                 onCheckedChange={(checked) =>
                   updateSettings({ desktopCompletionNotificationsEnabled: Boolean(checked) })
                 }
-                aria-label="Agent completion notifications"
+                aria-label="Agent notifications"
               />
             }
           />

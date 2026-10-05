@@ -1059,19 +1059,28 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
-export const DesktopCompletionNotification = Schema.Struct({
+const DesktopAgentNotificationTarget = {
   environmentId: EnvironmentId,
   threadId: ThreadId,
-  turnId: TurnId,
   title: Schema.String,
-});
-export type DesktopCompletionNotification = typeof DesktopCompletionNotification.Type;
+};
+export const DesktopAgentNotification = Schema.Union([
+  Schema.Struct({
+    ...DesktopAgentNotificationTarget,
+    kind: Schema.Literal("completed"),
+    turnId: TurnId,
+  }),
+  Schema.Struct({
+    ...DesktopAgentNotificationTarget,
+    kind: Schema.Literal("question"),
+    requestId: Schema.String,
+  }),
+]);
+export type DesktopAgentNotification = typeof DesktopAgentNotification.Type;
 
 export interface DesktopBridge {
-  showCompletionNotification?: (input: DesktopCompletionNotification) => Promise<boolean>;
-  onCompletionNotificationClick?: (
-    listener: (input: DesktopCompletionNotification) => void,
-  ) => () => void;
+  showAgentNotification?: (input: DesktopAgentNotification) => Promise<boolean>;
+  onAgentNotificationClick?: (listener: (input: DesktopAgentNotification) => void) => () => void;
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;

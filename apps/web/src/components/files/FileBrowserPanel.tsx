@@ -35,7 +35,7 @@ interface FileBrowserPanelProps {
   selectedPath: string | null;
   /** Bumped when the same path should be revealed again (e.g. re-opened from search). */
   selectedPathRevealId: number;
-  onOpenFile: (relativePath: string) => void;
+  onOpenFile: (relativePath: string, newTab?: boolean) => void;
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
 }
@@ -351,8 +351,7 @@ export default function FileBrowserPanel({
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
       onClickCapture={(event) => {
-        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
-          return;
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
         const row = event.nativeEvent
           .composedPath()
           .find(
@@ -360,6 +359,13 @@ export default function FileBrowserPanel({
               node instanceof HTMLElement && node.hasAttribute("data-item-path"),
           );
         const path = row?.getAttribute("data-item-path");
+        if (event.altKey && path && entryKinds.get(path) === "file") {
+          // Handle this before Pierre selects the row and opens it in the current tab.
+          event.preventDefault();
+          event.stopPropagation();
+          onOpenFile(path, true);
+          return;
+        }
         // Pierre only emits selection changes. An explicit click on the already-selected
         // file is still an open request, so the preview can re-read an external edit.
         if (

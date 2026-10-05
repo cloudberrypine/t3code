@@ -26,6 +26,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -48,6 +49,7 @@ import {
 } from "./CodexSessionRuntime.ts";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const encodeEventJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
 class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
@@ -1230,6 +1232,100 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       NodeAssert.equal(firstEvent.value.itemId, "msg_1");
       NodeAssert.equal(firstEvent.value.turnId, "turn-1");
       NodeAssert.equal(firstEvent.value.payload.itemType, "assistant_message");
+    }),
+  );
+
+  it.effect("exposes generated image paths without carrying base64 into runtime events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const savedPath = "/home/user/.codex/generated_images/otter.png";
+      for (const [index, status] of ["in_progress", "completed", "failed", "cancelled"].entries()) {
+        yield* runtime.emit({
+          id: asEventId(`evt-image-${index}`),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: index === 0 ? "item/started" : "item/completed",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId(`image-${index}`),
+          payload: {
+            ...(index === 0 ? { startedAtMs: 1 } : { completedAtMs: 2 }),
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "imageGeneration",
+              id: `image-${index}`,
+              status,
+              result: "large-base64-image",
+              savedPath,
+            },
+          },
+        });
+      }
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      NodeAssert.equal(events.length, 4);
+      for (const [index, event] of events.entries()) {
+        NodeAssert.ok(event.type === "item.started" || event.type === "item.completed");
+        NodeAssert.equal(event.payload.itemType, "image_generation");
+        NodeAssert.equal(event.payload.imagePath, index === 1 ? savedPath : undefined);
+        NodeAssert.ok(!(yield* encodeEventJson(event)).includes("large-base64-image"));
+        if (index === 1) NodeAssert.equal(event.payload.title, "Generated image");
+      }
+    }),
+  );
+
+  it.effect("saves generated image bytes when Codex omits savedPath", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-generated-image-" });
+      const runtimeFactory = makeRuntimeFactory();
+      const adapter = yield* makeCodexAdapter(decodeCodexSettings({}), {
+        makeRuntime: runtimeFactory.factory,
+      }).pipe(Effect.provide(ServerConfig.layerTest(directory, directory)));
+      yield* adapter.startSession({
+        threadId: asThreadId("thread-image"),
+        runtimeMode: "full-access",
+      });
+      const runtime = runtimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      yield* runtime.emit({
+        id: asEventId("evt-image-no-path"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-image"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("image-no-path"),
+        payload: {
+          completedAtMs: 2,
+          threadId: "thread-image",
+          turnId: "turn-1",
+          item: {
+            type: "imageGeneration",
+            id: "image-no-path",
+            status: "completed",
+            result: bytes.toString("base64"),
+          },
+        },
+      });
+      const event = Option.getOrThrow(yield* Fiber.join(firstEventFiber));
+      NodeAssert.equal(event.type, "item.completed");
+      if (event.type !== "item.completed") return;
+      NodeAssert.ok(event.payload.imagePath?.startsWith(directory));
+      NodeAssert.deepStrictEqual(Buffer.from(yield* fs.readFile(event.payload.imagePath!)), bytes);
+      NodeAssert.ok(!(yield* encodeEventJson(event)).includes(bytes.toString("base64")));
     }),
   );
 

@@ -2,6 +2,8 @@ import { TurnId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import { buildTurnDiffTree } from "../../lib/turnDiffTree";
+
 import { ChangedFilesCard, ChangedFilesTree } from "./ChangedFilesTree";
 
 describe("ChangedFilesCard", () => {
@@ -51,13 +53,13 @@ describe("ChangedFilesCard", () => {
     expect(markup).toContain("apps/web/src");
     expect(markup).not.toContain("App.tsx");
     expect(markup).toContain("packages/shared/src");
-    expect(markup).not.toContain("git.ts");
+    expect(markup).toContain("packages/shared/src/git.ts");
     expect(markup).toContain("README.md");
     expect(markup).not.toContain("Show all");
     expect(markup).not.toContain("App.test.tsx");
   });
 
-  it("keeps the folder tree visible when folders are collapsed", () => {
+  it("keeps a single-file path visible without folder controls when collapse-all is active", () => {
     const markup = renderToStaticMarkup(
       <ChangedFilesCard
         turnId={TurnId.make("turn-1")}
@@ -73,7 +75,9 @@ describe("ChangedFilesCard", () => {
     expect(markup).toContain("1 changed file");
     expect(markup).toContain("apps/web/src");
     expect(markup).not.toContain("Show all");
-    expect(markup).not.toContain("App.tsx");
+    expect(markup).toContain("apps/web/src/App.tsx");
+    expect(markup).not.toContain("aria-expanded=");
+    expect(markup).not.toContain('aria-label="Expand all folders"');
   });
 });
 
@@ -128,7 +132,7 @@ describe("ChangedFilesTree", () => {
       const markup = renderToStaticMarkup(
         <ChangedFilesTree
           turnId={TurnId.make("turn-1")}
-          files={files}
+          treeNodes={buildTurnDiffTree(files)}
           allDirectoriesExpanded={false}
           resolvedTheme="light"
           onOpenTurnDiff={() => {}}
@@ -204,7 +208,7 @@ describe("ChangedFilesTree", () => {
       const markup = renderToStaticMarkup(
         <ChangedFilesTree
           turnId={TurnId.make("turn-1")}
-          files={files}
+          treeNodes={buildTurnDiffTree(files)}
           allDirectoriesExpanded
           resolvedTheme="light"
           onOpenTurnDiff={() => {}}

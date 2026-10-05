@@ -4,13 +4,14 @@ import {
   type ProjectReadFileResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const projectMocks = vi.hoisted(() => ({
   listEntries: vi.fn(),
   optimisticFile: vi.fn(),
   readFile: vi.fn(),
+  liveFile: vi.fn(),
 }));
 
 const atomHooks = vi.hoisted(() => ({
@@ -114,6 +115,7 @@ describe("project query refresh", () => {
     projectMocks.listEntries.mockReset();
     projectMocks.optimisticFile.mockReset();
     projectMocks.readFile.mockReset();
+    projectMocks.liveFile.mockImplementation((input) => projectMocks.readFile(input));
     reactHooks.reset();
   });
 
@@ -213,6 +215,30 @@ describe("project query refresh", () => {
       expect(requests).toHaveLength(2);
     } finally {
       unmount();
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("keeps unsaved edits visible when a disk notification updates the backing read", () => {
+    const readAtom = Atom.make(AsyncResult.success(file("on disk")));
+    const draft = { data: file("unsaved edit"), confirmedAgainst: undefined };
+    const optimistic = Atom.make<typeof draft | null>(draft);
+    const registry = AtomRegistry.make();
+    projectMocks.readFile.mockReturnValue(readAtom);
+    projectMocks.optimisticFile.mockReturnValue(optimistic);
+    atomHooks.registry = registry;
+    const render = () => {
+      reactHooks.beginRender();
+      return useProjectFileQuery(environmentId, "/repo", "Actor.as", true, true);
+    };
+    try {
+      expect(render().data?.contents).toBe("unsaved edit");
+      registry.set(readAtom, AsyncResult.success(file("external edit")));
+      expect(render().data?.contents).toBe("unsaved edit");
+      registry.set(optimistic, null);
+      expect(render().data?.contents).toBe("external edit");
+    } finally {
       registry.dispose();
       atomHooks.registry = null;
     }

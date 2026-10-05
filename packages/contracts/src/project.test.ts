@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ProjectReadFileError,
+  ProjectReadFileInput,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
   ProjectSearchEntriesError,
@@ -105,5 +106,16 @@ describe("project RPC errors", () => {
     expect(writeError.message).toBe("Legacy project write failure.");
     expect(writeError.relativePath).toBeUndefined();
     expect(writeError.failure).toBeUndefined();
+  });
+});
+
+describe("project structured preview reads", () => {
+  it("accepts legacy reads and bounds explicit byte limits", () => {
+    const decode = Schema.decodeUnknownSync(ProjectReadFileInput);
+    const input = { cwd: "/workspace", relativePath: "mesh.json" };
+    expect(decode(input)).toEqual(input);
+    expect(decode({ ...input, maxBytes: 4 * 1024 * 1024 }).maxBytes).toBe(4 * 1024 * 1024);
+    for (const maxBytes of [0, -1, 1.5, 4 * 1024 * 1024 + 1, Infinity])
+      expect(() => decode({ ...input, maxBytes })).toThrow();
   });
 });

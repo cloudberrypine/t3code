@@ -24,8 +24,10 @@ import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
@@ -55,6 +57,7 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { TerminalManager } from "../../terminal/Manager.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
@@ -71,7 +74,8 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
-      | "thread.settled";
+      | "thread.settled"
+      | "thread.unsettled";
   }
 >;
 
@@ -325,6 +329,8 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const terminalManager = yield* TerminalManager;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
@@ -347,6 +353,42 @@ const make = Effect.gen(function* () {
   const threadModelSelections = new Map<string, ModelSelection>();
   const compactingThreadIds = new Set<ThreadId>();
   const stoppingThreadIds = new Set<ThreadId>();
+
+  // Removing a large build directory can take minutes. Cleanup has its own
+  // worker, but resuming that same worktree must wait for removal to finish.
+  const worktreeLocks = new Map<string, Semaphore.Semaphore>();
+  const withWorktreeLock = <A, E, R>(worktreePath: string, effect: Effect.Effect<A, E, R>) => {
+    const key = path.resolve(worktreePath);
+    let lock = worktreeLocks.get(key);
+    if (lock === undefined) {
+      lock = Semaphore.makeUnsafe(1);
+      worktreeLocks.set(key, lock);
+    }
+    return lock.withPermits(1)(effect);
+  };
+
+  const appendWorktreeActivity = Effect.fn("appendWorktreeActivity")(function* (
+    threadId: ThreadId,
+    action: "removed" | "restored" | "kept" | "remove.failed" | "restore.failed",
+    summary: string,
+  ) {
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* serverCommandId("worktree-activity"),
+      threadId,
+      activity: {
+        id: yield* serverEventId(),
+        tone: action.endsWith("failed") ? "error" : "info",
+        kind: `worktree.${action}`,
+        summary,
+        payload: {},
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    });
+  });
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -490,7 +532,7 @@ const make = Effect.gen(function* () {
    * worktree makes every later turn fail as a bogus "session not found".
    * Best-effort: on failure the turn proceeds and reports the real error.
    */
-  const ensureThreadWorktree = Effect.fnUntraced(function* (thread: {
+  const restoreThreadWorktree = Effect.fnUntraced(function* (thread: {
     readonly id: ThreadId;
     readonly projectId: ProjectId;
     readonly branch: string | null;
@@ -518,6 +560,13 @@ const make = Effect.gen(function* () {
     // that makes `git worktree add` refuse the path; prune clears it.
     yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
       Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
+      Effect.andThen(
+        appendWorktreeActivity(
+          thread.id,
+          "restored",
+          "Worktree restored from its saved branch. Build artifacts must be regenerated.",
+        ),
+      ),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
@@ -525,10 +574,133 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               worktreePath,
               cause: Cause.pretty(cause),
-            }),
+            }).pipe(
+              Effect.andThen(
+                appendWorktreeActivity(
+                  thread.id,
+                  "restore.failed",
+                  "Could not restore the worktree from its saved branch. Check that the branch and repository are still available, then retry.",
+                ),
+              ),
+            ),
       ),
     );
   });
+
+  const ensureThreadWorktree = (thread: Parameters<typeof restoreThreadWorktree>[0]) =>
+    thread.worktreePath
+      ? withWorktreeLock(thread.worktreePath, restoreThreadWorktree(thread))
+      : Effect.void;
+
+  const removeSettledWorktree = Effect.fn("removeSettledWorktree")(function* (threadId: ThreadId) {
+    const initial = yield* resolveThreadShell(threadId);
+    if (
+      !initial?.worktreePath ||
+      !initial.branch ||
+      initial.settledOverride !== "settled" ||
+      (initial.session !== null && initial.session.status !== "stopped")
+    )
+      return;
+    const worktreePath = initial.worktreePath;
+    yield* withWorktreeLock(
+      worktreePath,
+      Effect.gen(function* () {
+        if (!(yield* fileSystem.exists(worktreePath))) return;
+        yield* gitWorkflow.invalidateLocalStatus(worktreePath);
+        const status = yield* gitWorkflow.localStatus({ cwd: worktreePath });
+        // Read ownership after the Git scan: a thread can wake or acquire this
+        // worktree while status is running.
+        const snapshots = yield* Effect.all([
+          projectionSnapshotQuery.getShellSnapshot(),
+          projectionSnapshotQuery.getArchivedShellSnapshot(),
+        ]);
+        const threads = snapshots
+          .flatMap((snapshot) => snapshot.threads)
+          .filter(
+            (thread) =>
+              thread.worktreePath !== null &&
+              path.resolve(thread.worktreePath) === path.resolve(worktreePath),
+          );
+        const thread = threads.find((candidate) => candidate.id === threadId);
+        if (!thread?.branch || thread.settledOverride !== "settled") return;
+        if (
+          threads.some(
+            (candidate) =>
+              candidate.settledOverride !== "settled" ||
+              (candidate.session !== null && candidate.session.status !== "stopped"),
+          )
+        ) {
+          yield* appendWorktreeActivity(
+            threadId,
+            "kept",
+            "Worktree kept because another thread or provider session still uses it.",
+          );
+          return;
+        }
+        const project = yield* resolveProject(thread.projectId);
+        if (!project || path.resolve(project.workspaceRoot) === path.resolve(worktreePath)) return;
+
+        // Verify the saved branch still describes this checkout. Never force
+        // removal: Git protects uncommitted/untracked files and locked worktrees,
+        // while ignored build output is removed with a clean checkout.
+        if (!status.isRepo || status.refName !== thread.branch || status.hasWorkingTreeChanges) {
+          yield* appendWorktreeActivity(
+            threadId,
+            "remove.failed",
+            "Worktree kept because it has uncommitted files or its branch differs from the saved branch. Commit or move your files before settling again.",
+          );
+          return;
+        }
+        for (const owner of threads) {
+          yield* terminalManager.close({ threadId: owner.id });
+        }
+        yield* gitWorkflow.removeWorktree({ cwd: project.workspaceRoot, path: worktreePath });
+        yield* appendWorktreeActivity(
+          threadId,
+          "removed",
+          "Worktree and all Git-ignored files removed. Un-settle this thread to restore its saved branch.",
+        );
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("failed to remove settled worktree", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }).pipe(
+              Effect.andThen(
+                appendWorktreeActivity(
+                  threadId,
+                  "remove.failed",
+                  "Could not remove the worktree. It may contain uncommitted files, be locked, or be in use. Resolve this and settle again to retry.",
+                ),
+              ),
+            ),
+      ),
+    );
+  });
+
+  const worktreeWorker = yield* makeDrainableWorker(
+    (input: { threadId: ThreadId; restore: boolean }) =>
+      Effect.gen(function* () {
+        if (!input.restore) {
+          yield* removeSettledWorktree(input.threadId);
+          return;
+        }
+        const thread = yield* resolveThreadShell(input.threadId);
+        if (thread && thread.settledOverride !== "settled") yield* ensureThreadWorktree(thread);
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("worktree lifecycle failed", {
+                threadId: input.threadId,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
+  );
 
   const resolveThreadShell = Effect.fnUntraced(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
@@ -1690,6 +1862,7 @@ const make = Effect.gen(function* () {
       }),
       Effect.ensuring(clearStopping),
     );
+    yield* worktreeWorker.enqueue({ threadId: thread.id, restore: false });
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
@@ -1737,11 +1910,9 @@ const make = Effect.gen(function* () {
         return;
       case "thread.settled": {
         const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);
-        if (
-          Option.isNone(thread) ||
-          thread.value.session == null ||
-          thread.value.session.status === "stopped"
-        ) {
+        if (Option.isNone(thread)) return;
+        if (thread.value.session == null || thread.value.session.status === "stopped") {
+          yield* worktreeWorker.enqueue({ threadId: event.payload.threadId, restore: false });
           return;
         }
         yield* orchestrationEngine.dispatch({
@@ -1753,6 +1924,9 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      case "thread.unsettled":
+        yield* worktreeWorker.enqueue({ threadId: event.payload.threadId, restore: true });
+        return;
     }
   });
 
@@ -1792,7 +1966,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
-        event.type === "thread.settled"
+        event.type === "thread.settled" ||
+        event.type === "thread.unsettled"
       ) {
         return yield* worker.enqueue(event);
       }
@@ -1832,6 +2007,7 @@ const make = Effect.gen(function* () {
     start,
     drain: Effect.gen(function* () {
       yield* worker.drain;
+      yield* worktreeWorker.drain;
       yield* threadTitleRegenerationWorker.drain;
     }),
   } satisfies ProviderCommandReactorShape;

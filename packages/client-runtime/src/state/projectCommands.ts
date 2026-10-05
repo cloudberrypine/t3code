@@ -1,4 +1,9 @@
-import { type EnvironmentId, type ProjectReadFileResult, WS_METHODS } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type ProjectReadFileResult,
+  type ProjectReadFileInput,
+  WS_METHODS,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -7,6 +12,8 @@ import {
   createEnvironmentCommand,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentRpcSubscriptionAtomFamily,
+  environmentRpcKey,
 } from "./runtime.ts";
 import {
   type CreateProjectInput,
@@ -54,6 +61,30 @@ export function createProjectEnvironmentAtoms<R, E>(
     key: ({ environmentId, input }: { environmentId: string; input: { projectId: string } }) =>
       JSON.stringify([environmentId, input.projectId]),
   };
+  const readFile = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:projects:read-file",
+    tag: WS_METHODS.projectsReadFile,
+    staleTimeMs: 30_000,
+    idleTtlMs: 5 * 60_000,
+  });
+  const fileChanges = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:projects:file-changes",
+    tag: WS_METHODS.projectsWatchFile,
+    idleTtlMs: 0,
+  });
+  const liveFiles = Atom.family((key: string) => {
+    const [environmentId, input] = JSON.parse(key) as [EnvironmentId, ProjectReadFileInput];
+    return readFile({ environmentId, input }).pipe(
+      Atom.makeRefreshOnSignal(
+        fileChanges({
+          environmentId,
+          input: { cwd: input.cwd, relativePath: input.relativePath },
+        }),
+      ),
+      // Keep the read cache, but release the subscription as soon as its preview closes.
+      Atom.setIdleTTL(0),
+    );
+  });
   return {
     searchEntries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:search-entries",
@@ -66,12 +97,11 @@ export function createProjectEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
       idleTtlMs: 5 * 60_000,
     }),
-    readFile: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:projects:read-file",
-      tag: WS_METHODS.projectsReadFile,
-      staleTimeMs: 30_000,
-      idleTtlMs: 5 * 60_000,
-    }),
+    readFile,
+    liveFile: (target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: ProjectReadFileInput;
+    }) => liveFiles(environmentRpcKey(target)),
     optimisticFile: (target: OptimisticProjectFileTarget) =>
       optimisticFileFamily(optimisticProjectFileKey(target)),
     create: createEnvironmentCommand(runtime, {

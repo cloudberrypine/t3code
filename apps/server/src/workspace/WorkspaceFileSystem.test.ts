@@ -1,9 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off - FileSystem cannot create a FIFO.
+import * as NodeFS from "node:fs";
 import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -57,7 +61,93 @@ const writeTextFile = Effect.fn("writeTextFile")(function* (
 });
 
 it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (it) => {
+  describe("watchFile", () => {
+    it.effect(
+      "notifies external writes, atomic replacements, deletion and recreation, and releases the watcher",
+      () =>
+        Effect.gen(function* () {
+          const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const fs = yield* FileSystem.FileSystem;
+          const cwd = yield* makeTempDir;
+          const relativePath = "Actor.as";
+          const absolutePath = `${cwd}/${relativePath}`;
+          yield* writeTextFile(cwd, relativePath, "before");
+          const events = yield* Queue.unbounded<{ revision: number }>();
+          const fiber = yield* service.watchFile({ cwd, relativePath }).pipe(
+            Stream.runForEach((event) => Queue.offer(events, event)),
+            Effect.forkChild,
+          );
+          expect(yield* Queue.take(events)).toEqual({ revision: 0 });
+          const probe = () => {};
+          const watcher = NodeFS.watchFile(absolutePath, { interval: 1000 }, probe);
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => NodeFS.unwatchFile(absolutePath, probe)),
+          );
+          expect(watcher.listenerCount("change")).toBe(2);
+
+          yield* writeTextFile(cwd, relativePath, "external edit");
+          expect((yield* Queue.take(events)).revision).toBeGreaterThan(0);
+          expect((yield* service.readFile({ cwd, relativePath })).contents).toBe("external edit");
+
+          yield* writeTextFile(cwd, "replacement", "atomic save");
+          yield* fs.rename(`${cwd}/replacement`, absolutePath);
+          yield* Queue.take(events);
+          expect((yield* service.readFile({ cwd, relativePath })).contents).toBe("atomic save");
+
+          yield* fs.remove(absolutePath);
+          yield* Queue.take(events);
+          expect((yield* Effect.result(service.readFile({ cwd, relativePath })))._tag).toBe(
+            "Failure",
+          );
+          yield* writeTextFile(cwd, relativePath, "recreated");
+          yield* Queue.take(events);
+          expect((yield* service.readFile({ cwd, relativePath })).contents).toBe("recreated");
+          yield* Fiber.interrupt(fiber);
+          expect(watcher.listenerCount("change")).toBe(1);
+        }),
+      { timeout: 15000 },
+    );
+
+    it.effect("rejects paths outside the workspace before starting a watcher", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const result = yield* service
+          .watchFile({ cwd, relativePath: "../escape.as" })
+          .pipe(Stream.runCollect, Effect.result);
+        expect(result._tag).toBe("Failure");
+      }),
+    );
+  });
+
   describe("readFile", () => {
+    it.effect(
+      "allows a bounded larger read for complete structured previews while keeping the default limit",
+      () =>
+        Effect.gen(function* () {
+          const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const cwd = yield* makeTempDir;
+          const contents = '{"vertices":[],"padding":"' + "x".repeat(1024 * 1024) + '"}';
+          yield* writeTextFile(cwd, "mesh.json", contents);
+          const source = yield* workspaceFileSystem.readFile({ cwd, relativePath: "mesh.json" });
+          expect(source.contents.length).toBe(1024 * 1024);
+          expect(source.truncated).toBe(true);
+          const preview = yield* workspaceFileSystem.readFile({
+            cwd,
+            relativePath: "mesh.json",
+            maxBytes: 4 * 1024 * 1024,
+          });
+          expect(preview.contents).toBe(contents);
+          expect(preview.truncated).toBe(false);
+          const bounded = yield* workspaceFileSystem.readFile({
+            cwd,
+            relativePath: "mesh.json",
+            maxBytes: 32,
+          });
+          expect(bounded.contents).toBe(contents.slice(0, 32));
+          expect(bounded.truncated).toBe(true);
+        }),
+    );
     it.effect("reads UTF-8 files relative to the workspace root", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;

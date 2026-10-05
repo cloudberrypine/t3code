@@ -597,6 +597,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
+  /** Identifies new questions even while an earlier async question remains unanswered. */
+  latestUserInputRequestId: Schema.optional(Schema.String),
   hasActionableProposedPlan: Schema.Boolean,
   /**
    * Native background work alive after the turn settles: "working" while

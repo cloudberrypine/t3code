@@ -1,3 +1,5 @@
+import { hasDiffScrollPosition } from "./diffs/diffScrollMemory";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { encodeBase64Url } from "effect/Encoding";
 import { useAtomValue } from "@effect/atom-react";
@@ -56,6 +58,8 @@ import { formatShortTimestamp } from "../timestampFormat";
 import { DiffFilePathCopyButton } from "./DiffFilePathCopyButton";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
+import { getDiffStatTotals } from "../lib/diffStatFilter";
+import { FilteredDiffStatLabel } from "./chat/FilteredDiffStatLabel";
 import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
 import { FileBrowserPane } from "./files/FileBrowserPane";
 import { DiffFileTree } from "./diffs/DiffFileTree";
@@ -113,6 +117,8 @@ interface DiffPanelProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   initialGitScope: "branch" | "unstaged";
   workspaceMutationId: string | null;
+  diffStatIgnorePatterns?: string | undefined;
+  onRefreshDiffStatIgnore: () => void;
 }
 
 export default function DiffPanel({
@@ -120,6 +126,8 @@ export default function DiffPanel({
   composerDraftTarget,
   initialGitScope: initialGitScopeProp,
   workspaceMutationId,
+  diffStatIgnorePatterns,
+  onRefreshDiffStatIgnore,
 }: DiffPanelProps) {
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
@@ -153,6 +161,13 @@ export default function DiffPanel({
     strict: false,
     select: (params) => resolveThreadRouteRef(params),
   });
+  const jumpReveal = useDiffPanelStore((state) =>
+    routeThreadRef ? state.jumpRevealByThreadKey[scopedThreadKey(routeThreadRef)] : undefined,
+  );
+  const consumeJumpReveal = useCallback(() => {
+    if (routeThreadRef && jumpReveal)
+      useDiffPanelStore.getState().consumeJump(routeThreadRef, jumpReveal);
+  }, [routeThreadRef, jumpReveal]);
   const activeThreadId = routeThreadRef?.threadId ?? null;
   const activeThread = useThread(routeThreadRef);
   const activeProjectId = activeThread?.projectId ?? null;
@@ -244,6 +259,18 @@ export default function DiffPanel({
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
+  const scrollMemoryKey = JSON.stringify([
+    routeThreadRef?.environmentId,
+    routeThreadRef?.threadId,
+    activeCwd,
+    reviewSectionId,
+    selectedBaseRef,
+    selectedFilePath,
+    selectedFileRevealRequestId,
+    diffLayout,
+    wordWrap,
+    diffIgnoreWhitespace,
+  ]);
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
   const collapsedDiffFileKeys =
     collapsedDiffFiles.scopeKey === collapseScopeKey
@@ -537,18 +564,22 @@ export default function DiffPanel({
     [codeViewFiles],
   );
   const allDiffFilesCollapsed = areAllDiffFilesCollapsed(diffFileKeys, collapsedDiffFileKeys);
-  const diffLineStat = useMemo(
+  const { full: diffLineStat, filtered: filteredDiffLineStat } = useMemo(
     () =>
-      selectedTurnId === null && selectedGitFiles.length > 0
-        ? selectedGitFiles.reduce(
-            (total, file) => ({
-              additions: total.additions + file.additions,
-              deletions: total.deletions + file.deletions,
-            }),
-            { additions: 0, deletions: 0 },
-          )
-        : getDiffLineStat(renderableFiles),
-    [renderableFiles, selectedGitFiles, selectedTurnId],
+      getDiffStatTotals(
+        selectedTurnId === null && selectedGitFiles.length > 0
+          ? selectedGitFiles.map((file) => ({
+              path: file.changeType === "deleted" ? file.oldPath : file.newPath,
+              additions: file.additions,
+              deletions: file.deletions,
+            }))
+          : renderableFiles.map((file) => ({
+              path: resolveFileDiffPath(file),
+              ...getDiffLineStat([file]),
+            })),
+        diffStatIgnorePatterns,
+      ),
+    [renderableFiles, selectedGitFiles, selectedTurnId, diffStatIgnorePatterns],
   );
   const fileTreeEntries = useMemo(() => {
     if (selectedTurnId !== null || selectedGitFiles.length === 0) {
@@ -567,9 +598,16 @@ export default function DiffPanel({
   const [activeDiffFilePath, setActiveDiffFilePath] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selectedDiffFileKey || !codeView?.getInstance()) return;
+    if (!selectedDiffFileKey || !codeView?.getInstance() || hasDiffScrollPosition(scrollMemoryKey))
+      return;
     codeView.scrollTo({ type: "item", id: selectedDiffFileKey, align: "start" });
-  }, [codeView, codeViewMountKey, selectedDiffFileKey, selectedFileRevealRequestId]);
+  }, [
+    codeView,
+    codeViewMountKey,
+    selectedDiffFileKey,
+    selectedFileRevealRequestId,
+    scrollMemoryKey,
+  ]);
 
   const treeRevealScope = useMemo(
     () => ({ collapseScopeKey, diffSelection }),
@@ -700,6 +738,18 @@ export default function DiffPanel({
     },
     [codeViewFiles, collapseScopeKey, requestTreeReveal, loadOmittedGitFile, selectedGitFiles],
   );
+
+  useEffect(() => {
+    if (!jumpReveal) return;
+    if (jumpReveal.selection !== diffSelection) {
+      consumeJumpReveal();
+      return;
+    }
+    const file = codeViewFiles.find((candidate) => candidate.filePath === jumpReveal.path);
+    // History is an external navigation request; replay it through the same load/expand path as a tree click.
+    // oxlint-disable-next-line react/set-state-in-effect
+    if (!file?.loaded || file.collapsed) revealDiffFile(jumpReveal.path);
+  }, [jumpReveal, diffSelection, codeViewFiles, revealDiffFile, consumeJumpReveal]);
 
   const openDiffFile = useCallback(
     (filePath: string) => {
@@ -986,12 +1036,14 @@ export default function DiffPanel({
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
         {fileTreeEntries.length > 0 && (
-          <DiffStatLabel
-            additions={diffLineStat.additions}
-            deletions={diffLineStat.deletions}
-            className="mr-1 text-[11px]"
-            layout="inline"
-          />
+          <span className="mr-1 inline-flex items-center gap-1 text-[11px]">
+            <DiffStatLabel
+              additions={diffLineStat.additions}
+              deletions={diffLineStat.deletions}
+              layout="inline"
+            />
+            {filteredDiffLineStat && <FilteredDiffStatLabel {...filteredDiffLineStat} />}
+          </span>
         )}
         {canRefreshGitDiff && (
           <Tooltip>
@@ -1002,7 +1054,10 @@ export default function DiffPanel({
                   size="icon-sm"
                   variant="ghost"
                   aria-label={branchDiffPreview.isPending ? "Refreshing diff" : "Refresh diff"}
-                  onClick={refreshBranchDiffPreview}
+                  onClick={() => {
+                    refreshBranchDiffPreview();
+                    onRefreshDiffStatIgnore();
+                  }}
                 />
               }
             >
@@ -1244,6 +1299,13 @@ export default function DiffPanel({
                   }}
                 >
                   <AnnotatableCodeView
+                    scrollMemoryKey={scrollMemoryKey}
+                    navigationSelection={diffSelection}
+                    {...(jumpReveal?.selection === diffSelection
+                      ? { navigationReveal: jumpReveal }
+                      : {})}
+                    onNavigationRestored={consumeJumpReveal}
+                    ignoreWhitespace={diffIgnoreWhitespace}
                     {...(activeThread && activeCwd
                       ? {
                           workspace: {

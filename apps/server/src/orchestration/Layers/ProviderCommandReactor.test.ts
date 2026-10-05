@@ -27,6 +27,7 @@ import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
@@ -73,6 +74,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import { TerminalManager } from "../../terminal/Manager.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -167,6 +169,9 @@ describe("ProviderCommandReactor", () => {
 
   async function createHarness(input?: {
     readonly baseDir?: string;
+    readonly worktreePath?: string;
+    readonly branch?: string;
+    readonly workspaceRoot?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
@@ -305,6 +310,20 @@ describe("ProviderCommandReactor", () => {
     const createWorktree = vi.fn(
       (input: { readonly refName: string; readonly path: string | null }) =>
         Effect.succeed({ worktree: { path: input.path ?? "", refName: input.refName } }),
+    );
+    const removeWorktree = vi.fn<
+      GitWorkflowService.GitWorkflowService["Service"]["removeWorktree"]
+    >(() => Effect.void);
+    const closeTerminal = vi.fn<TerminalManager["Service"]["close"]>(() => Effect.void);
+    const localStatus = vi.fn<GitWorkflowService.GitWorkflowService["Service"]["localStatus"]>(() =>
+      Effect.succeed({
+        isRepo: true,
+        hasPrimaryRemote: false,
+        isDefaultRef: false,
+        refName: input?.branch ?? "feature/worktree",
+        hasWorkingTreeChanges: false,
+        workingTree: { files: [], insertions: 0, deletions: 0 },
+      }),
     );
     const refreshStatus = vi.fn((_: string) =>
       Effect.succeed({
@@ -456,8 +475,12 @@ describe("ProviderCommandReactor", () => {
           renameBranch,
           pruneWorktrees,
           createWorktree,
+          removeWorktree,
+          localStatus,
+          invalidateLocalStatus: () => Effect.void,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
       ),
+      Layer.provide(Layer.mock(TerminalManager)({ close: closeTerminal })),
       Layer.provideMerge(
         Layer.succeed(VcsStatusBroadcaster, {
           getStatus: () => Effect.die("getStatus should not be called in this test"),
@@ -493,7 +516,7 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.make("cmd-project-create"),
         projectId: asProjectId("project-1"),
         title: "Provider Project",
-        workspaceRoot: "/tmp/provider-project",
+        workspaceRoot: input?.workspaceRoot ?? "/tmp/provider-project",
         defaultModelSelection: modelSelection,
         createdAt: now,
       }),
@@ -508,8 +531,8 @@ describe("ProviderCommandReactor", () => {
         modelSelection: modelSelection,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
+        branch: input?.branch ?? null,
+        worktreePath: input?.worktreePath ?? null,
         createdAt: now,
       }),
     );
@@ -603,6 +626,9 @@ describe("ProviderCommandReactor", () => {
       renameBranch,
       pruneWorktrees,
       createWorktree,
+      removeWorktree,
+      closeTerminal,
+      localStatus,
       refreshStatus,
       generateBranchName,
       generateThreadTitle,
@@ -4022,5 +4048,432 @@ describe("ProviderCommandReactor", () => {
       expect(thread?.session?.status).toBe("stopped");
       expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     }),
+  );
+
+  const dispatchAndWaitForActivity = Effect.fn("dispatchAndWaitForActivity")(function* (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    command: Parameters<OrchestrationEngineService["Service"]["dispatch"]>[0],
+    kind: string,
+  ) {
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const events = yield* harness.engine.subscribeDomainEvents;
+        const completion = yield* events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "thread.activity-appended" && event.payload.activity.kind === kind,
+          ),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* harness.engine.dispatch(command);
+        yield* Fiber.join(completion);
+        yield* Effect.promise(() => harness.drain());
+      }),
+    );
+  });
+
+  async function createWorktreeHarness(options?: Parameters<typeof createHarness>[0]) {
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-settled-worktree-"));
+    const worktreePath = NodePath.join(baseDir, "worktree");
+    NodeFS.mkdirSync(worktreePath);
+    const harness = await createHarness({
+      ...options,
+      baseDir,
+      worktreePath,
+      branch: "feature/worktree",
+    });
+    harness.removeWorktree.mockImplementation(() =>
+      Effect.sync(() => NodeFS.rmSync(worktreePath, { recursive: true })),
+    );
+    harness.createWorktree.mockImplementation((input) =>
+      Effect.sync(() => {
+        NodeFS.mkdirSync(worktreePath);
+        return { worktree: { path: worktreePath, refName: input.refName } };
+      }),
+    );
+    return { ...harness, worktreePath };
+  }
+
+  effectIt.effect.each(["thread.settle", "thread.auto-settle"] as const)(
+    "%s removes a stopped worktree and un-settle restores its saved branch and location",
+    (type) =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createWorktreeHarness());
+        const before = yield* Effect.promise(() => harness.readModel());
+        yield* dispatchAndWaitForActivity(
+          harness,
+          {
+            commandId: CommandId.make("settle-worktree"),
+            threadId: ThreadId.make("thread-1"),
+            ...(type === "thread.auto-settle"
+              ? {
+                  type,
+                  snapshotSequence: before.snapshotSequence,
+                  settledAt: "2026-01-01T00:00:00.000Z",
+                }
+              : { type }),
+          },
+          "worktree.removed",
+        );
+        expect(NodeFS.existsSync(harness.worktreePath)).toBe(false);
+        expect(harness.removeWorktree).toHaveBeenCalledWith({
+          cwd: "/tmp/provider-project",
+          path: harness.worktreePath,
+        });
+        expect(harness.closeTerminal).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+        const settled = yield* Effect.promise(() => harness.readModel());
+        expect(settled.threads[0]).toMatchObject({
+          branch: "feature/worktree",
+          worktreePath: harness.worktreePath,
+          settledOverride: "settled",
+        });
+
+        yield* dispatchAndWaitForActivity(
+          harness,
+          {
+            type: "thread.unsettle",
+            commandId: CommandId.make("restore-worktree"),
+            threadId: ThreadId.make("thread-1"),
+            reason: "user",
+          },
+          "worktree.restored",
+        );
+        expect(NodeFS.existsSync(harness.worktreePath)).toBe(true);
+        expect(harness.createWorktree).toHaveBeenCalledWith({
+          cwd: "/tmp/provider-project",
+          path: harness.worktreePath,
+          refName: "feature/worktree",
+        });
+        expect(harness.startSession).not.toHaveBeenCalled();
+      }),
+  );
+
+  effectIt.effect("stops the provider and terminals before removing a settled worktree", () =>
+    Effect.gen(function* () {
+      const order: string[] = [];
+      const harness = yield* Effect.promise(() =>
+        createWorktreeHarness({
+          stopSessionEffect: () =>
+            Effect.sync(() => {
+              order.push("provider");
+            }),
+        }),
+      );
+      harness.closeTerminal.mockImplementation(() =>
+        Effect.sync(() => {
+          order.push("terminals");
+        }),
+      );
+      harness.removeWorktree.mockImplementation(() =>
+        Effect.sync(() => {
+          order.push("remove");
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("ready-for-cleanup"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+      });
+      yield* dispatchAndWaitForActivity(
+        harness,
+        {
+          type: "thread.settle",
+          commandId: CommandId.make("settle-ready-worktree"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        "worktree.removed",
+      );
+      expect(order).toEqual(["provider", "terminals", "remove"]);
+    }),
+  );
+
+  effectIt.effect.each(["dirty", "different branch"] as const)(
+    "keeps a worktree with %s source and reports why",
+    (state) =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createWorktreeHarness());
+        const cleanStatus = yield* harness.localStatus({ cwd: harness.worktreePath });
+        harness.localStatus.mockReturnValue(
+          Effect.succeed({
+            ...cleanStatus,
+            ...(state === "dirty" ? { hasWorkingTreeChanges: true } : { refName: "different" }),
+          }),
+        );
+        yield* dispatchAndWaitForActivity(
+          harness,
+          {
+            type: "thread.settle",
+            commandId: CommandId.make("settle-kept-worktree"),
+            threadId: ThreadId.make("thread-1"),
+          },
+          "worktree.remove.failed",
+        );
+        expect(harness.removeWorktree).not.toHaveBeenCalled();
+        expect(harness.closeTerminal).not.toHaveBeenCalled();
+        expect(NodeFS.existsSync(harness.worktreePath)).toBe(true);
+      }),
+  );
+
+  effectIt.effect.each([false, true])(
+    "keeps a worktree shared with an active thread (archived: %s)",
+    (archived) =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createWorktreeHarness());
+        yield* harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("shared-thread"),
+          threadId: ThreadId.make("thread-2"),
+          projectId: asProjectId("project-1"),
+          title: "Shared",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5-codex"),
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: "feature/worktree",
+          worktreePath: harness.worktreePath,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        if (archived)
+          yield* harness.engine.dispatch({
+            type: "thread.archive",
+            commandId: CommandId.make("archive-shared"),
+            threadId: ThreadId.make("thread-2"),
+          });
+        yield* dispatchAndWaitForActivity(
+          harness,
+          {
+            type: "thread.settle",
+            commandId: CommandId.make("settle-shared-first"),
+            threadId: ThreadId.make("thread-1"),
+          },
+          "worktree.kept",
+        );
+        expect(harness.removeWorktree).not.toHaveBeenCalled();
+        if (archived)
+          yield* harness.engine.dispatch({
+            type: "thread.unarchive",
+            commandId: CommandId.make("unarchive-shared"),
+            threadId: ThreadId.make("thread-2"),
+          });
+        yield* dispatchAndWaitForActivity(
+          harness,
+          {
+            type: "thread.settle",
+            commandId: CommandId.make("settle-shared-last"),
+            threadId: ThreadId.make("thread-2"),
+          },
+          "worktree.removed",
+        );
+        expect(harness.removeWorktree).toHaveBeenCalledTimes(1);
+        expect(harness.closeTerminal).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+        expect(harness.closeTerminal).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-2") });
+      }),
+  );
+
+  effectIt.effect(
+    "never removes the project main checkout even if it is recorded as a worktree",
+    () =>
+      Effect.gen(function* () {
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-main-checkout-"));
+        NodeFS.writeFileSync(NodePath.join(baseDir, "ignored-build.o"), "keep main artifacts");
+        const harness = yield* Effect.promise(() =>
+          createHarness({ baseDir, workspaceRoot: baseDir, worktreePath: baseDir, branch: "main" }),
+        );
+        const inspected = yield* Deferred.make<void>();
+        const status = yield* harness.localStatus({ cwd: baseDir });
+        harness.localStatus.mockImplementation(() =>
+          Deferred.succeed(inspected, undefined).pipe(Effect.as(status)),
+        );
+        yield* harness.engine.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("settle-main-checkout"),
+          threadId: ThreadId.make("thread-1"),
+        });
+        yield* Deferred.await(inspected);
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.removeWorktree).not.toHaveBeenCalled();
+        expect(harness.closeTerminal).not.toHaveBeenCalled();
+        expect(NodeFS.readFileSync(NodePath.join(baseDir, "ignored-build.o"), "utf8")).toBe(
+          "keep main artifacts",
+        );
+      }),
+  );
+
+  effectIt.effect("snoozing and waking leave the worktree and ignored artifacts intact", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createWorktreeHarness());
+      const artifact = NodePath.join(harness.worktreePath, "build.o");
+      NodeFS.writeFileSync(artifact, "keep snoozed artifacts");
+      yield* harness.engine.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("snooze-worktree"),
+        threadId: ThreadId.make("thread-1"),
+        snoozedUntil: "2099-01-01T00:00:00.000Z",
+      });
+      yield* Effect.promise(() => harness.drain());
+      expect(NodeFS.readFileSync(artifact, "utf8")).toBe("keep snoozed artifacts");
+      yield* harness.engine.dispatch({
+        type: "thread.unsnooze",
+        commandId: CommandId.make("wake-worktree"),
+        threadId: ThreadId.make("thread-1"),
+        reason: "user",
+      });
+      yield* Effect.promise(() => harness.drain());
+      expect(NodeFS.readFileSync(artifact, "utf8")).toBe("keep snoozed artifacts");
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
+      expect(harness.closeTerminal).not.toHaveBeenCalled();
+      expect(harness.createWorktree).not.toHaveBeenCalled();
+    }),
+  );
+
+  effectIt.effect("reports removal failure and allows another settlement to retry", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createWorktreeHarness());
+      harness.removeWorktree.mockImplementationOnce(() => Effect.die("worktree is locked"));
+      yield* dispatchAndWaitForActivity(
+        harness,
+        {
+          type: "thread.settle",
+          commandId: CommandId.make("failed-cleanup"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        "worktree.remove.failed",
+      );
+      expect(NodeFS.existsSync(harness.worktreePath)).toBe(true);
+      yield* dispatchAndWaitForActivity(
+        harness,
+        {
+          type: "thread.settle",
+          commandId: CommandId.make("retry-cleanup"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        "worktree.removed",
+      );
+      expect(NodeFS.existsSync(harness.worktreePath)).toBe(false);
+    }),
+  );
+
+  effectIt.effect(
+    "reports a missing restoration branch without losing the saved worktree location",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createWorktreeHarness());
+        yield* dispatchAndWaitForActivity(
+          harness,
+          {
+            type: "thread.settle",
+            commandId: CommandId.make("cleanup-before-restore-failure"),
+            threadId: ThreadId.make("thread-1"),
+          },
+          "worktree.removed",
+        );
+        harness.createWorktree.mockImplementationOnce(() => Effect.die("branch is missing"));
+        yield* dispatchAndWaitForActivity(
+          harness,
+          {
+            type: "thread.unsettle",
+            commandId: CommandId.make("restore-failure"),
+            threadId: ThreadId.make("thread-1"),
+            reason: "user",
+          },
+          "worktree.restore.failed",
+        );
+        const state = yield* Effect.promise(() => harness.readModel());
+        expect(state.threads[0]).toMatchObject({
+          branch: "feature/worktree",
+          worktreePath: harness.worktreePath,
+        });
+        expect(NodeFS.existsSync(harness.worktreePath)).toBe(false);
+      }),
+  );
+
+  effectIt.effect("cancels queued cleanup when the thread wakes during the Git scan", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createWorktreeHarness());
+      const scanning = yield* Deferred.make<void>();
+      const finishScan = yield* Deferred.make<void>();
+      const status = yield* harness.localStatus({ cwd: harness.worktreePath });
+      harness.localStatus.mockImplementation(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(scanning, undefined);
+          yield* Deferred.await(finishScan);
+          return status;
+        }),
+      );
+      yield* harness.engine.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle-before-wake"),
+        threadId: ThreadId.make("thread-1"),
+      });
+      yield* Deferred.await(scanning);
+      yield* harness.engine.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("wake-during-scan"),
+        threadId: ThreadId.make("thread-1"),
+        reason: "user",
+      });
+      yield* Deferred.succeed(finishScan, undefined);
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
+      expect(harness.closeTerminal).not.toHaveBeenCalled();
+      expect(NodeFS.existsSync(harness.worktreePath)).toBe(true);
+    }),
+  );
+
+  effectIt.effect("un-settling during removal waits and restores the worktree afterwards", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const removing = yield* Deferred.make<void>();
+        const finishRemoval = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() => createWorktreeHarness());
+        harness.removeWorktree.mockImplementation(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(removing, undefined);
+            yield* Deferred.await(finishRemoval);
+            NodeFS.rmSync(harness.worktreePath, { recursive: true });
+          }),
+        );
+        yield* harness.engine.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("slow-settle"),
+          threadId: ThreadId.make("thread-1"),
+        });
+        yield* Deferred.await(removing);
+        const events = yield* harness.engine.subscribeDomainEvents;
+        const restored = yield* events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "thread.activity-appended" &&
+              event.payload.activity.kind === "worktree.restored",
+          ),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* harness.engine.dispatch({
+          type: "thread.unsettle",
+          commandId: CommandId.make("restore-during-removal"),
+          threadId: ThreadId.make("thread-1"),
+          reason: "user",
+        });
+        expect(harness.createWorktree).not.toHaveBeenCalled();
+        yield* Deferred.succeed(finishRemoval, undefined);
+        yield* Fiber.join(restored);
+        yield* Effect.promise(() => harness.drain());
+        expect(NodeFS.existsSync(harness.worktreePath)).toBe(true);
+        expect(harness.createWorktree).toHaveBeenCalledTimes(1);
+      }),
+    ),
   );
 });

@@ -1,5 +1,6 @@
+import { useDiffPanelStore, selectThreadDiffPanelSelection } from "./diffPanelStore";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { type EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -17,7 +18,82 @@ const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"))
 const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"));
 
 beforeEach(() => {
-  useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
+  useDiffPanelStore.setState({
+    byThreadKey: {},
+    branchBaseRefByThreadKey: {},
+    jumpRevealByThreadKey: {},
+  });
+  useRightPanelStore.setState({
+    byThreadKey: {},
+    userActionRevisionByThreadKey: {},
+    fileJumpHistoryByThreadKey: {},
+  });
+});
+
+describe("file definition jump history", () => {
+  const location = (path: string, line: number) => ({ path, line });
+  const active = (ref = refA) =>
+    selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, ref);
+
+  it("undoes and redoes multiple same-file jumps, with a fresh reveal each time", () => {
+    const store = useRightPanelStore.getState();
+    store.jumpToFile(refA, "/repo", location("main.as", 4), location("main.as", 40));
+    store.jumpToFile(refA, "/repo", location("main.as", 48), location("main.as", 100));
+    for (const [direction, line] of [
+      ["back", 48],
+      ["back", 4],
+      ["forward", 40],
+      ["forward", 100],
+    ] as const) {
+      const previous = active();
+      expect(store.traverseFileJumpHistory(refA, "/repo", direction)).toBe(true);
+      expect(active()).toMatchObject({
+        relativePath: "main.as",
+        revealLine: line,
+        revealRequestId: previous?.kind === "file" ? previous.revealRequestId + 1 : 1,
+      });
+    }
+    const revision = store.getUserActionRevision(refA);
+    expect(store.traverseFileJumpHistory(refA, "/repo", "forward")).toBe(false);
+    expect(store.getUserActionRevision(refA)).toBe(revision);
+  });
+
+  it("reopens the source tab and replaces forward history after a new jump", () => {
+    const store = useRightPanelStore.getState();
+    store.jumpToFile(refA, "/repo", location("a.as", 3), location("b.as", 50));
+    store.jumpToFile(refA, "/repo", location("b.as", 60), location("c.as", 70));
+    store.closeSurface(refA, "file:b.as");
+    store.traverseFileJumpHistory(refA, "/repo", "back");
+    expect(active()).toMatchObject({ relativePath: "b.as", revealLine: 60 });
+    store.jumpToFile(refA, "/repo", location("b.as", 61), location("d.as", 80));
+    expect(store.traverseFileJumpHistory(refA, "/repo", "forward")).toBe(false);
+    store.traverseFileJumpHistory(refA, "/repo", "back");
+    expect(active()).toMatchObject({ relativePath: "b.as", revealLine: 61 });
+    store.traverseFileJumpHistory(refA, "/repo", "back");
+    expect(active()).toMatchObject({ relativePath: "a.as", revealLine: 3 });
+  });
+
+  it("isolates threads, environments and workspaces, and drops history when a thread is removed", () => {
+    const store = useRightPanelStore.getState();
+    const remote = scopeThreadRef("env-2" as EnvironmentId, refA.threadId);
+    store.jumpToFile(refA, "/repo", location("a.as", 3), location("b.as", 50));
+    for (const ref of [refB, remote])
+      expect(store.traverseFileJumpHistory(ref, "/repo", "back")).toBe(false);
+    expect(store.traverseFileJumpHistory(refA, "/other", "back")).toBe(false);
+    store.jumpToFile(refA, "/other", location("x.as", 1), location("y.as", 2));
+    store.traverseFileJumpHistory(refA, "/other", "back");
+    expect(active()).toMatchObject({ relativePath: "x.as", revealLine: 1 });
+    expect(store.traverseFileJumpHistory(refA, "/other", "back")).toBe(false);
+    store.removeThread(refA);
+    expect(store.traverseFileJumpHistory(refA, "/other", "forward")).toBe(false);
+  });
+
+  it("does not record ordinary file opens or jumps to the same location", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "a.as", 1);
+    store.jumpToFile(refA, "/repo", location("a.as", 1), location("a.as", 1));
+    expect(store.traverseFileJumpHistory(refA, "/repo", "back")).toBe(false);
+  });
 });
 
 describe("rightPanelStore", () => {
@@ -371,17 +447,71 @@ describe("rightPanelStore", () => {
           kind: "file",
           relativePath: "src/index.ts",
           revealLine: null,
-          revealRequestId: 2,
+          revealRequestId: expect.any(Number),
         },
         {
           id: "file:README.md",
           kind: "file",
           relativePath: "README.md",
           revealLine: null,
-          revealRequestId: 1,
+          revealRequestId: expect.any(Number),
         },
       ],
     });
+  });
+
+  it("replaces the active file in place while explicit new tabs retain the other files", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "first.as");
+    store.openFile(refA, "second.as");
+    store.openBrowser(refA, "browser");
+    store.activateSurface(refA, "file:first.as");
+    store.replaceActiveFile(refA, "third.as");
+    const replaced = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(replaced.activeSurfaceId).toBe("file:third.as");
+    expect(replaced.surfaces.map((surface) => surface.id)).toEqual([
+      "file:third.as",
+      "file:second.as",
+      "browser:browser",
+    ]);
+    store.openFile(refA, "fourth.as");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.map(
+        (surface) => surface.id,
+      ),
+    ).toEqual(["file:third.as", "file:second.as", "browser:browser", "file:fourth.as"]);
+  });
+
+  it("activates an already-open file without duplicating it or closing its neighbor", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "first.as");
+    store.openFile(refA, "second.as");
+    store.replaceActiveFile(refA, "first.as");
+    const current = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(current.activeSurfaceId).toBe("file:first.as");
+    expect(current.surfaces.map((surface) => surface.id)).toEqual([
+      "file:first.as",
+      "file:second.as",
+    ]);
+  });
+
+  it("opens the first file from the explorer and never replaces non-file tabs or another thread", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "files");
+    store.replaceActiveFile(refA, "first.as");
+    store.open(refA, "diff");
+    store.replaceActiveFile(refA, "second.as");
+    store.replaceActiveFile(refB, "other.as");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.map(
+        (surface) => surface.id,
+      ),
+    ).toEqual(["file:first.as", "diff", "file:second.as"]);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refB).surfaces.map(
+        (surface) => surface.id,
+      ),
+    ).toEqual(["file:other.as"]);
   });
 
   it("opens an attachment as a file surface without the standalone explorer", () => {
@@ -441,7 +571,7 @@ describe("rightPanelStore", () => {
           kind: "file",
           relativePath: "src/index.ts",
           revealLine: 87,
-          revealRequestId: 2,
+          revealRequestId: expect.any(Number),
         },
       ],
     });
@@ -457,7 +587,7 @@ describe("rightPanelStore", () => {
           kind: "file",
           relativePath: "src/index.ts",
           revealLine: null,
-          revealRequestId: 3,
+          revealRequestId: expect.any(Number),
         },
       ],
     });
@@ -771,7 +901,7 @@ describe("rightPanelStore", () => {
           kind: "file",
           relativePath: "src/index.ts",
           revealLine: null,
-          revealRequestId: 1,
+          revealRequestId: expect.any(Number),
         },
       ],
     });
@@ -817,3 +947,159 @@ describe("rightPanelStore", () => {
     ).toEqual(["terminal:term-1", "browser:tab-b", "browser:tab-c"]);
   });
 });
+
+it("traverses a diff-to-file-to-file chain in both directions and restores the original diff", () => {
+  const store = useRightPanelStore.getState();
+  const from = {
+    path: "DiveMovement.cpp",
+    line: 165,
+    diff: { selection: { kind: "unstaged" as const }, side: "additions" as const },
+  };
+  store.jumpToFile(refA, "/repo", from, { path: "DiveMovement.cpp", line: 162 });
+  store.jumpToFile(
+    refA,
+    "/repo",
+    { path: "DiveMovement.cpp", line: 164 },
+    { path: "MeshTypes.h", line: 175 },
+  );
+  useDiffPanelStore.getState().selectBranchBaseRef(refA, "main");
+  store.traverseFileJumpHistory(refA, "/repo", "back");
+  expect(
+    selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
+  ).toMatchObject({ kind: "file", revealLine: 164 });
+  store.traverseFileJumpHistory(refA, "/repo", "back");
+  expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+    id: "diff",
+    kind: "diff",
+  });
+  expect(selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, refA)).toEqual({
+    kind: "unstaged",
+  });
+  expect(Object.values(useDiffPanelStore.getState().jumpRevealByThreadKey)).toEqual([
+    { path: "DiveMovement.cpp", line: 165, side: "additions", selection: { kind: "unstaged" } },
+  ]);
+  store.traverseFileJumpHistory(refA, "/repo", "forward");
+  expect(
+    selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
+  ).toMatchObject({ kind: "file", relativePath: "DiveMovement.cpp", revealLine: 162 });
+  store.traverseFileJumpHistory(refA, "/repo", "forward");
+  expect(
+    selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
+  ).toMatchObject({ kind: "file", relativePath: "MeshTypes.h", revealLine: 175 });
+});
+
+it("records a diff-to-Files jump even when its path and line stay the same", () => {
+  const store = useRightPanelStore.getState();
+  store.jumpToFile(
+    refA,
+    "/repo",
+    {
+      path: "a.cpp",
+      line: 10,
+      diff: { selection: { kind: "branch", baseRef: "main" }, side: "deletions" },
+    },
+    { path: "a.cpp", line: 10 },
+  );
+  store.closeSurface(refA, "diff");
+  expect(store.traverseFileJumpHistory(refA, "/repo", "back")).toBe(true);
+  expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)?.kind).toBe(
+    "diff",
+  );
+  const reveal = Object.values(useDiffPanelStore.getState().jumpRevealByThreadKey)[0]!;
+  expect(reveal.side).toBe("deletions");
+  useDiffPanelStore.getState().consumeJump(refA, reveal);
+  expect(Object.values(useDiffPanelStore.getState().jumpRevealByThreadKey)).toEqual([]);
+  store.jumpToFile(refA, "/repo", { path: "a.cpp", line: 10 }, { path: "b.cpp", line: 20 });
+  expect(store.traverseFileJumpHistory(refA, "/repo", "forward")).toBe(false);
+});
+
+it("Back closes only destination tabs created by the jump; Forward reopens them", () => {
+  const store = useRightPanelStore.getState();
+  store.openFile(refA, "a.cpp");
+  store.jumpToFile(refA, "/repo", { path: "a.cpp", line: 4 }, { path: "b.h", line: 10 });
+  store.traverseFileJumpHistory(refA, "/repo", "back");
+  const surfaces = () =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces;
+  expect(surfaces().some((surface) => surface.id === "file:b.h")).toBe(false);
+  store.traverseFileJumpHistory(refA, "/repo", "forward");
+  expect(surfaces().some((surface) => surface.id === "file:b.h")).toBe(true);
+  store.traverseFileJumpHistory(refA, "/repo", "back");
+  store.openFile(refA, "b.h");
+  store.openFile(refA, "a.cpp");
+  store.jumpToFile(refA, "/repo", { path: "a.cpp", line: 4 }, { path: "b.h", line: 10 });
+  store.traverseFileJumpHistory(refA, "/repo", "back");
+  expect(surfaces().some((surface) => surface.id === "file:b.h")).toBe(true);
+});
+
+it("restores the deletion side of a specific turn diff", () => {
+  const selection = {
+    kind: "turn" as const,
+    turnId: TurnId.make("turn-original"),
+    filePath: "old.as",
+    revealRequestId: 3,
+  };
+  useRightPanelStore.getState().jumpToFile(
+    refA,
+    "/repo",
+    {
+      path: "old.as",
+      line: 21,
+      diff: { selection, side: "deletions" },
+    },
+    { path: "api.as", line: 15 },
+  );
+  useDiffPanelStore.getState().selectTurn(refA, TurnId.make("turn-new"));
+  useRightPanelStore.getState().traverseFileJumpHistory(refA, "/repo", "back");
+  expect(selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, refA)).toEqual(
+    selection,
+  );
+  expect(Object.values(useDiffPanelStore.getState().jumpRevealByThreadKey)[0]).toMatchObject({
+    path: "old.as",
+    line: 21,
+    side: "deletions",
+  });
+  expect(
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.some(
+      (surface) => surface.id === "file:api.as",
+    ),
+  ).toBe(false);
+});
+
+it.each([false, true])(
+  "issues a fresh API reveal after Back closes its tab (diff origin: %s)",
+  (fromDiff) => {
+    const store = useRightPanelStore.getState();
+    const source = {
+      path: "assets/scripts/GiantRiverOtter.as",
+      line: 573,
+      ...(fromDiff
+        ? { diff: { selection: { kind: "unstaged" as const }, side: "additions" as const } }
+        : {}),
+    };
+    const target = { path: "assets/scripts/ScriptingAPI.as", line: 4839 };
+    if (fromDiff) store.open(refA, "diff");
+    else store.openFile(refA, source.path);
+    const active = () =>
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA);
+    const seen = new Set<number>();
+    for (const line of [4839, 4840, 4839]) {
+      store.jumpToFile(refA, "/repo", source, { ...target, line });
+      const api = active();
+      if (api?.kind !== "file") throw Error("Expected the API tab");
+      expect(api.relativePath).toBe(target.path);
+      expect(api.revealLine).toBe(line);
+      expect(seen.has(api.revealRequestId)).toBe(false);
+      seen.add(api.revealRequestId);
+      store.traverseFileJumpHistory(refA, "/repo", "back");
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.some(
+          (surface) => surface.id === `file:${target.path}`,
+        ),
+      ).toBe(false);
+    }
+    store.traverseFileJumpHistory(refA, "/repo", "forward");
+    const api = active();
+    if (api?.kind !== "file") throw Error("Expected the API tab");
+    expect(seen.has(api.revealRequestId)).toBe(false);
+  },
+);

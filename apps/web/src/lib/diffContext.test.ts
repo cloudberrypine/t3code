@@ -227,3 +227,45 @@ it.each([
     await expect(controller.loadDiffFiles!(file)).resolves.toBe(files);
   },
 );
+
+describe.each(["unified", "split"] as const)("%s whitespace-hidden context", (diffStyle) => {
+  it("expands gaps while retaining each side's actual whitespace", async () => {
+    const { oldFile, newFile, file } = partialFixture();
+    const files = {
+      oldFile: {
+        ...oldFile,
+        contents: oldFile.contents
+          .replace("line 20\n", "  line 20\n")
+          .replace("line 49\n", "\tline 49\n")
+          .replace("line 180\n", "line   180\n"),
+      },
+      newFile,
+    };
+    const strict = createDiffContextController(async () => files);
+    await expect(strict.loadDiffFiles!(file)).rejects.toThrow("no longer match");
+    const controller = createDiffContextController(async () => files, true);
+    const hydrated = hydratePartialDiff("clone", file, await controller.loadDiffFiles!(file));
+    const renderer = new DiffHunksRenderer({ diffStyle, collapsedContextThreshold: 0 });
+    await renderer.asyncRender(hydrated);
+    expect(renderer.renderDiff(hydrated)?.hunkData.find((h) => h.hunkIndex === 1)?.lines).toBe(62);
+    renderer.expandHunk(1, "up", 20);
+    expect(renderer.renderDiff(hydrated)?.hunkData.find((h) => h.hunkIndex === 1)?.lines).toBe(42);
+    expect(hydrated.deletionLines[48]).toBe("\tline 49\n");
+    expect(hydrated.additionLines[48]).toBe("line 49\n");
+    renderer.cleanUp();
+  });
+  it("still rejects changed code and line counts when whitespace is hidden", async () => {
+    const { oldFile, newFile, file } = partialFixture();
+    for (const contents of [
+      newFile.contents.replace("line 49\n", "other code\n"),
+      "\n" + newFile.contents,
+    ]) {
+      const controller = createDiffContextController(
+        async () => ({ oldFile, newFile: { ...newFile, contents } }),
+        true,
+      );
+      await expect(controller.loadDiffFiles!(file)).rejects.toThrow("no longer match");
+      expect(file.isPartial).toBe(true);
+    }
+  });
+});

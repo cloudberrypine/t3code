@@ -3259,3 +3259,57 @@ projectionSnapshotLayer("ProjectionSnapshotQuery imported sources", (it) => {
     }),
   );
 });
+
+projectionSnapshotLayer("question notification identity", (it) => {
+  const encodeQuestion = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+  it.effect("exposes the newest question ID only while user input is pending", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const query = yield* ProjectionSnapshotQuery;
+      const threadId = ThreadId.make("question-notifications");
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES ('question-project', 'Questions', '/tmp/question-project', '[]',
+          '2026-09-12T15:00:00.000Z', '2026-09-12T15:00:00.000Z')
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, created_at, updated_at,
+          pending_user_input_count
+        ) VALUES (${threadId}, 'question-project', 'Async questions',
+          '{"provider":"codex","model":"gpt-6-astra"}',
+          '2026-09-12T15:00:00.000Z', '2026-09-12T15:00:00.000Z', 1)
+      `;
+      for (const sequence of [1, 2]) {
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at, sequence
+          ) VALUES (${`question-${sequence}`}, ${threadId}, NULL, 'info',
+            'user-input.requested', 'User input requested',
+            ${encodeQuestion({ requestId: `codex-async:thread:item-${sequence}`, responseMode: "message" })},
+            '2026-09-12T15:17:24.255Z', ${sequence})
+        `;
+        const shell = Option.getOrThrow(yield* query.getThreadShellById(threadId));
+        assert.equal(shell.latestUserInputRequestId, `codex-async:thread:item-${sequence}`);
+        assert.equal(shell.hasPendingUserInput, true);
+        assert.equal(shell.latestTurn, null);
+      }
+      const snapshot = yield* query.getShellSnapshot();
+      assert.equal(
+        snapshot.threads.find((thread) => thread.id === threadId)?.latestUserInputRequestId,
+        "codex-async:thread:item-2",
+      );
+      yield* sql`UPDATE projection_threads SET archived_at = '2026-09-12T15:18:00.000Z' WHERE thread_id = ${threadId}`;
+      const archived = yield* query.getArchivedShellSnapshot();
+      assert.equal(
+        archived.threads.find((thread) => thread.id === threadId)?.latestUserInputRequestId,
+        "codex-async:thread:item-2",
+      );
+      yield* sql`UPDATE projection_threads SET archived_at = NULL, pending_user_input_count = 0 WHERE thread_id = ${threadId}`;
+      const resolved = Option.getOrThrow(yield* query.getThreadShellById(threadId));
+      assert.equal(resolved.latestUserInputRequestId, undefined);
+      assert.equal(resolved.hasPendingUserInput, false);
+    }),
+  );
+});

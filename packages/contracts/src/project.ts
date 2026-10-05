@@ -200,8 +200,20 @@ export const ProjectReadFileInput = Schema.Struct({
   // Workspace-relative, or an absolute host path for a file outside the
   // workspace. Only workspace-relative paths can be written back.
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+  // Structured previews need a complete document; ordinary source reads remain capped at 1 MB.
+  maxBytes: Schema.optionalKey(PositiveInt.check(Schema.isLessThanOrEqualTo(4 * 1024 * 1024))),
 });
 export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
+
+export const ProjectWatchFileInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectWatchFileInput = typeof ProjectWatchFileInput.Type;
+
+// The initial notification closes the gap between opening a preview and subscribing.
+export const ProjectFileChange = Schema.Struct({ revision: NonNegativeInt });
+export type ProjectFileChange = typeof ProjectFileChange.Type;
 
 export const ProjectReadFileResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,

@@ -1,3 +1,9 @@
+import { diffJumpExpansion } from "~/lib/diffJumpReveal";
+import { useAtomValue } from "@effect/atom-react";
+import { primaryServerKeybindingsAtom } from "~/state/server";
+import { fileNavigationAction } from "~/lib/fileJumpHistory";
+import { useRightPanelStore } from "~/rightPanelStore";
+import type { DiffPanelSelection, DiffJumpReveal } from "~/diffPanelStore";
 /* oxlint-disable eslint/no-restricted-imports -- This is the single styled adapter around Pierre's raw viewer. */
 import {
   CodeView,
@@ -16,6 +22,11 @@ import {
   useState,
   type Ref,
 } from "react";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import { isCppPath } from "@t3tools/shared/cppNavigation";
+import { useDefinitionNavigation } from "~/hooks/useDefinitionNavigation";
+import { createDiffDefinitionNavigation } from "~/lib/diffDefinitionNavigation";
+import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import type { CodeViewItem } from "@pierre/diffs";
 
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
@@ -29,6 +40,7 @@ import {
 
 import { useDiffSearch } from "./useDiffSearch";
 import { findAnchoredDiffItem } from "./diffScrollAnchor";
+import { createDiffScrollMemory } from "./diffScrollMemory";
 
 import { createDiffContextController, DIFF_CONTEXT_LINES } from "~/lib/diffContext";
 
@@ -118,14 +130,14 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 
 [data-diffs-header] {
   --diff-header-bg: light-dark(
-    color-mix(in srgb, var(--code-background) 94%, var(--primary)),
-    color-mix(in srgb, var(--code-background) 85%, var(--primary))
+    color-mix(in srgb, var(--code-background) 91%, var(--primary)),
+    color-mix(in srgb, var(--code-background) 81%, var(--primary))
   );
   position: sticky !important;
   top: 0;
   z-index: 4;
   background-color: var(--diff-header-bg) !important;
-  border-bottom-color: color-mix(in srgb, var(--code-background) 80%, var(--primary)) !important;
+  border-bottom-color: color-mix(in srgb, var(--code-background) 76%, var(--primary)) !important;
   align-items: center !important;
   font-family: var(--font-sans) !important;
   font-size: 12px !important;
@@ -135,10 +147,10 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   padding-inline: 8px 12px !important;
 }
 
-[data-diffs-header]:hover {
+[data-diffs-header]:is(:hover, :focus-within) {
   background-color: light-dark(
-    color-mix(in srgb, var(--code-background) 91%, var(--primary)),
-    color-mix(in srgb, var(--code-background) 81%, var(--primary))
+    color-mix(in srgb, var(--code-background) 88%, var(--primary)),
+    color-mix(in srgb, var(--code-background) 77%, var(--primary))
   ) !important;
 }
 
@@ -320,6 +332,12 @@ type StyledDiffCodeViewProps<LAnnotation> = (
    */
   readonly unsafeCSSExtra?: string;
   readonly workspace?: AngelScriptWorkspace;
+  readonly navigationThread?: ScopedThreadRef;
+  readonly navigationSelection?: DiffPanelSelection;
+  readonly navigationReveal?: DiffJumpReveal;
+  readonly onNavigationRestored?: () => void;
+  readonly ignoreWhitespace?: boolean;
+  readonly scrollMemoryKey?: string;
 };
 
 /** The shared web CodeView surface: app styling and virtualized geometry stay paired here. */
@@ -332,14 +350,24 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
   className,
   unsafeCSSExtra,
   workspace,
+  navigationThread,
+  navigationSelection,
+  navigationReveal,
+  onNavigationRestored,
+  ignoreWhitespace = false,
+  scrollMemoryKey,
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const originalItems = props.items ?? props.initialItems ?? [];
   const hasScripts = originalItems.some((item) =>
     isAngelScriptPath(item.type === "file" ? item.file.name : item.fileDiff.name),
   );
   const api = useAngelScript(hasScripts ? workspace : undefined);
-  const painter = useMemo(() => createAngelScriptPainter(api), [api]);
+  const painter = useMemo(
+    () => createAngelScriptPainter(api, options?.loadDiffFiles),
+    [api, options?.loadDiffFiles],
+  );
   useEffect(() => () => painter.dispose(), [painter]);
   const items = useMemo(
     () =>
@@ -369,9 +397,29 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
     [originalItems, api],
   );
   const context = useMemo(
-    () => createDiffContextController(options?.loadDiffFiles),
-    [options?.loadDiffFiles],
+    () => createDiffContextController(options?.loadDiffFiles, ignoreWhitespace),
+    [options?.loadDiffFiles, ignoreWhitespace],
   );
+  const navigate = useDefinitionNavigation(
+    workspace,
+    navigationThread,
+    api,
+    true,
+    navigationSelection,
+  );
+  const navigation = useMemo(
+    () =>
+      createDiffDefinitionNavigation(navigate, options?.loadDiffFiles, () =>
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to load definition source. Refresh the diff and try again.",
+          }),
+        ),
+      ),
+    [navigate, options?.loadDiffFiles],
+  );
+  useEffect(() => () => navigation.dispose(), [navigation]);
   const internalRef = useRef<CodeViewHandle<LAnnotation>>(null);
   const [viewer, setViewer] = useState<CodeViewHandle<LAnnotation> | null>(null);
   const attachViewer = useCallback((handle: CodeViewHandle<LAnnotation> | null) => {
@@ -379,6 +427,31 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
     setViewer(handle);
   }, []);
   useImperativeHandle(viewerRef, () => viewer!, [viewer]);
+  const scrollMemory = useMemo(() => createDiffScrollMemory(scrollMemoryKey), [scrollMemoryKey]);
+  const restoreFrame = useRef<number | null>(null);
+  const restoreScroll = useCallback(() => {
+    if (navigationReveal) {
+      scrollMemory.cancel();
+      return;
+    }
+    if (restoreFrame.current !== null) return;
+    restoreFrame.current = requestAnimationFrame(() => {
+      restoreFrame.current = null;
+      const instance = internalRef.current?.getInstance();
+      if (instance) {
+        const restoring = scrollMemory.isRestoring();
+        scrollMemory.restore(instance, items, onRevealItem);
+        if (!restoring) scrollMemory.save(instance, items);
+      }
+    });
+  }, [scrollMemory, navigationReveal, items, onRevealItem]);
+  useEffect(() => {
+    if (viewer) restoreScroll();
+    return () => {
+      if (restoreFrame.current !== null) cancelAnimationFrame(restoreFrame.current);
+      restoreFrame.current = null;
+    };
+  }, [restoreScroll, viewer]);
   const activeFile = useRef<string | null | undefined>(undefined);
   const activeFrame = useRef<number | null>(null);
   const updateActiveFile = useCallback(() => {
@@ -409,11 +482,47 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
     internalRef,
     onRevealItem,
   );
+  const revealFrame = useRef<number | null>(null);
+  const expandedJump = useRef<DiffJumpReveal | undefined>(undefined);
+  const handledJump = useRef<DiffJumpReveal | undefined>(undefined);
+  useEffect(() => {
+    if (!navigationReveal) return;
+    return () => {
+      if (revealFrame.current !== null) cancelAnimationFrame(revealFrame.current);
+      revealFrame.current = null;
+    };
+  }, [navigationReveal]);
+  useEffect(() => {
+    if (!navigationReveal || !viewer?.getInstance() || handledJump.current === navigationReveal)
+      return;
+    const item = items.find(
+      (entry) =>
+        entry.type === "diff" && resolveFileDiffPath(entry.fileDiff) === navigationReveal.path,
+    );
+    if (!item || item.collapsed) return;
+    viewer.scrollTo({ type: "item", id: item.id, align: "start" });
+  }, [items, navigationReveal, viewer]);
   return (
     <DiffWorkerPoolProvider>
       <div
         ref={pane}
         {...findShortcut}
+        onWheelCapture={() => scrollMemory.cancel()}
+        onPointerDownCapture={() => scrollMemory.cancel()}
+        onKeyDownCapture={(event) => {
+          scrollMemory.cancel();
+          findShortcut.onKeyDownCapture(event);
+          if (event.defaultPrevented) return;
+          if (!navigationThread || !workspace) return;
+          const action = fileNavigationAction(event.nativeEvent, keybindings);
+          if (action !== "back" && action !== "forward") return;
+          event.preventDefault();
+          event.stopPropagation();
+          navigation.cancelPending();
+          useRightPanelStore
+            .getState()
+            .traverseFileJumpHistory(navigationThread, workspace.cwd, action);
+        }}
         className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col outline-none"
       >
         {popup}
@@ -421,6 +530,7 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
           {...(props.items !== undefined ? { ...props, items } : { ...props, initialItems: items })}
           renderHeaderMetadata={props.renderHeaderMetadata ?? renderDiffHeaderMetadata}
           onScroll={(scrollTop, viewer) => {
+            restoreScroll();
             updateActiveFile();
             onScroll?.(scrollTop, viewer);
           }}
@@ -439,6 +549,7 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
             collapsedContextThreshold: 0,
             ...(context.loadDiffFiles ? { loadDiffFiles: context.loadDiffFiles } : {}),
             onPostRender(node, instance, phase, itemContext) {
+              if (phase !== "unmount") restoreScroll();
               updateActiveFile();
               onPostRender();
               painter.paint(
@@ -449,12 +560,67 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
                 phase,
               );
               if (itemContext.type === "diff") {
+                const diff = itemContext.instance.fileDiff;
+                navigation.attach(
+                  node,
+                  workspace &&
+                    navigationThread &&
+                    diff &&
+                    (isCppPath(diff.name) ||
+                      usesAngelScript(
+                        diff.name,
+                        diff.additionLines.slice(0, 100).join("") +
+                          diff.deletionLines.slice(0, 100).join(""),
+                        api,
+                      ))
+                    ? diff
+                    : undefined,
+                  phase,
+                );
                 context.render(
                   node,
                   itemContext.instance,
                   phase,
                   itemContext.item.collapsed ?? false,
                 );
+                if (
+                  navigationReveal &&
+                  phase !== "unmount" &&
+                  diff &&
+                  !itemContext.item.collapsed &&
+                  resolveFileDiffPath(diff) === navigationReveal.path &&
+                  handledJump.current !== navigationReveal &&
+                  revealFrame.current === null
+                ) {
+                  const expansion = diffJumpExpansion(
+                    diff,
+                    navigationReveal.line,
+                    navigationReveal.side,
+                  );
+                  if (expansion && expandedJump.current !== navigationReveal) {
+                    expandedJump.current = navigationReveal;
+                    itemContext.instance.expandHunk(
+                      expansion.index,
+                      expansion.direction,
+                      expansion.count,
+                    );
+                  } else if (!expansion || !diff.isPartial) {
+                    const id = itemContext.item.id;
+                    revealFrame.current = requestAnimationFrame(() => {
+                      revealFrame.current = null;
+                      handledJump.current = navigationReveal;
+                      pane.current?.focus({ preventScroll: true });
+                      internalRef.current?.scrollTo({
+                        type: "line",
+                        id,
+                        lineNumber: navigationReveal.line,
+                        side: navigationReveal.side,
+                        align: "center",
+                      });
+                      onNavigationRestored?.();
+                    });
+                  }
+                }
                 options?.onPostRender?.(node, itemContext.instance, phase, itemContext);
               } else {
                 options?.onPostRender?.(node, itemContext.instance, phase, itemContext);

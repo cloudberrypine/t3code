@@ -1,4 +1,5 @@
 import type { EnvironmentId, ReviewDiffPreviewFile, ThreadId } from "@t3tools/contracts";
+import { encodeBase64Url } from "effect/Encoding";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -415,13 +416,19 @@ export function ReviewSheet(props: ReviewSheetProps) {
   useEffect(() => {
     showAuxiliaryPane("inspector");
   }, [environmentId, showAuxiliaryPane, threadId]);
-  const { error, reviewSections, selectedSection, refreshSelectedSection, selectSection } =
-    useReviewSections({
-      enabled: isEnvironmentReady,
-      environmentId,
-      threadId,
-      reviewCache,
-    });
+  const {
+    error,
+    checkpoints: reviewCheckpoints,
+    reviewSections,
+    selectedSection,
+    refreshSelectedSection,
+    selectSection,
+  } = useReviewSections({
+    enabled: isEnvironmentReady,
+    environmentId,
+    threadId,
+    reviewCache,
+  });
   useReviewDiffPrewarming({
     threadKey: reviewCache.threadKey,
     sections: reviewSections,
@@ -504,7 +511,61 @@ export function ReviewSheet(props: ReviewSheetProps) {
     selectedSection,
     nativeReviewDiffData,
   });
+  const selectedThreadId = selectedThread?.id;
+  const selectedThreadEnvironmentId = selectedThread?.environmentId;
+  const loadScriptRevision = useMemo(() => {
+    if (
+      !gitMenuAvailable ||
+      !selectedThreadCwd ||
+      !selectedThreadId ||
+      selectedThreadEnvironmentId !== environmentId
+    )
+      return undefined;
+    const checkpoint =
+      selectedSection?.kind === "turn"
+        ? reviewCheckpoints.find(
+            (entry) => `turn:${entry.checkpointTurnCount}` === selectedSection.id,
+          )
+        : undefined;
+    const previous =
+      checkpoint?.checkpointTurnCount === 1
+        ? `refs/t3/checkpoints/${encodeBase64Url(selectedThreadId)}/turn/0`
+        : reviewCheckpoints.find(
+            (entry) => entry.checkpointTurnCount === (checkpoint?.checkpointTurnCount ?? 0) - 1,
+          )?.checkpointRef;
+    if (!selectedGitSource && (!checkpoint || !previous)) return undefined;
+    return async (path: string) => {
+      const file = reviewFiles.find((entry) => entry.path === path);
+      if (!file) return null;
+      const result = await getDiffFileContents({
+        environmentId,
+        input: {
+          cwd: selectedThreadCwd,
+          sourceKind: selectedGitSource?.kind ?? "branch-range",
+          baseRef: selectedGitSource ? selectedGitSource.baseRef : previous!,
+          headRef: selectedGitSource ? selectedGitSource.headRef : checkpoint!.checkpointRef,
+          ...(!selectedGitSource ? { baseRefMode: "exact" as const } : {}),
+          changeType: file.changeType,
+          oldPath: file.previousPath ?? file.path,
+          newPath: file.path,
+        },
+      });
+      return result._tag === "Success" ? result.value : null;
+    };
+  }, [
+    gitMenuAvailable,
+    selectedThreadCwd,
+    selectedThreadId,
+    selectedThreadEnvironmentId,
+    reviewCheckpoints,
+    environmentId,
+    selectedSection,
+    selectedGitSource,
+    reviewFiles,
+    getDiffFileContents,
+  ]);
   const nativeBridge = useNativeReviewDiffBridge({
+    ...(loadScriptRevision ? { loadScriptRevision } : {}),
     ...(gitMenuAvailable && selectedThread?.environmentId === environmentId && selectedThreadCwd
       ? { workspace: { environmentId, cwd: selectedThreadCwd, revision: selectedSection?.diff } }
       : {}),

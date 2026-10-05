@@ -37,6 +37,7 @@ import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -649,6 +650,7 @@ function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType 
   if (type.includes("dynamic tool")) return "dynamic_tool_call";
   if (type.includes("collab")) return "collab_agent_tool_call";
   if (type.includes("web search")) return "web_search";
+  if (type === "image generation") return "image_generation";
   if (type.includes("image")) return "image_view";
   if (type.includes("review entered")) return "review_entered";
   if (type.includes("review exited")) return "review_exited";
@@ -756,6 +758,10 @@ function itemTitle(
       return "Web search";
     case "image_view":
       return "Image view";
+    case "image_generation":
+      return item && "status" in item && item.status === "completed"
+        ? "Generated image"
+        : "Image generation";
     case "error":
       return "Error";
     default:
@@ -1014,16 +1020,26 @@ function mapItemLifecycle(
           : "completed"
         : undefined;
 
+  // The image file is served separately. Do not persist its base64 bytes in
+  // lifecycle activity or duplicate them in the normalized raw event.
+  const lifecycleEvent =
+    item.type === "imageGeneration"
+      ? { ...event, payload: { ...payload, item: { ...item, result: "" } } }
+      : event;
+
   return {
-    ...runtimeEventBase(event, canonicalThreadId),
+    ...runtimeEventBase(lifecycleEvent, canonicalThreadId),
     type: lifecycle,
     payload: {
       itemType,
       ...(status ? { status } : {}),
       ...(title ? { title } : {}),
       ...(detail ? { detail } : {}),
+      ...(item.type === "imageGeneration" && item.status === "completed" && item.savedPath
+        ? { imagePath: item.savedPath }
+        : {}),
       ...toolPresentation,
-      ...(event.payload !== undefined ? { data: event.payload } : {}),
+      ...(lifecycleEvent.payload !== undefined ? { data: lifecycleEvent.payload } : {}),
     },
   };
 }
@@ -2214,6 +2230,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("codex");
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* Effect.service(ServerConfig);
@@ -2339,35 +2356,83 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             }
 
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId).map((runtimeEvent) => {
-              if (runtimeEvent.type === "turn.completed" && runtimeEvent.turnId) {
-                return {
-                  ...runtimeEvent,
-                  payload: {
-                    ...runtimeEvent.payload,
-                    tokenUsage: completeCodexTurnTokenUsage(
-                      turnTokenUsage,
-                      String(runtimeEvent.turnId),
-                      runtimeEvent.payload.state === "completed",
+            // Codex can return image bytes without saving a file.
+            // Materialize those on the host before emitting the compact lifecycle.
+            let normalizedEvent = event;
+            if (
+              event.method === "item/completed" &&
+              asUnknownRecord(asUnknownRecord(event.payload)?.item)?.type === "imageGeneration"
+            ) {
+              const payload = readPayload(
+                EffectCodexSchema.V2ItemCompletedNotification,
+                event.payload,
+              );
+              const item = payload?.item;
+              if (
+                item?.type === "imageGeneration" &&
+                item.status === "completed" &&
+                !item.savedPath &&
+                item.result.length > 0
+              ) {
+                const imageKey = NodeCrypto.createHash("sha256")
+                  .update(`${event.threadId}:${item.id}`)
+                  .digest("hex");
+                const savedPath = path.join(
+                  serverConfig.attachmentsDir,
+                  `generated-${imageKey}.png`,
+                );
+                const saved = yield* fileSystem
+                  .makeDirectory(serverConfig.attachmentsDir, { recursive: true })
+                  .pipe(
+                    Effect.andThen(
+                      fileSystem.writeFile(savedPath, Buffer.from(item.result, "base64")),
                     ),
-                  },
-                } satisfies ProviderRuntimeEvent;
-              }
-              if (runtimeEvent.type === "turn.aborted" && runtimeEvent.turnId) {
-                return {
-                  ...runtimeEvent,
-                  payload: {
-                    ...runtimeEvent.payload,
-                    tokenUsage: completeCodexTurnTokenUsage(
-                      turnTokenUsage,
-                      String(runtimeEvent.turnId),
-                      false,
+                    Effect.as(true),
+                    Effect.catch((cause) =>
+                      Effect.logWarning("Failed to save generated image", { cause }).pipe(
+                        Effect.as(false),
+                      ),
                     ),
-                  },
-                } satisfies ProviderRuntimeEvent;
+                  );
+                if (saved) {
+                  normalizedEvent = {
+                    ...event,
+                    payload: { ...payload, item: { ...item, savedPath } },
+                  };
+                }
               }
-              return runtimeEvent;
-            });
+            }
+            const runtimeEvents = mapToRuntimeEvents(normalizedEvent, event.threadId).map(
+              (runtimeEvent) => {
+                if (runtimeEvent.type === "turn.completed" && runtimeEvent.turnId) {
+                  return {
+                    ...runtimeEvent,
+                    payload: {
+                      ...runtimeEvent.payload,
+                      tokenUsage: completeCodexTurnTokenUsage(
+                        turnTokenUsage,
+                        String(runtimeEvent.turnId),
+                        runtimeEvent.payload.state === "completed",
+                      ),
+                    },
+                  } satisfies ProviderRuntimeEvent;
+                }
+                if (runtimeEvent.type === "turn.aborted" && runtimeEvent.turnId) {
+                  return {
+                    ...runtimeEvent,
+                    payload: {
+                      ...runtimeEvent.payload,
+                      tokenUsage: completeCodexTurnTokenUsage(
+                        turnTokenUsage,
+                        String(runtimeEvent.turnId),
+                        false,
+                      ),
+                    },
+                  } satisfies ProviderRuntimeEvent;
+                }
+                return runtimeEvent;
+              },
+            );
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,

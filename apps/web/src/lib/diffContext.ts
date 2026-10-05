@@ -12,7 +12,11 @@ export const DIFF_CONTEXT_LINES = 20;
 type DiffInstance = Pick<FileDiff<unknown>, "fileDiff" | "expandHunk">;
 
 /** Validate before Pierre hydrates in place: a failed hydration otherwise poisons scroll layout. */
-function validateLoadedContext(file: FileDiffMetadata, files: FileDiffLoadedFiles) {
+function validateLoadedContext(
+  file: FileDiffMetadata,
+  files: FileDiffLoadedFiles,
+  ignoreWhitespace: boolean,
+) {
   if (!file.isPartial || (file.type !== "change" && file.type !== "rename-changed")) return;
   const mismatch = () => {
     throw new Error(
@@ -32,7 +36,12 @@ function validateLoadedContext(file: FileDiffMetadata, files: FileDiffLoadedFile
     if (count < 0 || leftStart + count > left.length || rightStart + count > right.length)
       return false;
     for (let offset = 0; offset < count; offset++) {
-      if (left[leftStart + offset] !== right[rightStart + offset]) return false;
+      const a = left[leftStart + offset]!;
+      const b = right[rightStart + offset]!;
+      // Git -w may put text from the opposite side in a context row. Keep line counts
+      // exact, while accepting the same whitespace equivalence as the displayed patch.
+      if (a !== b && (!ignoreWhitespace || a.replace(/[^\S\n]/g, "") !== b.replace(/[^\S\n]/g, "")))
+        return false;
     }
     return true;
   };
@@ -80,7 +89,10 @@ export function getDiffContextActions(first: boolean, last: boolean, remaining: 
 }
 
 /** Loads context for mounted, expanded files and decorates Pierre's virtualized separators. */
-export function createDiffContextController(loader?: FileDiffContentsLoader) {
+export function createDiffContextController(
+  loader?: FileDiffContentsLoader,
+  ignoreWhitespace = false,
+) {
   const requests = new WeakMap<FileDiffMetadata, ReturnType<FileDiffContentsLoader>>();
   const failures = new WeakSet<FileDiffMetadata>();
   const attempted = new WeakMap<DiffInstance, FileDiffMetadata>();
@@ -93,7 +105,7 @@ export function createDiffContextController(loader?: FileDiffContentsLoader) {
         const request = Promise.resolve()
           .then(() => loader(file))
           .then((files) => {
-            validateLoadedContext(file, files);
+            validateLoadedContext(file, files, ignoreWhitespace);
             return files;
           })
           .catch((error: unknown) => {

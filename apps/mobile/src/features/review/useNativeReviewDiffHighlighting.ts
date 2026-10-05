@@ -61,7 +61,14 @@ export function useNativeReviewDiffHighlighting(input: {
     if (enabled && rows.length > 0) {
       setVisibleHighlightRequest((request) => request + 1);
     }
-  }, [enabled, resetKey, rows.length, semantics]);
+  }, [enabled, resetKey, rows.length]);
+
+  useEffect(() => {
+    // Full-revision semantics may arrive while scrolled deep into the file.
+    // Repaint the current viewport without moving the highlight request to row zero.
+    highlightedRowIdsRef.current = new Set();
+    if (enabled) setVisibleHighlightRequest((request) => request + 1);
+  }, [enabled, semantics]);
 
   useEffect(() => {
     if (!enabled || rows.length === 0) {

@@ -388,6 +388,122 @@ describe("pools", () => {
     expect(accounts[0]?.limits.windows[0]?.usedPercent).toBe(55);
   });
 
+  it.each([
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+  ])(
+    "keeps the freshest Fable weekly limit across partial environment snapshots ordered %j",
+    (...order) => {
+      const fable = { ...weekly, id: "seven_day_fable", label: "Weekly · Fable" };
+      const reads = [
+        { checkedAt: "2026-09-03T10:00:00.000Z", windows: [{ ...fable, usedPercent: 10 }] },
+        {
+          checkedAt: "2026-09-03T12:00:00.000Z",
+          windows: [
+            { ...window, usedPercent: 70 },
+            { ...weekly, usedPercent: 20 },
+          ],
+        },
+        { checkedAt: "2026-09-03T11:00:00.000Z", windows: [{ ...fable, usedPercent: 45 }] },
+      ];
+      const input = new Map(
+        order.map((index) => [
+          EnvironmentId.make(`env-${index}`),
+          {
+            ...laptop,
+            serverConfig: {
+              providers: [
+                provider({
+                  driver: claude,
+                  instanceId: ProviderInstanceId.make("claude"),
+                  auth: { status: "authenticated", email: "same@example.com" },
+                  usageLimits: reads[index]!,
+                }),
+              ],
+            },
+          },
+        ]),
+      );
+      const accounts = collectLimitAccounts(input);
+      expect(accounts).toHaveLength(1);
+      const pools = collectLimitPools(accounts, now);
+      expect(pools[0]?.windows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "five_hour", usedPercent: 70 }),
+          expect.objectContaining({ id: "seven_day", usedPercent: 20 }),
+          expect.objectContaining({
+            id: "seven_day_fable",
+            label: "Weekly · Fable",
+            usedPercent: 45,
+            remainingPercent: 55,
+          }),
+        ]),
+      );
+      expect(pools[0]?.windows).toHaveLength(3);
+    },
+  );
+
+  it("keeps Fable first among Claude weeklies without changing provider or session order", () => {
+    const input = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          ...laptop,
+          serverConfig: {
+            providers: [
+              provider({ usageLimits: { checkedAt, windows: [window] } }),
+              provider({
+                driver: claude,
+                instanceId: ProviderInstanceId.make("claude"),
+                auth: { status: "authenticated", email: "same@example.com" },
+                usageLimits: {
+                  checkedAt,
+                  windows: [
+                    { ...weekly, id: "seven_day_fable", label: "Weekly · Fable", usedPercent: 31 },
+                  ],
+                },
+              }),
+            ],
+            usageLimitSources: [
+              {
+                ...source,
+                accounts: [
+                  {
+                    id: "claude-account",
+                    driver: claude,
+                    email: "same@example.com",
+                    usageLimits: {
+                      checkedAt: "2026-09-03T12:00:00.000Z",
+                      windows: [window, { ...weekly, usedPercent: 16 }],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const pools = collectLimitPools(collectLimitAccounts(input), now);
+    expect(pools.map((pool) => pool.driver)).toEqual([ProviderDriverKind.make("codex"), claude]);
+    expect(pools[1]?.windows.map((window) => window.id)).toEqual([
+      "five_hour",
+      "seven_day_fable",
+      "seven_day",
+    ]);
+    expect(pools[1]?.windows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "seven_day", usedPercent: 16 }),
+        expect.objectContaining({ id: "seven_day_fable", usedPercent: 31 }),
+      ]),
+    );
+    expect(pools[1]?.accounts).toHaveLength(1);
+  });
+
   it("takes windows from a fresher hub read but credits and redeem from the native instance", () => {
     const native = provider({
       driver: claude,

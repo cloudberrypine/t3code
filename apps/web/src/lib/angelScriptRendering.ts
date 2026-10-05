@@ -1,6 +1,7 @@
-import type { FileContents, FileDiffMetadata } from "@pierre/diffs";
+import type { FileContents, FileDiffMetadata, FileDiffContentsLoader } from "@pierre/diffs";
 import {
   analyzeAngelScript,
+  createAngelScriptRevisionSemantics,
   angelScriptColors,
   isAngelScriptPath,
   type AngelScriptApi,
@@ -10,8 +11,9 @@ import { textRange } from "~/components/diffs/diffSearch";
 
 export const ANGELSCRIPT_CSS = `
 [data-code] [data-line][data-angelscript-await] {
-  background-color: light-dark(${angelScriptColors.light.background}, ${angelScriptColors.dark.background}) !important;
+  background-color: color-mix(in srgb, light-dark(${angelScriptColors.light.background}, ${angelScriptColors.dark.background}) 50%, transparent) !important;
 }
+::highlight(as-reference) { background-color: light-dark(#d6e5f7, #374c68); }
 ::highlight(as-type) { color: light-dark(#156b78, #7dcbd4); }
 ::highlight(as-constant) { color: light-dark(#915324, #e9af78); }
 ::highlight(as-global) { color: light-dark(#925188, #d8a3d2); }
@@ -53,10 +55,26 @@ function analyzeLines(contents: string, api: AngelScriptApi): LineTokens {
   return lines;
 }
 
-export function createAngelScriptPainter(api: AngelScriptApi | null) {
+export function createAngelScriptPainter(
+  api: AngelScriptApi | null,
+  loadFiles?: FileDiffContentsLoader,
+) {
+  let generation = 0;
+  const mounted = new Map<HTMLElement, FileContents | FileDiffMetadata>();
+  let loading = new WeakSet<FileDiffMetadata>();
+  const revisions = new WeakMap<
+    FileDiffMetadata,
+    ReturnType<typeof createAngelScriptRevisionSemantics>
+  >();
   const cache = new WeakMap<
     object,
-    { source: unknown; partial?: boolean; additions: LineTokens; deletions: LineTokens }
+    {
+      source: unknown;
+      deletionSource?: unknown;
+      partial?: boolean;
+      additions: LineTokens;
+      deletions: LineTokens;
+    }
   >();
   const painted = new Map<HTMLElement, Array<{ kind: string; range: Range }>>();
   function clear(node: HTMLElement) {
@@ -67,15 +85,55 @@ export function createAngelScriptPainter(api: AngelScriptApi | null) {
   function paint(node: HTMLElement, file?: FileContents | FileDiffMetadata, phase?: string) {
     if (typeof CSS === "undefined" || !CSS.highlights) return;
     clear(node);
-    if (phase === "unmount") return;
+    if (phase === "unmount") {
+      mounted.delete(node);
+      return;
+    }
     const root = node.shadowRoot ?? node;
     for (const row of root.querySelectorAll("[data-angelscript-await]"))
       row.removeAttribute("data-angelscript-await");
-    if (!api || !file || !isAngelScriptPath(file.name)) return;
+    if (!api || !file || !isAngelScriptPath(file.name)) {
+      mounted.delete(node);
+      return;
+    }
+    mounted.set(node, file);
     const diff = "hunks" in file ? file : null;
+    if (
+      diff?.isPartial &&
+      loadFiles &&
+      !loading.has(diff) &&
+      root.querySelector("[data-code] [data-line]")
+    ) {
+      loading.add(diff);
+      const requestGeneration = generation;
+      void loadFiles(diff)
+        .then((files) => {
+          if (requestGeneration !== generation) return;
+          revisions.set(
+            diff,
+            createAngelScriptRevisionSemantics(
+              {
+                oldContents: files.oldFile?.contents ?? "",
+                newContents: files.newFile?.contents ?? "",
+              },
+              api,
+            ),
+          );
+          cache.delete(diff);
+          for (const [target, current] of mounted) if (current === diff) paint(target, current);
+        })
+        .catch(() => {
+          /* Keep the available hunk highlighting if the revision cannot be read. */
+        });
+    }
     const source = diff ? diff.additionLines : (file as FileContents).contents;
     let entry = cache.get(file);
-    if (!entry || entry.source !== source || entry.partial !== diff?.isPartial) {
+    if (
+      !entry ||
+      entry.source !== source ||
+      entry.deletionSource !== diff?.deletionLines ||
+      entry.partial !== diff?.isPartial
+    ) {
       const additions = new Map<number, AngelScriptSemanticToken[]>();
       const deletions = new Map<number, AngelScriptSemanticToken[]>();
       if (!diff) {
@@ -93,6 +151,21 @@ export function createAngelScriptPainter(api: AngelScriptApi | null) {
             for (const hunk of diff.hunks) {
               const start = hunk[`${side}LineIndex`];
               const count = hunk[`${side}Count`];
+              const revision = revisions.get(diff);
+              if (revision) {
+                for (let i = 0; i < count; i++) {
+                  const line = hunk[`${side}Start`] + i;
+                  target.set(
+                    line,
+                    revision(
+                      side === "addition" ? "additions" : "deletions",
+                      line,
+                      content[start + i] ?? "",
+                    ),
+                  );
+                }
+                continue;
+              }
               for (const [line, tokens] of analyzeLines(
                 content.slice(start, start + count).join(""),
                 api,
@@ -103,7 +176,12 @@ export function createAngelScriptPainter(api: AngelScriptApi | null) {
           }
         }
       }
-      entry = { source, ...(diff ? { partial: diff.isPartial } : {}), additions, deletions };
+      entry = {
+        source,
+        ...(diff ? { partial: diff.isPartial, deletionSource: diff.deletionLines } : {}),
+        additions,
+        deletions,
+      };
       cache.set(file, entry);
     }
     const ranges: Array<{ kind: string; range: Range }> = [];
@@ -130,6 +208,10 @@ export function createAngelScriptPainter(api: AngelScriptApi | null) {
   return {
     paint,
     dispose() {
+      // Effect cleanup can be replayed by React StrictMode before this painter is reused.
+      generation++;
+      loading = new WeakSet();
+      mounted.clear();
       if (typeof CSS === "undefined" || !CSS.highlights) return;
       for (const node of painted.keys()) clear(node);
       for (const kind of kinds) {

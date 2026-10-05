@@ -1,3 +1,4 @@
+import type { DiffPanelSelection, DiffJumpReveal } from "~/diffPanelStore";
 import type { AngelScriptWorkspace } from "~/hooks/useAngelScript";
 import type {
   AnnotationSide,
@@ -82,6 +83,11 @@ interface AnnotatableCodeViewProps {
     collapsed: boolean;
   }>;
   workspace?: AngelScriptWorkspace;
+  navigationSelection?: DiffPanelSelection;
+  navigationReveal?: DiffJumpReveal;
+  onNavigationRestored?: () => void;
+  ignoreWhitespace?: boolean;
+  scrollMemoryKey?: string;
   sectionId: string;
   sectionTitle: string;
   composerDraftTarget: ScopedThreadRef | DraftId;
@@ -105,6 +111,11 @@ interface DiffSelectionContext {
 export function AnnotatableCodeView({
   codeViewKey,
   workspace,
+  navigationSelection,
+  navigationReveal,
+  onNavigationRestored,
+  ignoreWhitespace = false,
+  scrollMemoryKey,
   files,
   sectionId,
   sectionTitle,
@@ -250,7 +261,15 @@ export function AnnotatableCodeView({
   return (
     <StyledDiffCodeView<DiffCommentAnnotationGroup>
       key={codeViewKey}
+      {...(scrollMemoryKey ? { scrollMemoryKey } : {})}
+      {...(navigationReveal ? { navigationReveal } : {})}
+      {...(onNavigationRestored ? { onNavigationRestored } : {})}
+      {...(navigationSelection ? { navigationSelection } : {})}
+      ignoreWhitespace={ignoreWhitespace}
       {...(workspace ? { workspace } : {})}
+      {...(typeof composerDraftTarget !== "string"
+        ? { navigationThread: composerDraftTarget }
+        : {})}
       {...(onRevealItem ? { onRevealItem } : {})}
       {...(onActiveFileChange ? { onActiveFileChange } : {})}
       {...(viewerRef ? { viewerRef } : {})}

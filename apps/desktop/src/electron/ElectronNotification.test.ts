@@ -22,8 +22,8 @@ vi.mock("electron", () => ({
     return MockNotification;
   },
 }));
-import { showCompletion } from "./ElectronNotification.ts";
-import { COMPLETION_NOTIFICATION_CLICK_CHANNEL } from "../ipc/channels.ts";
+import { showAgentNotification } from "./ElectronNotification.ts";
+import { AGENT_NOTIFICATION_CLICK_CHANNEL } from "../ipc/channels.ts";
 
 const makeWindow = () => ({
   isDestroyed: () => false,
@@ -34,18 +34,41 @@ const makeWindow = () => ({
   webContents: { send: vi.fn() },
 });
 const input = (turn: string) => ({
+  kind: "completed" as const,
   environmentId: EnvironmentId.make("remote"),
   threadId: ThreadId.make("thread"),
   turnId: TurnId.make(turn),
   title: "Fix build",
 });
 
-describe("native completion notifications", () => {
+describe("native agent notifications", () => {
+  it.effect("delivers questions independently of completions and opens their thread", () =>
+    Effect.gen(function* () {
+      const window = makeWindow();
+      const { turnId: _turnId, ...target } = input("question-turn");
+      const question = { ...target, kind: "question" as const, requestId: "question-1" };
+      assert.equal(yield* showAgentNotification(question, window), true);
+      const notification = notifications.at(-1)!;
+      assert.equal(notification.options.title, "Agent has a question");
+      assert.equal(notification.options.body, "Fix build");
+      notification.emit("click");
+      assert.deepEqual(window.webContents.send.mock.calls, [
+        [AGENT_NOTIFICATION_CLICK_CHANNEL, question],
+      ]);
+      assert.equal(yield* showAgentNotification(question, window), false);
+      assert.equal(
+        yield* showAgentNotification({ ...question, requestId: "question-2" }, window),
+        true,
+      );
+      assert.equal(yield* showAgentNotification(input("question-turn"), window), true);
+    }),
+  );
+
   it.effect("shows a native alert and opens the exact environment/thread when clicked", () =>
     Effect.gen(function* () {
       const window = makeWindow();
       const target = input("click");
-      assert.equal(yield* showCompletion(target, window), true);
+      assert.equal(yield* showAgentNotification(target, window), true);
       const notification = notifications.at(-1)!;
       assert.deepEqual(notification.options, {
         title: "Agent finished",
@@ -56,9 +79,9 @@ describe("native completion notifications", () => {
       assert.equal(window.restore.mock.calls.length, 1);
       assert.equal(window.focus.mock.calls.length, 1);
       assert.deepEqual(window.webContents.send.mock.calls, [
-        [COMPLETION_NOTIFICATION_CLICK_CHANNEL, target],
+        [AGENT_NOTIFICATION_CLICK_CHANNEL, target],
       ]);
-      assert.equal(yield* showCompletion(target, window), false);
+      assert.equal(yield* showAgentNotification(target, window), false);
       notification.emit("close");
     }),
   );
@@ -67,14 +90,14 @@ describe("native completion notifications", () => {
     Effect.gen(function* () {
       const window = makeWindow();
       state.supported = false;
-      assert.equal(yield* showCompletion(input("retry"), window), false);
+      assert.equal(yield* showAgentNotification(input("retry"), window), false);
       state.supported = true;
       state.show.mockImplementationOnce(() => {
         throw new Error("native failure");
       });
-      const error = yield* showCompletion(input("retry"), window).pipe(Effect.flip);
+      const error = yield* showAgentNotification(input("retry"), window).pipe(Effect.flip);
       assert.equal(error._tag, "NotificationError");
-      assert.equal(yield* showCompletion(input("retry"), window), true);
+      assert.equal(yield* showAgentNotification(input("retry"), window), true);
     }),
   );
 });

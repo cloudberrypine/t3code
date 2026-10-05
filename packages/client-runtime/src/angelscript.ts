@@ -1,9 +1,80 @@
-import { parseAngelScriptApi, type AngelScriptApi } from "@t3tools/shared/angelscript";
+import {
+  angelScriptStateTree,
+  parseAngelScriptApi,
+  type AngelScriptApi,
+} from "@t3tools/shared/angelscript";
 import type { ProjectSearchEntriesResult, ProjectReadFileResult } from "@t3tools/contracts";
+import {
+  angelScriptNavigationFile,
+  angelScriptNavigationDependencies,
+  createAngelScriptNavigation,
+  type AngelScriptSource,
+} from "@t3tools/shared/angelscriptNavigation";
 
 export interface ScriptingApiReader {
   discover: () => Promise<ProjectSearchEntriesResult | null>;
   read: (path: string) => Promise<ProjectReadFileResult | null>;
+}
+
+/** Reads use the caller's environment; no local-machine paths or language server are required. */
+export async function resolveAngelScriptNavigation({
+  source,
+  api,
+  offset,
+  read,
+}: {
+  source: AngelScriptSource;
+  api: AngelScriptApi | null;
+  offset: number;
+  read: ScriptingApiReader["read"];
+}) {
+  const sources = [source];
+  if (api?.source && api.source.path !== source.path) sources.push(api.source);
+  const local = createAngelScriptNavigation(sources).resolve(source.path, offset);
+  if (local) return local;
+  const path = angelScriptNavigationFile(source, offset);
+  const lineStart = source.contents.lastIndexOf("\n", offset - 1) + 1;
+  const include =
+    /^\s*#\s*include\b/.test(source.contents.slice(lineStart)) ||
+    angelScriptStateTree(source.contents).some(
+      (entry) =>
+        entry.fileStart !== undefined &&
+        entry.fileStart <= offset &&
+        offset < entry.fileStart + entry.file!.length,
+    );
+  const paths = include
+    ? path
+      ? [path]
+      : []
+    : [...new Set([...(path ? [path] : []), ...angelScriptNavigationDependencies(source)])];
+  const visited = new Set(sources.map((entry) => entry.path));
+  let pending = paths;
+  let bytes = source.contents.length;
+  // Includes are textual and may form cycles. Follow their closure only on an
+  // unresolved click, with a request/size budget for remote environments.
+  while (pending.length) {
+    const batch = [...new Set(pending)].filter((candidate) => !visited.has(candidate));
+    if (!batch.length) break;
+    if (visited.size + batch.length > 64) return null;
+    for (const candidate of batch) visited.add(candidate);
+    const files = await Promise.all(
+      batch.map(async (candidate) => {
+        const file = await read(candidate);
+        return file && !file.truncated ? { path: candidate, contents: file.contents } : null;
+      }),
+    );
+    pending = [];
+    for (const file of files) {
+      if (!file) continue;
+      bytes += file.contents.length;
+      if (bytes > 8_000_000) return null;
+      sources.push(file);
+      if (!include) pending.push(...angelScriptNavigationDependencies(file, true));
+    }
+  }
+  if (include) return path && sources.some((file) => file.path === path) ? { path, line: 1 } : null;
+  const definition = createAngelScriptNavigation(sources).resolve(source.path, offset);
+  return definition;
 }
 
 export function createApiStore() {
@@ -39,6 +110,9 @@ export function createApiStore() {
           file || snapshot
             ? parseAngelScriptApi(file && !file.truncated ? file.contents : "")
             : null;
+        if (snapshot && entry && file && !file.truncated) {
+          snapshot.source = { path: entry.path, contents: file.contents };
+        }
         revision = nextRevision;
         for (const listener of listeners) listener();
       })()

@@ -126,6 +126,15 @@ index ff78e2a..f9df318 100644
  		try {
  			this.#fileInstance?.setSelectedLines(range, {
  				notify: false,
+@@ -2136,7 +2141,7 @@ var Editor = class {
+ 			const nextSelection = createSelectionFromAnchorAndFocusOffsets(textDocument, startOffset, endOffset);
+ 			this.#updateSelections([nextSelection]);
+ 			this.#revealLineIfCollapsed(getCaretPosition(nextSelection).line);
+-			this.#scrollToPrimaryCaret(true);
++			this.#scrollToPrimaryCaret(true, "center");
+ 			this.#retainSearchPanelFocus = retainFocus;
+ 		};
+ 		const searchPanel = new SearchPanelWidget({
 diff --git a/dist/managers/ResizeManager.d.ts b/dist/managers/ResizeManager.d.ts
 --- a/dist/managers/ResizeManager.d.ts
 +++ b/dist/managers/ResizeManager.d.ts

@@ -181,7 +181,7 @@ export interface LimitAccount {
 
 /**
  * Every account with usable windows across the connected environments, one
- * entry per distinct account. The freshest reads supply windows and credits;
+ * entry per distinct account. The freshest read of each window supplies its value;
  * native instances supply names and environment labels.
  */
 export function collectLimitAccounts(
@@ -190,7 +190,26 @@ export function collectLimitAccounts(
   const accounts = new Map<string, LimitAccount>();
   const creditSources = new Map<string, LimitAccount>();
   const hubRedeems = new Map<string, LimitAccount>();
+  const windowSources = new Map<
+    string,
+    Map<string, { checkedAt: number; window: ServerProviderUsageWindow }>
+  >();
   const merge = (key: string, next: LimitAccount) => {
+    // Older servers and different sources can report fewer model buckets.
+    // A newer session/weekly read must not erase Fable's separate weekly limit.
+    // Keep the original timestamp per window so a third snapshot can update it.
+    let windows = windowSources.get(key);
+    if (!windows) {
+      windows = new Map();
+      windowSources.set(key, windows);
+    }
+    const checkedAt = Date.parse(next.limits.checkedAt);
+    for (const window of next.limits.windows) {
+      const windowKey = `${window.kind}:${window.id}`;
+      const previous = windows.get(windowKey);
+      if (!previous || checkedAt > previous.checkedAt)
+        windows.set(windowKey, { checkedAt, window });
+    }
     // Redeeming through a hub also clears the routing cooldown that hub holds
     // for the account. Redeeming natively against the same subscription resets
     // it upstream but leaves the hub refusing to route to the account until
@@ -243,6 +262,7 @@ export function collectLimitAccounts(
         (creditSource ? creditSource.redeem : (winner.redeem ?? previous.redeem ?? next.redeem)),
       limits: {
         ...winner.limits,
+        windows: [...windows.values()].map((entry) => entry.window),
         ...(creditSource?.limits.resetCredits
           ? { resetCredits: creditSource.limits.resetCredits }
           : { resetCredits: undefined }),
@@ -471,7 +491,11 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       resets,
     };
   });
-  return pools.sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind]);
+  return pools.sort(
+    (left, right) =>
+      WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind] ||
+      Number(right.id === "seven_day_fable") - Number(left.id === "seven_day_fable"),
+  );
 }
 
 /** The one-line status under a provider heading when there are no bars to draw. */

@@ -10,12 +10,22 @@ export type DiffPanelSelection =
   | { kind: "unstaged" }
   | { kind: "turn"; turnId: TurnId; filePath: string | null; revealRequestId: number };
 
+export interface DiffJumpReveal {
+  path: string;
+  line: number;
+  side: "additions" | "deletions";
+  selection: DiffPanelSelection;
+}
+
 const DEFAULT_SELECTION: DiffPanelSelection = { kind: "branch", baseRef: null };
 const DEFAULT_WORKING_TREE_SELECTION: DiffPanelSelection = { kind: "unstaged" };
 
 interface DiffPanelStoreState {
   byThreadKey: Record<string, DiffPanelSelection>;
   branchBaseRefByThreadKey: Record<string, string | null>;
+  jumpRevealByThreadKey: Record<string, DiffJumpReveal>;
+  restoreJump: (ref: ScopedThreadRef, reveal: DiffJumpReveal) => void;
+  consumeJump: (ref: ScopedThreadRef, reveal: DiffJumpReveal) => void;
   selectGitScope: (ref: ScopedThreadRef, scope: "branch" | "unstaged") => void;
   selectBranchBaseRef: (ref: ScopedThreadRef, baseRef: string | null) => void;
   selectTurn: (ref: ScopedThreadRef, turnId: TurnId, filePath?: string) => void;
@@ -33,6 +43,22 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
     (set) => ({
       byThreadKey: {},
       branchBaseRefByThreadKey: {},
+      jumpRevealByThreadKey: {},
+      restoreJump: (ref, reveal) =>
+        set((state) => {
+          const key = scopedThreadKey(ref);
+          return {
+            byThreadKey: { ...state.byThreadKey, [key]: reveal.selection },
+            jumpRevealByThreadKey: { ...state.jumpRevealByThreadKey, [key]: { ...reveal } },
+          };
+        }),
+      consumeJump: (ref, reveal) =>
+        set((state) => {
+          const key = scopedThreadKey(ref);
+          if (state.jumpRevealByThreadKey[key] !== reveal) return state;
+          const { [key]: _removed, ...jumpRevealByThreadKey } = state.jumpRevealByThreadKey;
+          return { jumpRevealByThreadKey };
+        }),
       selectGitScope: (ref, scope) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
@@ -108,13 +134,18 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
       removeThread: (ref) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
-          if (!(threadKey in state.byThreadKey) && !(threadKey in state.branchBaseRefByThreadKey)) {
+          if (
+            !(threadKey in state.byThreadKey) &&
+            !(threadKey in state.branchBaseRefByThreadKey) &&
+            !(threadKey in state.jumpRevealByThreadKey)
+          ) {
             return state;
           }
           const { [threadKey]: _removed, ...byThreadKey } = state.byThreadKey;
           const { [threadKey]: _removedBaseRef, ...branchBaseRefByThreadKey } =
             state.branchBaseRefByThreadKey;
-          return { byThreadKey, branchBaseRefByThreadKey };
+          const { [threadKey]: _reveal, ...jumpRevealByThreadKey } = state.jumpRevealByThreadKey;
+          return { byThreadKey, branchBaseRefByThreadKey, jumpRevealByThreadKey };
         }),
     }),
     {

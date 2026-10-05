@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnId, type OrchestrationLatestTurnState } from "@t3tools/contracts";
-import { createCompletionTracker } from "./completionNotifications";
+import { createCompletionTracker, createQuestionTracker } from "./completionNotifications";
 
 function thread(id: string, state: OrchestrationLatestTurnState, turn = "turn-1") {
   return {
@@ -53,5 +53,70 @@ describe("completion notifications", () => {
     expect(local([thread("same", "completed", "turn-2")], true)).toEqual([]);
     local([thread("same", "running", "turn-3")], true);
     expect(local([thread("same", "completed", "turn-3")], true)).toHaveLength(1);
+  });
+});
+
+function questionThread(requestId: string | null, overrides = {}) {
+  return {
+    ...thread("a", "running"),
+    updatedAt: "2026-09-12T15:17:24.255Z",
+    hasPendingUserInput: requestId !== null,
+    ...(requestId === null ? {} : { latestUserInputRequestId: requestId }),
+    ...overrides,
+  };
+}
+
+describe("question notifications", () => {
+  it("notifies for each new async question while the same turn continues running", () => {
+    const track = createQuestionTracker();
+    track([questionThread(null)], true);
+    const question = questionThread("codex-async:thread:item-1");
+    expect(track([question], true)).toEqual([
+      { thread: question, requestId: "codex-async:thread:item-1" },
+    ]);
+    expect(track([{ ...question, updatedAt: "2026-09-12T15:18:00.000Z" }], true)).toEqual([]);
+    expect(track([questionThread("codex-async:thread:item-2")], true)).toHaveLength(1);
+    expect(track([questionThread(null)], true)).toEqual([]);
+    expect(track([questionThread("codex-async:thread:item-3")], true)).toHaveLength(1);
+  });
+
+  it("does not require a materialized turn and supports blocking questions", () => {
+    const track = createQuestionTracker();
+    track([questionThread(null, { latestTurn: null })], true);
+    expect(track([questionThread("request-1", { latestTurn: null })], true)).toHaveLength(1);
+  });
+
+  it("does not replay questions on initial load, reconnect, enabling, or unarchiving", () => {
+    const track = createQuestionTracker();
+    expect(track([questionThread("old")], true)).toEqual([]);
+    expect(track([questionThread("disabled")], false)).toEqual([]);
+    expect(track([questionThread("disabled")], true)).toEqual([]);
+    expect(
+      track([questionThread("archived", { archivedAt: "2026-09-12T15:18:00.000Z" })], true),
+    ).toEqual([]);
+    expect(track([questionThread("archived")], true)).toEqual([]);
+    track(null, true);
+    expect(track([questionThread("reconnected")], true)).toEqual([]);
+    expect(track([questionThread("next")], true)).toHaveLength(1);
+  });
+
+  it("keeps environments independent and suppresses newly discovered history", () => {
+    const local = createQuestionTracker();
+    const remote = createQuestionTracker();
+    local([questionThread(null)], true);
+    remote([questionThread(null)], true);
+    expect(local([questionThread("same")], true)).toHaveLength(1);
+    expect(remote([questionThread("same")], true)).toHaveLength(1);
+    expect(local([questionThread("other", { id: ThreadId.make("other") })], true)).toEqual([]);
+  });
+
+  it("falls back to pending transitions on older servers without repeating during updates", () => {
+    const track = createQuestionTracker();
+    track([questionThread(null)], true);
+    const pending = { ...questionThread(null), hasPendingUserInput: true };
+    expect(track([pending], true)).toHaveLength(1);
+    expect(track([{ ...pending, updatedAt: "2026-09-12T15:18:00.000Z" }], true)).toEqual([]);
+    track([questionThread(null)], true);
+    expect(track([{ ...pending, updatedAt: "2026-09-12T15:19:00.000Z" }], true)).toHaveLength(1);
   });
 });

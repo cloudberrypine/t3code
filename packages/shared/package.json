@@ -283,6 +283,14 @@
       "types": "./src/angelscript.ts",
       "import": "./src/angelscript.ts"
     },
+    "./cppNavigation": {
+      "types": "./src/cppNavigation.ts",
+      "default": "./src/cppNavigation.ts"
+    },
+    "./angelscriptNavigation": {
+      "types": "./src/angelscriptNavigation.ts",
+      "import": "./src/angelscriptNavigation.ts"
+    },
     "./markdownFrontMatter": {
       "types": "./src/markdownFrontMatter.ts",
       "import": "./src/markdownFrontMatter.ts"

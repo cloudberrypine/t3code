@@ -1747,6 +1747,35 @@ const make = Effect.gen(function* () {
         yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
       }
 
+      if (
+        event.type === "item.completed" &&
+        event.payload.itemType === "image_generation" &&
+        event.payload.status === "completed" &&
+        event.payload.imagePath
+      ) {
+        const messageId = MessageId.make(
+          `assistant:image:${thread.id}:${event.itemId ?? event.eventId}`,
+        );
+        const existingMessage = yield* getThreadMessageById(thread.id, messageId);
+        // Keep generated media independent of streamed commentary and final text.
+        // Replayed completions must not append the same image a second time.
+        if (!existingMessage || existingMessage.isStreaming) {
+          const destination = event.payload.imagePath.split("/").map(encodeURIComponent).join("/");
+          const turnId = toTurnId(event.turnId);
+          yield* finalizeAssistantMessage({
+            event,
+            threadId: thread.id,
+            messageId,
+            ...(turnId ? { turnId } : {}),
+            createdAt: now,
+            commandTag: "generated-image-complete",
+            finalDeltaCommandTag: "generated-image-content",
+            hasProjectedMessage: existingMessage !== undefined,
+            ...(!existingMessage ? { fallbackText: `![Generated image](<${destination}>)` } : {}),
+          });
+        }
+      }
+
       const assistantCompletion =
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {

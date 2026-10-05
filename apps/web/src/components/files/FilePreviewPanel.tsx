@@ -1,6 +1,13 @@
+import { parsePolyzoniaMesh } from "@t3tools/client-runtime/polyzonia-mesh";
+import { PolyzoniaMeshPreview } from "./PolyzoniaMeshPreview";
+import { createFileScrollMemory, getFileScrollPosition } from "./fileScrollMemory";
 import { Spinner } from "~/components/ui/spinner";
 import { isAngelScriptPath, usesAngelScript } from "@t3tools/shared/angelscript";
 import { useAngelScript } from "~/hooks/useAngelScript";
+import { useDefinitionNavigation } from "~/hooks/useDefinitionNavigation";
+import { createAngelScriptClickNavigation } from "~/lib/angelScriptNavigation";
+import { fileNavigationAction } from "~/lib/fileJumpHistory";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   ANGELSCRIPT_CSS,
   createAngelScriptPainter,
@@ -55,6 +62,10 @@ import { buildFileReviewComment } from "~/reviewCommentContext";
 import { assetEnvironment } from "~/state/assets";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
+import { projectEnvironment } from "~/state/projects";
+import { resolveCppCounterpart } from "@t3tools/client-runtime/cpp-navigation";
+import { isCppPath } from "@t3tools/shared/cppNavigation";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
@@ -73,6 +84,7 @@ import {
 } from "./fileCommentAnnotations";
 import { installFileEditorDismissal } from "./fileEditorDismissal";
 import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
+import { createFileRevealHighlight, FILE_LINK_REVEAL_ATTRIBUTE } from "./fileRevealHighlight";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey, projectFileEditorCacheKey } from "./fileContentRevision";
 import {
@@ -99,7 +111,7 @@ interface FilePreviewPanelProps {
   availableEditors: ReadonlyArray<EditorId>;
   revealLine: number | null;
   revealRequestId: number;
-  onOpenFile: (relativePath: string) => void;
+  onOpenFile: (relativePath: string, newTab?: boolean) => void;
   onPendingChange: (relativePath: string, pending: boolean) => void;
   selectedFilePending: boolean;
   workspaceMutationId: string | null;
@@ -108,7 +120,6 @@ interface FilePreviewPanelProps {
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
 const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
 const RENDER_BROWSER_FILE_STORAGE_KEY = "t3code.renderBrowserFile";
-const FILE_LINK_REVEAL_ATTRIBUTE = "data-file-link-reveal";
 const FILE_LINK_REVEAL_UNSAFE_CSS = `
   ${DIFF_SURFACE_THEME_UNSAFE_CSS}
   ${ANGELSCRIPT_CSS}
@@ -119,6 +130,11 @@ const FILE_LINK_REVEAL_UNSAFE_CSS = `
     --diffs-dark-bg: var(--code-background, var(--background)) !important;
     background-color: var(--code-background, var(--background)) !important;
     color: var(--code-foreground, var(--foreground)) !important;
+  }
+
+  /* Overlay the line numbers without extending the button into the code. */
+  [data-file] [data-utility-button] {
+    margin-right: 0;
   }
 
   [${FILE_LINK_REVEAL_ATTRIBUTE}][data-line] {
@@ -415,21 +431,6 @@ function clampFileLine(contents: string, requestedLine: number): number {
   return Math.min(Math.max(1, requestedLine), lineCount);
 }
 
-function updateFileLinkReveal(fileContainer: HTMLElement, line: number | null): void {
-  const root = fileContainer.shadowRoot ?? fileContainer;
-  for (const element of root.querySelectorAll<HTMLElement>(`[${FILE_LINK_REVEAL_ATTRIBUTE}]`)) {
-    element.removeAttribute(FILE_LINK_REVEAL_ATTRIBUTE);
-  }
-  if (line === null) return;
-
-  root
-    .querySelector<HTMLElement>(`[data-line="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, "");
-  root
-    .querySelector<HTMLElement>(`[data-column-number="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, "");
-}
-
 /**
  * Frames to keep retrying while the file contents or line metrics are not
  * available yet (fresh mounts hydrate asynchronously).
@@ -445,6 +446,7 @@ const REVEAL_GUARD_FRAMES = 20;
 const REVEAL_GUARD_TOLERANCE_PX = 2;
 
 interface FileRevealState {
+  highlight: ReturnType<typeof createFileRevealHighlight>;
   frameId: number | null;
   cancelGuard: (() => void) | null;
   handledRequestId: number | null;
@@ -452,24 +454,33 @@ interface FileRevealState {
 }
 
 function useFileLineReveal(
+  workspaceKey: string,
   relativePath: string | null,
   revealLine: number | null,
   revealRequestId: number,
 ): FilePostRender {
   const [revealStatesByPath] = useState(() => new Map<string, FileRevealState>());
+  const scrollKey = JSON.stringify([workspaceKey, relativePath]);
+  const scrollMemory = useMemo(
+    () => createFileScrollMemory(scrollKey, revealRequestId, revealLine !== null),
+    [scrollKey, revealRequestId, revealLine],
+  );
+  useEffect(() => () => scrollMemory.dispose(), [scrollMemory]);
 
   return useCallback<FilePostRender>(
     (fileContainer, instance, phase) => {
       if (relativePath === null) return;
 
-      const existingState = revealStatesByPath.get(relativePath);
+      const key = JSON.stringify([workspaceKey, relativePath]);
+      const existingState = revealStatesByPath.get(key);
       const state: FileRevealState = existingState ?? {
+        highlight: createFileRevealHighlight(),
         frameId: null,
         cancelGuard: null,
-        handledRequestId: null,
-        latestRequestId: null,
+        handledRequestId: getFileScrollPosition(key)?.revealRequestId ?? null,
+        latestRequestId: revealRequestId,
       };
-      if (!existingState) revealStatesByPath.set(relativePath, state);
+      if (!existingState) revealStatesByPath.set(key, state);
 
       const cancelPendingReveal = () => {
         if (state.frameId !== null) {
@@ -480,14 +491,20 @@ function useFileLineReveal(
       };
 
       if (phase === "unmount") {
+        scrollMemory.dispose();
         cancelPendingReveal();
+        state.highlight.dispose();
         return;
       }
 
       const contents = instance.file?.contents;
       const targetLine =
         revealLine === null || contents === undefined ? null : clampFileLine(contents, revealLine);
-      updateFileLinkReveal(fileContainer, targetLine);
+      const dismissReveal = () => {
+        cancelPendingReveal();
+        state.handledRequestId = revealRequestId;
+      };
+      state.highlight.paint(fileContainer, targetLine, revealRequestId, dismissReveal);
 
       if (!(instance instanceof VirtualizedFile)) return;
 
@@ -497,10 +514,8 @@ function useFileLineReveal(
         state.handledRequestId = null;
       }
 
-      if (revealLine === null) {
-        fileContainer.style.minHeight = "";
-        return;
-      }
+      scrollMemory.attach(fileContainer, instance.height);
+      if (revealLine === null) return;
 
       const scrollContainer = fileContainer.closest<HTMLElement>(".file-preview-virtualizer");
       if (!scrollContainer) return;
@@ -604,7 +619,7 @@ function useFileLineReveal(
             if (attempt < REVEAL_MAX_ATTEMPTS) scheduleReveal(attempt + 1);
             return;
           }
-          updateFileLinkReveal(fileContainer, line);
+          state.highlight.paint(fileContainer, line, revealRequestId, dismissReveal);
 
           scrollContainer.scrollTop = targetTop;
           state.handledRequestId = revealRequestId;
@@ -614,7 +629,7 @@ function useFileLineReveal(
 
       scheduleReveal(0);
     },
-    [revealStatesByPath, relativePath, revealLine, revealRequestId],
+    [revealStatesByPath, workspaceKey, relativePath, revealLine, revealRequestId, scrollMemory],
   );
 }
 
@@ -967,7 +982,8 @@ function RenderedMarkdownSurface({
   );
 }
 
-function renderedToggleLabel(isMarkdown: boolean, rendered: boolean): string {
+function renderedToggleLabel(isMarkdown: boolean, rendered: boolean, isMesh = false): string {
+  if (isMesh) return rendered ? "Show JSON source" : "Show mesh preview";
   if (isMarkdown) return rendered ? "Show markdown source" : "Show rendered markdown";
   return rendered ? "Show HTML source" : "Show rendered page";
 }
@@ -1023,7 +1039,16 @@ export default function FilePreviewPanel({
     cwd,
     relativePath,
     attachment === undefined && !isMedia && !isPdf,
+    true,
   );
+  const mesh = useMemo(
+    () =>
+      file.data && relativePath
+        ? parsePolyzoniaMesh(relativePath, file.data.contents, file.data.truncated)
+        : null,
+    [relativePath, file.data],
+  );
+  const [renderMeshPreferred, setRenderMeshPreferred] = useState(true);
   const [manualRefreshId, setManualRefreshId] = useState(0);
   const previewRevision = JSON.stringify([workspaceMutationId, revealRequestId, manualRefreshId]);
   const refreshSelectedFile = useCallback(() => setManualRefreshId((current) => current + 1), []);
@@ -1045,9 +1070,7 @@ export default function FilePreviewPanel({
     true,
     Schema.Boolean,
   );
-  // Paired with the path on purpose: each file surface counts its reveals from
-  // one, so a bare id would let a dismissed reveal on one file swallow the first
-  // reveal on the next.
+  // Keep the handled reveal tied to the document whose source was displayed.
   const [handledReveal, setHandledReveal] = useState<{ path: string; requestId: number } | null>(
     null,
   );
@@ -1059,11 +1082,14 @@ export default function FilePreviewPanel({
     (handledReveal?.path === relativePath && handledReveal.requestId === revealRequestId);
   const renderMarkdown = isMarkdown && renderMarkdownPreferred && revealHandled;
   const renderBrowserFile = isPdf || (isHtml && renderBrowserFilePreferred && revealHandled);
-  const canToggleRendered = attachment === undefined && (isMarkdown || isHtml);
-  const rendered = isMarkdown ? renderMarkdown : renderBrowserFile;
-  const setRenderedPreferred = isMarkdown
-    ? setRenderMarkdownPreferred
-    : setRenderBrowserFilePreferred;
+  const renderMesh = mesh !== null && renderMeshPreferred && revealHandled;
+  const canToggleRendered = attachment === undefined && (isMarkdown || isHtml || mesh !== null);
+  const rendered = mesh ? renderMesh : isMarkdown ? renderMarkdown : renderBrowserFile;
+  const setRenderedPreferred = mesh
+    ? setRenderMeshPreferred
+    : isMarkdown
+      ? setRenderMarkdownPreferred
+      : setRenderBrowserFilePreferred;
   const canOpenInBrowser =
     relativePath !== null &&
     attachment === undefined &&
@@ -1072,6 +1098,11 @@ export default function FilePreviewPanel({
     isBrowserPreviewFile(relativePath);
   const absolutePath =
     relativePath && attachment === undefined ? resolvePathLinkTarget(relativePath, cwd) : null;
+  const navigationRoot = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (relativePath !== null && revealLine !== null && revealRequestId > 0)
+      navigationRoot.current?.focus({ preventScroll: true });
+  }, [relativePath, revealLine, revealRequestId]);
   const api = useAngelScript(
     relativePath && isAngelScriptPath(relativePath) && !isHostFile
       ? { environmentId, cwd, revision: previewRevision }
@@ -1081,13 +1112,40 @@ export default function FilePreviewPanel({
     relativePath !== null && usesAngelScript(relativePath, file.data?.contents ?? "", api);
   const painter = useMemo(() => createAngelScriptPainter(api), [api]);
   useEffect(() => () => painter.dispose(), [painter]);
-  const revealFileLine = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const findDefinitionFiles = useAtomQueryRunner(projectEnvironment.searchEntries, {
+    refresh: true,
+    reportFailure: false,
+  });
+  const handleDefinitionClick = useDefinitionNavigation({ environmentId, cwd }, threadRef, api);
+  const navigation = useMemo(
+    () => createAngelScriptClickNavigation(handleDefinitionClick, api),
+    [handleDefinitionClick, api],
+  );
+  useEffect(
+    () => () => {
+      navigation.dispose();
+    },
+    [navigation],
+  );
+  const revealFileLine = useFileLineReveal(
+    JSON.stringify([scopedThreadKey(threadRef), cwd]),
+    relativePath,
+    revealLine,
+    revealRequestId,
+  );
   const onFilePostRender = useCallback<FilePostRender>(
     (node, instance, phase) => {
       painter.paint(node, instance.file, phase);
+      navigation.attach(
+        node,
+        (angelScript || (relativePath !== null && isCppPath(relativePath))) && !isHostFile
+          ? instance.file
+          : undefined,
+        phase,
+      );
       revealFileLine(node, instance, phase);
     },
-    [painter, revealFileLine],
+    [painter, navigation, angelScript, relativePath, isHostFile, revealFileLine],
   );
   useWorkspaceMutationRefresh({
     enabled:
@@ -1146,7 +1204,77 @@ export default function FilePreviewPanel({
   }, [absolutePath, createAssetUrl, cwd, environmentHttpBaseUrl, openPreview, threadRef]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+    <div
+      ref={navigationRoot}
+      tabIndex={-1}
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background outline-none"
+      onPointerDownCapture={(event) => {
+        if (
+          event.button === 0 &&
+          (event.metaKey || event.ctrlKey) &&
+          event.nativeEvent
+            .composedPath()
+            .some((part) => part instanceof HTMLElement && part.closest("[data-code]") !== null)
+        ) {
+          event.currentTarget.focus({ preventScroll: true });
+        }
+      }}
+      onKeyDownCapture={(event) => {
+        if (
+          event.defaultPrevented ||
+          event.nativeEvent.isComposing ||
+          !event.nativeEvent.composedPath().includes(event.currentTarget)
+        )
+          return;
+        const action = fileNavigationAction(event.nativeEvent, keybindings);
+        if (!action) return;
+        if (action === "counterpart") {
+          if (!relativePath || !isCppPath(relativePath) || isHostFile) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const from = {
+            path: relativePath,
+            line: navigation.currentLine(relativePath, revealLine ?? 1),
+          };
+          const isCurrent = navigation.beginRequest();
+          event.currentTarget.focus({ preventScroll: true });
+          void resolveCppCounterpart(relativePath, async (exactFileName) => {
+            const result = await findDefinitionFiles({
+              environmentId,
+              input: { cwd, query: exactFileName, exactFileName, kind: "file", limit: 200 },
+            });
+            return result._tag === "Success" ? result.value : null;
+          })
+            .then((target) => {
+              if (!isCurrent()) return;
+              if (target) useRightPanelStore.getState().jumpToFile(threadRef, cwd, from, target);
+              else
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "info",
+                    title: "No unique source/header counterpart found",
+                  }),
+                );
+            })
+            .catch(() => {
+              if (isCurrent())
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Unable to open source/header counterpart",
+                  }),
+                );
+            });
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        navigation.cancelPending();
+        if (useRightPanelStore.getState().traverseFileJumpHistory(threadRef, cwd, action)) {
+          event.currentTarget.focus({ preventScroll: true });
+        }
+      }}
+    >
       {relativePath ? (
         <div
           className="flex h-10 min-h-10 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-3 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
@@ -1208,7 +1336,7 @@ export default function FilePreviewPanel({
                           : null,
                       );
                     }}
-                    aria-label={renderedToggleLabel(isMarkdown, rendered)}
+                    aria-label={renderedToggleLabel(isMarkdown, rendered, mesh !== null)}
                     variant="ghost"
                     size="sm"
                   >
@@ -1216,7 +1344,9 @@ export default function FilePreviewPanel({
                   </Toggle>
                 }
               />
-              <TooltipPopup>{renderedToggleLabel(isMarkdown, rendered)}</TooltipPopup>
+              <TooltipPopup>
+                {renderedToggleLabel(isMarkdown, rendered, mesh !== null)}
+              </TooltipPopup>
             </Tooltip>
           ) : null}
           {canOpenInBrowser ? (
@@ -1263,7 +1393,8 @@ export default function FilePreviewPanel({
       ) : null}
       {relativePath && !isMedia && !renderBrowserFile && file.data?.truncated ? (
         <div className="shrink-0 border-b border-warning/20 bg-warning-surface px-3 py-1.5 text-[11px] text-warning-foreground">
-          Preview limited to the first 1 MB of a {file.data.byteLength.toLocaleString()} byte file.
+          This {file.data.byteLength.toLocaleString()} byte file exceeds the preview size limit.
+          Only part of the source is shown.
         </div>
       ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -1314,7 +1445,9 @@ export default function FilePreviewPanel({
               <Spinner className="size-5" />
             </div>
           ) : relativePath && file.data ? (
-            isMarkdown && renderMarkdown ? (
+            mesh && renderMesh ? (
+              <PolyzoniaMeshPreview key={`${environmentId}:${cwd}:${relativePath}`} mesh={mesh} />
+            ) : isMarkdown && renderMarkdown ? (
               // Markdown reconciles in place across text updates, so a file
               // switch needs a new key or the previous file's disclosure and
               // wrap state carries into the next document.

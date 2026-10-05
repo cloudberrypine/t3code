@@ -41,10 +41,15 @@ export function getProjectFileQueryAtom(
   environmentId: EnvironmentId,
   cwd: string,
   relativePath: string | null,
+  live = false,
 ) {
-  return projectEnvironment.readFile({
+  return (live ? projectEnvironment.liveFile : projectEnvironment.readFile)({
     environmentId,
-    input: { cwd, relativePath: relativePath ?? EMPTY_PROJECT_FILE_PATH },
+    input: {
+      cwd,
+      relativePath: relativePath ?? EMPTY_PROJECT_FILE_PATH,
+      ...(/\.json$/i.test(relativePath ?? "") ? { maxBytes: 4 * 1024 * 1024 } : {}),
+    },
   });
 }
 
@@ -181,13 +186,14 @@ export function useProjectFileQuery(
   cwd: string,
   relativePath: string | null,
   enabled = true,
+  live = false,
 ): ProjectQueryState<ProjectReadFileResult> {
   const isMedia =
     relativePath !== null &&
     (isWorkspaceImagePreviewPath(relativePath) || isWorkspaceVideoPreviewPath(relativePath));
   const atom =
-    enabled && !isMedia
-      ? getProjectFileQueryAtom(environmentId, cwd, relativePath)
+    enabled && relativePath !== null && !isMedia
+      ? getProjectFileQueryAtom(environmentId, cwd, relativePath, live)
       : EMPTY_PROJECT_FILE_QUERY_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);

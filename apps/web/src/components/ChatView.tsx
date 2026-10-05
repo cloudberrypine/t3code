@@ -312,6 +312,7 @@ import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { useDiffStatIgnore } from "../hooks/useDiffStatIgnore";
 import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { resolveComposerTimelineInset } from "./composerFooterLayout";
@@ -1398,6 +1399,7 @@ export default function ChatView(props: ChatViewProps) {
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const restartTerminal = useAtomCommand(terminalEnvironment.restart, "terminal restart");
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -3096,6 +3098,11 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
+  const diffStatIgnore = useDiffStatIgnore(
+    activeThread?.environmentId,
+    activeThread?.worktreePath ?? activeProject?.repositoryIdentity?.rootPath ?? gitCwd,
+    workspaceMutationId,
+  );
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -3650,8 +3657,7 @@ export default function ChatView(props: ChatViewProps) {
       const baseTerminalId =
         terminalUiState.activeTerminalId || activeKnownTerminalIds[0] || DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = runningTerminalIds.includes(baseTerminalId);
-      const wantsNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
-      const shouldCreateNewTerminal = wantsNewTerminal;
+      const shouldCreateNewTerminal = Boolean(options?.preferNewTerminal);
       const targetWorktreePath = options?.worktreePath ?? activeThread.worktreePath ?? null;
 
       setTerminalUiLaunchContext({
@@ -3699,7 +3705,17 @@ export default function ChatView(props: ChatViewProps) {
         storeSetActiveTerminal(activeThreadRef, targetTerminalId);
       }
 
-      const openResult = await openTerminal({ environmentId, input: openTerminalInput });
+      const openResult =
+        isBaseTerminalBusy && !shouldCreateNewTerminal
+          ? await restartTerminal({
+              environmentId,
+              input: {
+                ...openTerminalInput,
+                cols: SCRIPT_TERMINAL_COLS,
+                rows: SCRIPT_TERMINAL_ROWS,
+              },
+            })
+          : await openTerminal({ environmentId, input: openTerminalInput });
       if (openResult._tag === "Failure") {
         if (!isAtomCommandInterrupted(openResult)) {
           const error = squashAtomCommandFailure(openResult);
@@ -3743,6 +3759,7 @@ export default function ChatView(props: ChatViewProps) {
       activeKnownTerminalIds,
       allocatableActiveTerminalIds,
       runningTerminalIds,
+      restartTerminal,
       terminalUiState.activeTerminalId,
       writeTerminal,
     ],
@@ -3981,9 +3998,11 @@ export default function ChatView(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef]);
   const openFileSurface = useCallback(
-    (relativePath: string) => {
+    (relativePath: string, newTab = false) => {
       if (!activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openFile(activeThreadRef, relativePath);
+      const store = useRightPanelStore.getState();
+      if (newTab) store.openFile(activeThreadRef, relativePath);
+      else store.replaceActiveFile(activeThreadRef, relativePath);
     },
     [activeProject, activeThreadRef],
   );
@@ -7750,6 +7769,8 @@ export default function ChatView(props: ChatViewProps) {
           mode="embedded"
           composerDraftTarget={composerDraftTarget}
           initialGitScope={initialDiffPanelGitScope}
+          diffStatIgnorePatterns={diffStatIgnore.patterns}
+          onRefreshDiffStatIgnore={diffStatIgnore.refresh}
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
@@ -7969,6 +7990,7 @@ export default function ChatView(props: ChatViewProps) {
                 latestTurn={activeLatestTurn}
                 runningTurnId={activeRunningTurnId}
                 turnDiffSummaries={activeThread.checkpoints}
+                diffStatIgnorePatterns={diffStatIgnore.patterns}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}

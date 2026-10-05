@@ -193,6 +193,7 @@ import {
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
+  diffStatIgnorePatterns?: string | undefined;
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;
@@ -295,6 +296,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  diffStatIgnorePatterns?: string | undefined;
   citationRequest?: AssistantCitationRequest | null;
   citationHistoryLoading?: boolean;
   onCiteAssistantText?: (
@@ -356,6 +358,7 @@ interface MessagesTimelineProps {
 // ---------------------------------------------------------------------------
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  diffStatIgnorePatterns,
   citationRequest = null,
   citationHistoryLoading = false,
   onCiteAssistantText,
@@ -718,6 +721,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
+      diffStatIgnorePatterns,
       citationRequest: readyCitationRequest,
       listRef,
       timestampFormat,
@@ -743,6 +747,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenAgents,
     }),
     [
+      diffStatIgnorePatterns,
       readyCitationRequest,
       listRef,
       timestampFormat,
@@ -2229,16 +2234,18 @@ function AssistantChangedFilesSectionInner({
   resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }) {
+  const { diffStatIgnorePatterns } = use(TimelineRowCtx);
   const persistedExpanded = useUiStateStore(
     (store) => store.threadChangedFilesExpandedById[routeThreadKey]?.[turnSummary.turnId],
   );
   const setExpanded = useUiStateStore((store) => store.setThreadChangedFilesExpanded);
-  const allDirectoriesExpanded = persistedExpanded ?? false;
+  const allDirectoriesExpanded = persistedExpanded ?? true;
 
   return (
     <ChangedFilesCard
       turnId={turnSummary.turnId}
       files={checkpointFiles}
+      diffStatIgnorePatterns={diffStatIgnorePatterns}
       allDirectoriesExpanded={allDirectoriesExpanded}
       resolvedTheme={resolvedTheme}
       onToggleAllDirectories={() =>

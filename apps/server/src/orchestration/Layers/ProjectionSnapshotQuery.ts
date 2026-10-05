@@ -114,6 +114,7 @@ const ProjectionTurnStartMessageDbRowSchema = ProjectionThreadMessageDbRowSchema
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
+    latestUserInputRequestId: Schema.NullOr(Schema.String),
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
@@ -429,6 +430,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
   const sql = yield* SqlClient.SqlClient;
+  const latestUserInputRequestId = sql`
+    CASE WHEN pending_user_input_count > 0 THEN (
+      SELECT json_extract(activity.payload_json, '$.requestId')
+      FROM projection_thread_activities AS activity
+      WHERE activity.thread_id = projection_threads.thread_id
+        AND activity.kind = 'user-input.requested'
+      ORDER BY activity.sequence DESC, activity.created_at DESC, activity.activity_id DESC
+      LIMIT 1
+    ) ELSE NULL END
+  `;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const repositoryIdentityResolutionConcurrency = 4;
   const resolveRepositoryIdentitiesForProjects = Effect.fn(
@@ -519,6 +530,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${latestUserInputRequestId} AS "latestUserInputRequestId",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -559,6 +571,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${latestUserInputRequestId} AS "latestUserInputRequestId",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -601,6 +614,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${latestUserInputRequestId} AS "latestUserInputRequestId",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -1092,6 +1106,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          ${latestUserInputRequestId} AS "latestUserInputRequestId",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
@@ -2449,6 +2464,9 @@ pending_approval_requests AS (
                       latestUserMessageAt: row.latestUserMessageAt,
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
+                      ...(row.latestUserInputRequestId === null
+                        ? {}
+                        : { latestUserInputRequestId: row.latestUserInputRequestId }),
                       hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                       backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                         row.threadId,
@@ -2599,6 +2617,9 @@ pending_approval_requests AS (
                 latestUserMessageAt: row.latestUserMessageAt,
                 hasPendingApprovals: row.pendingApprovalCount > 0,
                 hasPendingUserInput: row.pendingUserInputCount > 0,
+                ...(row.latestUserInputRequestId === null
+                  ? {}
+                  : { latestUserInputRequestId: row.latestUserInputRequestId }),
                 hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                 backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                   row.threadId,
@@ -2922,6 +2943,9 @@ pending_approval_requests AS (
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
+        ...(threadRow.value.latestUserInputRequestId === null
+          ? {}
+          : { latestUserInputRequestId: threadRow.value.latestUserInputRequestId }),
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,

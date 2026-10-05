@@ -2207,7 +2207,7 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     rowBackground(for: change).setFill()
     context.fill(rect)
     if let awaitBackground = UIColor(reviewDiffHex: row.awaitBackground) {
-      awaitBackground.setFill()
+      awaitBackground.withAlphaComponent(0.5).setFill()
       context.fill(CGRect(x: stickyWidth, y: rect.minY, width: max(0, rect.width - stickyWidth), height: rect.height))
     }
 

@@ -95,6 +95,27 @@ reopening a declined pull request.
 - **A review cannot load:** open it on the host website while resolving connectivity, permissions,
   or rate limits.
 
+## Filtered change totals
+
+Add a `.t3diffignore` file at your repository root to see a second +/− total that
+excludes matching files. On web and desktop, the Diff panel and the chat's changed-files
+summaries show the full total first, then the filtered total in parentheses when the counts differ, such as
+**+1,200 −800 (+300, −200)**. All files and their diffs remain visible.
+
+Use `.gitignore` syntax: one pattern per line, `#` comments, `*` and `**` wildcards,
+trailing `/` for directories, and `!` to include a matching file again. For example:
+
+```gitignore
+pnpm-lock.yaml
+generated/
+*.snap
+!important.snap
+```
+
+Rules come from the current checkout, including a thread's worktree. Refresh the diff
+or refocus T3 after editing the file externally. Remove `.t3diffignore` to return to a
+single total. These rules do not affect Git tracking, commits, or checkpoint restoration.
+
 ## Diff navigation
 
 - Show a file tree next to a review's **Code** tab, or a thread's **Diff** panel, to browse the
@@ -143,10 +164,53 @@ disk. To see edits from another agent, thread, or application, select the file a
 file browser's **Refresh files** button. Both actions reload the selected preview, including SVGs,
 other images, videos, and PDFs. Pending local text edits finish saving before a refresh is applied.
 
+Click a file in the web or desktop file tree to replace the current file tab. **Alt-click**
+(**Option-click** on macOS) opens it in a new tab. Files already open switch to their existing tab.
+
 Drag the left edge of the file list to resize it beside the preview. Its width is remembered.
 
 With the file browser focused, **Cmd/Ctrl+F** focuses **Search files**. When the selected file's
 source editor has focus, the same shortcut opens text search inside that file.
+
+In AngelScript files, **Cmd-click** (macOS) or **Ctrl-click** (Windows/Linux) a symbol to open
+its declaration. This works for local declarations, members with known types, and declarations
+in the workspace's `ScriptingAPI.as`. You can also follow `#include` paths and script namespace
+references, including members defined in those scripts. The original file stays open in its tab.
+Ambiguous definitions are left unresolved.
+In behavior scripts, Cmd/Ctrl-click a state in the generated tree comment above the species
+namespace to open its `state` block, including states from shared libraries. State calls and
+`transition(...)` targets also support definition jumps. Older `enum State` members still jump
+to their matching blocks. The implicit `e`, `w`, `c`, `p`, and `o` accessors support navigation
+to their getters or script classes and members.
+Use **Option+Cmd+Left/Right** or **Control+Cmd+Left/Right** on macOS, or
+**Ctrl+Alt+Left/Right** on Windows/Linux, while the
+Files or diff panel is focused to step backward or forward through definition jumps. Each thread keeps
+its own history for the session; a new jump after going back clears the forward history. Back
+closes a destination tab if that jump opened it; tabs that were already open stay open. Forward
+reopens the destination when needed. Moving
+the text cursor or editing clears the blue jump highlight.
+
+In `ScriptingAPI.as`, Cmd-click an API declaration again to follow it into C++.
+This follows matching types and fields, nested type aliases, and registered binding wrappers.
+C++ files also support Cmd-click navigation for local declarations, types, fields, functions,
+methods, and includes. Cmd-click a function declaration in a header to open its implementation;
+Cmd-click the function name on its implementation to return to its declaration.
+Function bodies are preferred over prototypes when found. These lookups
+use the connected workspace and share the same back/forward history.
+
+Cmd-click also works on AngelScript and C++ symbols in thread diffs, in either unified or
+split view. The destination opens in **Files**, where the same back/forward shortcuts apply.
+Back returns to the originating diff scope, file, line, and side; Forward reopens the definition in Files. Navigation uses the clicked revision for
+local context and the connected workspace for other files; it does not check out historical files.
+
+On macOS, **Control+Cmd+Up** and **Control+Cmd+Down** both switch between the current C++
+source file and its matching header. Matching files in the same directory take priority;
+otherwise the nearest unambiguous match in the workspace is used. These switches also enter
+back/forward history.
+
+C++ navigation is approximate: complex templates, generated code, macro expansion, and overloads
+requiring full type analysis may remain unresolved. Workspace searches and file reads are bounded;
+no C++ language server or build configuration is required.
 
 ### Markdown front matter
 
@@ -169,7 +233,12 @@ If more than one API file is found, basic syntax highlighting remains available 
 one arbitrarily.
 
 Calls to methods annotated with `/** await */` or `/** await(State) */` have an amber line
-background. The receiver must be identifiable from the available source; unrelated methods with
+background. The built-in `AwaitAny(...)`, `WaitUntil(...)`, and identifiable HSM sub-state calls
+use the same background. Generic event APIs and native property accessors use the generated
+API's types for highlighting. `behavior` and `library` blocks keep their own scopes:
+inside a library, `p` and `o` navigate to that library's `Params` and `Object`, including
+their fields, regardless of the embedding member's name in the behavior.
+For methods, the receiver must be identifiable from the available source; unrelated methods with
 the same name are not highlighted. Added and removed lines retain their diff gutter markers.
 Both sides of a diff use the current worktree's API.
 

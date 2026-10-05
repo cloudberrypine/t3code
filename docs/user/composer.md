@@ -136,3 +136,19 @@ automatically. HTML previews cannot access your T3 Code session.
 
 On mobile, select a PDF attachment or link to open it. iOS uses the native viewer;
 Android opens the system chooser.
+
+## Polyzonia meshes in the file viewer
+
+Open a Polyzonia mesh JSON file to preview its shape on web, desktop, or mobile.
+Show vertices or joints, then drag a joint to preview skinning. For meshes with IK handles,
+**IK** starts enabled: drag a square handle (such as a foot) to bend the limb, or move its
+root while the feet stay planted. Targets beyond the limb’s reach stretch it, matching
+Polyzonia’s inspector. Turn **IK** off to rotate joints around their parents and move the
+whole skeleton with its root. Use **Reset pose** to return to the saved pose. Previewing never changes the file, and you can switch back to JSON source at any time.
+
+If the mesh contains animations, choose a clip to preview vertex or joint animation,
+including animated IK targets. Use **Play/Pause**, scrub to inspect a moment, and adjust
+looping or playback speed. Choose **Pose** to return to manual joint dragging. Playback
+pauses while the app is in the background.
+
+JSON previews support files up to 4 MB. Larger or invalid files open as source.

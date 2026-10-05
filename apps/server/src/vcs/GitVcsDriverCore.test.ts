@@ -1739,6 +1739,82 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect(
+      "removes ignored build artifacts and restores only committed files from the retained branch",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          const pathService = yield* Path.Path;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "cpp");
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* driver.createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/cpp",
+          });
+          yield* writeTextFile(worktreePath, ".gitignore", "build/\n");
+          yield* writeTextFile(worktreePath, "main.cpp", "int main() { return 0; }\n");
+          yield* git(worktreePath, ["add", "."]);
+          yield* git(worktreePath, ["commit", "-m", "Add C++ source"]);
+          const head = yield* git(worktreePath, ["rev-parse", "HEAD"]);
+          yield* writeTextFile(worktreePath, "build/main.o", "compiled artifact");
+
+          yield* driver.removeWorktree({ cwd, path: worktreePath });
+          assert.isFalse(yield* fileSystem.exists(worktreePath));
+          yield* driver.createWorktree({ cwd, path: worktreePath, refName: "feature/cpp" });
+          assert.equal(yield* git(worktreePath, ["rev-parse", "HEAD"]), head);
+          assert.equal(
+            yield* fileSystem.readFileString(pathService.join(worktreePath, "main.cpp")),
+            "int main() { return 0; }\n",
+          );
+          assert.isFalse(yield* fileSystem.exists(pathService.join(worktreePath, "build")));
+        }),
+    );
+
+    it.effect.each(["tracked", "untracked", "locked"] as const)(
+      "keeps a %s worktree when removal is not forced",
+      (state) =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          const pathService = yield* Path.Path;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "kept");
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* driver.createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/kept",
+          });
+          yield* writeTextFile(worktreePath, "source.cpp", "original");
+          yield* git(worktreePath, ["add", "."]);
+          yield* git(worktreePath, ["commit", "-m", "Source"]);
+          if (state === "locked") yield* git(cwd, ["worktree", "lock", worktreePath]);
+          else
+            yield* writeTextFile(
+              worktreePath,
+              state === "tracked" ? "source.cpp" : "new.cpp",
+              "unsaved work",
+            );
+          const result = yield* driver
+            .removeWorktree({ cwd, path: worktreePath })
+            .pipe(Effect.result);
+          assert.isTrue(Result.isFailure(result));
+          assert.isTrue(yield* fileSystem.exists(worktreePath));
+          if (state !== "locked")
+            assert.equal(
+              yield* fileSystem.readFileString(
+                pathService.join(worktreePath, state === "tracked" ? "source.cpp" : "new.cpp"),
+              ),
+              "unsaved work",
+            );
+        }),
+    );
+
     it.effect("removes the same worktree path twice without failing", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
