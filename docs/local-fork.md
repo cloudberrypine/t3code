@@ -81,6 +81,22 @@ default of 5 minutes cuts slow flag uploads from a phone).
   the name is read, never the connector token).
 - Tests: `vp test run src/play/PlayProxy.test.ts` in `apps/server`.
 
+Clients open play links themselves (`packages/client-runtime/src/polyzoniaPlay.ts` is the rule: a
+page under `/play/` on one of the thread's environment's addresses; anything else keeps its usual
+target):
+
+- Mobile (`apps/mobile/src/features/play/`) shows a full-screen play screen; so does
+  `<scheme>://play?url=<encoded play link>` for paired environments only. A link's own ticket is
+  redeemed by the page; without one, or once it is spent, the screen mints one with the app's
+  session when the page reports it is signed out. A 16 pt strip on the left edge takes the closing
+  swipe: WebKit fails native gestures over a page that prevents its touches' default, as the game
+  does. The local module `apps/mobile/modules/t3-play-orientation` (iOS) widens the app's
+  orientation mask while the screen is open; it answers `supportedInterfaceOrientationsFor`, so it
+  must keep returning Info.plist's orientations otherwise. Native changes need a rebuilt app.
+- Desktop opens the page in the integrated browser at the address it is connected to, with a
+  ticket minted from its own session, so the posted ticket stays unspent; T3 Connect links are
+  recognized through the ticket reply's `publicOrigin`.
+
 ## Verification
 
 - Focused behavioral tests, scoped lint, and typechecks for affected packages. No repository-wide
