@@ -26,8 +26,8 @@ import { setPlayRotationAllowed } from "./playOrientation";
 import { resolvePlayRoute, type PlayRouteParams } from "./playRoute";
 
 const BACKGROUND = "#000000";
-/** How far in from the left edge a closing swipe may start, like the system back swipe. */
-const EDGE_WIDTH = 24;
+/** How far in from the left edge a closing swipe may start; the page gets no touches there. */
+const EDGE_WIDTH = 16;
 const CLOSE_DISTANCE = 96;
 /** A deep link's environment may still be connecting when the screen opens. */
 const ADDRESS_WAIT_MS = 10_000;
@@ -253,8 +253,10 @@ function NoticeButton(props: { readonly label: string; readonly onPress: () => v
 
 /**
  * Closes on a rightward swipe that starts within EDGE_WIDTH of the left edge.
- * The recognizer sits on a view around the web view, outside the page's touch
- * handling, and cancels the page's touches once it takes over.
+ * The strip there lies over the web view and takes those touches itself: a
+ * recognizer around the web view never sees a swipe the page handles, since
+ * WebKit fails native gestures once a page prevents its touches' default, as
+ * the game does.
  */
 function EdgeSwipeToClose(props: { readonly onClose: () => void; readonly children: ReactNode }) {
   const travel = useSharedValue(0);
@@ -262,7 +264,6 @@ function EdgeSwipeToClose(props: { readonly onClose: () => void; readonly childr
   const gesture = useMemo(
     () =>
       Gesture.Pan()
-        .hitSlop({ left: 0, width: EDGE_WIDTH })
         .activeOffsetX(12)
         .failOffsetX(-12)
         .failOffsetY([-40, 40])
@@ -282,14 +283,15 @@ function EdgeSwipeToClose(props: { readonly onClose: () => void; readonly childr
     transform: [{ translateX: Math.min(travel.get(), CLOSE_DISTANCE) / 2 }],
   }));
   return (
-    <GestureDetector gesture={gesture}>
-      <View style={styles.fill} collapsable={false}>
-        {props.children}
-        <Animated.View pointerEvents="none" style={[styles.hint, hintStyle]}>
-          <SymbolView name="chevron.left" size={18} tintColor="#ffffff" />
-        </Animated.View>
-      </View>
-    </GestureDetector>
+    <View style={styles.fill}>
+      {props.children}
+      <GestureDetector gesture={gesture}>
+        <View style={styles.edge} collapsable={false} />
+      </GestureDetector>
+      <Animated.View pointerEvents="none" style={[styles.hint, hintStyle]}>
+        <SymbolView name="chevron.left" size={18} tintColor="#ffffff" />
+      </Animated.View>
+    </View>
   );
 }
 
@@ -312,6 +314,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
   },
+  edge: { position: "absolute", left: 0, top: 0, bottom: 0, width: EDGE_WIDTH },
   hint: {
     position: "absolute",
     left: 8,
