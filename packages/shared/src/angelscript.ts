@@ -728,7 +728,6 @@ export function colorAngelScriptTokens<
         ...token,
         content: token.content.slice(start - offset, stop - offset),
         color: angelScriptColors[theme][semantic.kind],
-        ...(semantic.kind === "await" ? { fontStyle: 2 } : {}),
       });
       cursor = stop;
     }

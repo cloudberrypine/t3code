@@ -1,6 +1,7 @@
 export type NativeReviewDiffLanguage =
   | "angelscript"
   | "bash"
+  | "cpp"
   | "diff"
   | "javascript"
   | "json"

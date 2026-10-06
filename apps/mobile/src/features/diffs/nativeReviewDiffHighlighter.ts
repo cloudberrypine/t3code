@@ -11,6 +11,7 @@ import typescriptLanguage from "@shikijs/langs/typescript";
 import yamlLanguage from "@shikijs/langs/yaml";
 import * as Schema from "effect/Schema";
 
+import { DESKTOP_CODE_THEME_NAMES, DESKTOP_CODE_THEMES } from "../review/desktopCodeThemes";
 import type { NativeReviewDiffFile, NativeReviewDiffLanguage } from "./nativeReviewDiffTypes";
 import type { NativeReviewDiffRow, NativeReviewDiffToken } from "./nativeReviewDiffSurface";
 
@@ -84,103 +85,9 @@ const NATIVE_REVIEW_DIFF_VISIBLE_MAX_ROWS = 360;
 const NATIVE_REVIEW_DIFF_TOKENIZE_MAX_LINE_LENGTH = 1_000;
 const NATIVE_REVIEW_DIFF_TOKENIZE_MAX_CHARACTERS = 8_000;
 
-const NATIVE_REVIEW_DIFF_THEME_NAME_BY_SCHEME = {
-  dark: "t3-pierre-dark",
-  light: "t3-pierre-light",
-} as const;
+const NATIVE_REVIEW_DIFF_THEME_NAME_BY_SCHEME = DESKTOP_CODE_THEME_NAMES;
 
-const PIERRE_LIGHT_SHIKI_THEME = {
-  name: NATIVE_REVIEW_DIFF_THEME_NAME_BY_SCHEME.light,
-  type: "light" as const,
-  fg: "#070707",
-  bg: "#ffffff",
-  settings: [
-    { settings: { foreground: "#070707", background: "#ffffff" } },
-    { scope: "comment, punctuation.definition.comment", settings: { foreground: "#84848A" } },
-    {
-      scope: "keyword, storage, storage.type, keyword.operator.expression",
-      settings: { foreground: "#FC2B73" },
-    },
-    {
-      scope: "entity.name.function, support.function, meta.function-call",
-      settings: { foreground: "#7B43F8" },
-    },
-    {
-      scope: "entity.name.type, support.type, support.class",
-      settings: { foreground: "#C635E4" },
-    },
-    {
-      scope: "string, constant.character, punctuation.definition.string",
-      settings: { foreground: "#199F43" },
-    },
-    {
-      scope: "constant.numeric, constant.language, constant.other",
-      settings: { foreground: "#1CA1C7" },
-    },
-    {
-      scope: "variable.parameter, variable.other.readwrite, meta.object-literal.key",
-      settings: { foreground: "#D47628" },
-    },
-    {
-      scope: "entity.name.tag, support.class.component",
-      settings: { foreground: "#199F43" },
-    },
-    {
-      scope: "punctuation, meta.brace, meta.delimiter",
-      settings: { foreground: "#79797F" },
-    },
-    { scope: "invalid", settings: { foreground: "#D52C36" } },
-  ],
-};
-
-const PIERRE_DARK_SHIKI_THEME = {
-  name: NATIVE_REVIEW_DIFF_THEME_NAME_BY_SCHEME.dark,
-  type: "dark" as const,
-  fg: "#adadb1",
-  bg: "#0a0a0a",
-  settings: [
-    { settings: { foreground: "#adadb1", background: "#0a0a0a" } },
-    { scope: "comment, punctuation.definition.comment", settings: { foreground: "#84848A" } },
-    {
-      scope: "keyword, storage, storage.type, keyword.operator.expression",
-      settings: { foreground: "#FF678D" },
-    },
-    {
-      scope: "entity.name.function, support.function, meta.function-call",
-      settings: { foreground: "#9D6AFB" },
-    },
-    {
-      scope: "entity.name.type, support.type, support.class",
-      settings: { foreground: "#D568EA" },
-    },
-    {
-      scope: "string, constant.character, punctuation.definition.string",
-      settings: { foreground: "#5ECC71" },
-    },
-    {
-      scope: "constant.numeric, constant.language, constant.other",
-      settings: { foreground: "#68CDF2" },
-    },
-    {
-      scope: "variable.parameter, variable.other.readwrite, meta.object-literal.key",
-      settings: { foreground: "#FFA359" },
-    },
-    {
-      scope: "entity.name.tag, support.class.component",
-      settings: { foreground: "#5ECC71" },
-    },
-    {
-      scope: "punctuation, meta.brace, meta.delimiter",
-      settings: { foreground: "#79797F" },
-    },
-    { scope: "invalid", settings: { foreground: "#FF6762" } },
-  ],
-};
-
-const NATIVE_REVIEW_DIFF_SHIKI_THEMES = [
-  PIERRE_LIGHT_SHIKI_THEME,
-  PIERRE_DARK_SHIKI_THEME,
-] satisfies Parameters<typeof createHighlighterCore>[0]["themes"];
+const NATIVE_REVIEW_DIFF_SHIKI_THEMES = DESKTOP_CODE_THEMES;
 
 const NATIVE_REVIEW_DIFF_LANGUAGES = [
   angelScriptGrammar,
@@ -222,6 +129,10 @@ function createHighlighterHandle(
     async tokenize(code, { lang, theme, signal }) {
       const lines = code.split("\n");
       const highlighted: Array<ReadonlyArray<NativeReviewDiffToken>> = [];
+      // C/C++ (with its embedded grammars) is large, so it loads on the first C++ file.
+      if (lang === "cpp" && !highlighter.getLoadedLanguages().includes("cpp")) {
+        await highlighter.loadLanguage((await import("@shikijs/langs/cpp")).default);
+      }
       let grammarState: GrammarState | undefined;
       let start = 0;
 

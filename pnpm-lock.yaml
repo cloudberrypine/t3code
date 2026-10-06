@@ -270,6 +270,9 @@ importers:
       '@pierre/diffs':
         specifier: 'catalog:'
         version: 1.3.0-beta.10(patch_hash=c4a1b00bc719b9e2c41d312383cac9e1758e1099e82fde96230d22bc052078d4)(@shikijs/themes@4.2.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@pierre/theme':
+        specifier: 1.1.0
+        version: 1.1.0
       '@react-native-ai/apple':
         specifier: 0.12.0
         version: 0.12.0(patch_hash=2d09870c2848d185cb05b53ed823a46e12dba519324d8dd8e584e28731990f9d)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))

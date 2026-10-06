@@ -3,6 +3,7 @@ import type {
   NativeReviewDiffFile,
   NativeReviewDiffLanguage,
 } from "../diffs/nativeReviewDiffTypes";
+import { isCppPath } from "@t3tools/shared/cppNavigation";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import type { ResolvedMobileCodeSurface } from "../../lib/appearancePreferences";
@@ -254,6 +255,7 @@ function getLanguageForPath(
   if (normalizedPath.endsWith(".js") || normalizedPath.endsWith(".cjs")) return "javascript";
   if (normalizedPath.endsWith(".json") || normalizedPath.endsWith(".jsonc")) return "json";
   if (normalizedPath.endsWith(".yml") || normalizedPath.endsWith(".yaml")) return "yaml";
+  if (isCppPath(normalizedPath)) return "cpp";
   if (
     normalizedPath.endsWith(".sh") ||
     normalizedPath.includes("/bin/") ||

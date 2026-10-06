@@ -205,7 +205,7 @@ it("colors current global waits, excluding removed awaitAll and qualified lookal
   expect(awaits.map((t) => t.line)).toEqual([2, 3, 4]);
   expect(
     colorAngelScriptTokens([{ content: source, color: "#fff", fontStyle: 0 }], awaits, "dark")
-      .filter((t) => t.fontStyle === 2)
+      .filter((t) => t.color !== "#fff")
       .map((t) => ({ content: t.content, color: t.color })),
   ).toEqual([
     { content: "awaitAny", color: "#edc65e" },

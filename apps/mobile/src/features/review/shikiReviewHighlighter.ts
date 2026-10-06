@@ -8,8 +8,6 @@ import jsxLanguage from "@shikijs/langs/jsx";
 import tsxLanguage from "@shikijs/langs/tsx";
 import typescriptLanguage from "@shikijs/langs/typescript";
 import yamlLanguage from "@shikijs/langs/yaml";
-import githubDarkDefault from "@shikijs/themes/github-dark-default";
-import githubLightDefault from "@shikijs/themes/github-light-default";
 import { getFiletypeFromFileName } from "@pierre/diffs/utils/getFiletypeFromFileName";
 import * as Schema from "effect/Schema";
 
@@ -17,6 +15,7 @@ import {
   resolveReviewHighlighterEngine,
   resolveReviewHighlighterEnginePreference,
 } from "./reviewHighlighterEngine";
+import { DESKTOP_CODE_THEME_NAMES, DESKTOP_CODE_THEMES } from "./desktopCodeThemes";
 import { createIncrementalSnippet } from "./incrementalSnippet";
 import type { ReviewRenderableLineRow } from "./reviewModel";
 import { applyDiffRangesToTokens, computeWordAltDiffRanges } from "./reviewWordDiffs";
@@ -40,10 +39,7 @@ import type { ReviewHighlightedToken } from "./reviewHighlightedToken.types";
 
 export type { ReviewHighlightedToken } from "./reviewHighlightedToken.types";
 
-const SHIKI_THEME_NAME_BY_SCHEME = {
-  light: "github-light-default",
-  dark: "github-dark-default",
-} as const;
+const SHIKI_THEME_NAME_BY_SCHEME = DESKTOP_CODE_THEME_NAMES;
 const REVIEW_HIGHLIGHTER_ENGINE_ENV_VALUE =
   process.env.EXPO_PUBLIC_REVIEW_HIGHLIGHTER_ENGINE ??
   (process.env.NODE_ENV === "test" ? "javascript" : "native");
@@ -76,6 +72,8 @@ const loadedLanguages = new Set<string>([
 ]);
 const languageLoadingPromises = new Map<string, Promise<boolean>>();
 const languageImports: Partial<Record<string, () => Promise<unknown>>> = {
+  // Preloaded above; listed so a path or hint of "angelscript" is not treated as unknown text.
+  angelscript: async () => ({ default: angelScriptGrammar }),
   javascript: () => import("@shikijs/langs/javascript"),
   typescript: () => import("@shikijs/langs/typescript"),
   jsx: () => import("@shikijs/langs/jsx"),
@@ -233,7 +231,7 @@ async function getHighlighter(): Promise<HighlighterCore> {
         preference: REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE,
       });
 
-      const themes = [githubLightDefault, githubDarkDefault];
+      const themes = DESKTOP_CODE_THEMES;
 
       if (REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE !== "javascript") {
         try {

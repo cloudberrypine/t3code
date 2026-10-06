@@ -322,7 +322,8 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
         line={item}
         tokens={tokens?.[index] ?? null}
         awaitBackground={
-          awaitLines.has(index + 1) ? angelScriptColors[theme].background : undefined
+          // Half strength like desktop and the native canvas, which tint this row at 50% alpha.
+          awaitLines.has(index + 1) ? `${angelScriptColors[theme].background}80` : undefined
         }
         highlighted={index === targetIndex}
         wordBreak={codeWordBreak}
