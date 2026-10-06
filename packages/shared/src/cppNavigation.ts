@@ -1,10 +1,10 @@
-import { parseAngelScriptApi, tokenizeAngelScript } from "./angelscript.js";
+import { parseAngelScriptApi, tokenizeAngelScript } from "./angelscript.ts";
 import {
   createAngelScriptNavigation,
   indexNavigationSource,
   qualifiedScope,
   type AngelScriptSource,
-} from "./angelscriptNavigation.js";
+} from "./angelscriptNavigation.ts";
 
 export const isCppPath = (path: string) =>
   /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp|tpp|ixx|cppm)$/i.test(path);

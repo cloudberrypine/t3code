@@ -1,4 +1,4 @@
-import { angelScriptStateTree, tokenizeAngelScript } from "./angelscript.js";
+import { angelScriptStateTree, tokenizeAngelScript } from "./angelscript.ts";
 
 export interface AngelScriptSource {
   path: string;
