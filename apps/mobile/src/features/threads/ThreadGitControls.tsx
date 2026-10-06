@@ -104,6 +104,8 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly onOpenTerminal: (terminalId?: string | null) => void;
   readonly onOpenNewTerminal: () => void;
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
+  /** Fork: Polyzonia's "Play web build" (features/play), on threads it can play. */
+  readonly onPlayWebBuild?: () => void;
 };
 
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
@@ -369,19 +371,49 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
   );
 }
 
+function playWebBuildHeaderItems(onPress: (() => void) | undefined): HeaderItems {
+  if (onPress === undefined) return [];
+  return [
+    {
+      accessibilityLabel: "Play web build",
+      icon: { name: "play.fill", type: "sfSymbol" },
+      identifier: "thread-right-play-web",
+      label: "Play web build",
+      onPress,
+      sharesBackground: true,
+      type: "button",
+      variant: "plain",
+    },
+  ] as HeaderItems;
+}
+
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
+  const { onPlayWebBuild } = props;
   return useMemo(
-    () => [actionItems.git, actionItems.files, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      [
+        actionItems.git,
+        actionItems.files,
+        actionItems.terminal,
+        ...playWebBuildHeaderItems(onPlayWebBuild),
+      ] as HeaderItems,
+    [actionItems, onPlayWebBuild],
   );
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
+  const { onPlayWebBuild } = props;
   return useMemo(
-    () => [actionItems.files, actionItems.git, actionItems.terminal] as HeaderItems,
-    [actionItems],
+    () =>
+      [
+        actionItems.files,
+        actionItems.git,
+        actionItems.terminal,
+        ...playWebBuildHeaderItems(onPlayWebBuild),
+      ] as HeaderItems,
+    [actionItems, onPlayWebBuild],
   );
 }
 
@@ -470,6 +502,14 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
         />
       ) : null}
       {showActionControls ? createNativeHeaderMenu(threadGitMenuDefinition(props, model)) : null}
+      {showActionControls && props.onPlayWebBuild ? (
+        <NativeHeaderToolbar.Button
+          accessibilityLabel="Play web build"
+          icon="play.fill"
+          onPress={props.onPlayWebBuild}
+          separateBackground
+        />
+      ) : null}
     </NativeHeaderToolbar>
   );
 }

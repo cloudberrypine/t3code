@@ -16,6 +16,8 @@ import { connectionRoutes } from "./connection/routes.ts";
 
 /** Mints a ticket for an operate session (or the play key). */
 export const PLAY_TICKET_PATH = "/play/__auth/ticket";
+/** The play server's own state, with the repository it serves (`repo`). */
+export const PLAY_HEALTH_PATH = "/play/__health";
 
 /** The page a play link opens, or null when `href` is not one. */
 export function parsePlayLink(href: string): URL | null {
@@ -106,4 +108,26 @@ export function playLinkWithTicket(url: URL, ticket: string, origin = url.origin
 export function sessionMayMintPlayTicket(session: AuthSessionState | null): boolean {
   if (session === null) return true;
   return session.authenticated && (session.scopes ?? []).includes(AuthOrchestrationOperateScope);
+}
+
+const withoutTrailingSlash = (path: string) => path.replace(/\/+$/, "");
+
+/**
+ * A thread's "Play web build" page: the play server's redirect to the build of
+ * the thread's worktree (the project's checkout when it has none). Null for
+ * threads of any repository but the one the environment's play server serves.
+ * The play server's page explains a missing, stale or failed build.
+ */
+export function threadPlayPageUrl(input: {
+  readonly httpBaseUrl: string;
+  readonly playRepository: string | null;
+  readonly projectRoot: string | null;
+  readonly worktreePath: string | null;
+}): string | null {
+  const { playRepository, projectRoot } = input;
+  if (playRepository === null || projectRoot === null) return null;
+  if (withoutTrailingSlash(projectRoot) !== withoutTrailingSlash(playRepository)) return null;
+  const url = new URL("/play/__open", input.httpBaseUrl);
+  url.searchParams.set("path", input.worktreePath ?? projectRoot);
+  return url.toString();
 }

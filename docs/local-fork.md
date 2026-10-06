@@ -97,6 +97,15 @@ target):
   ticket minted from its own session, so the posted ticket stays unspent; T3 Connect links are
   recognized through the ticket reply's `publicOrigin`.
 
+**Play web build** plays a thread's own worktree without a posted link: ▶ in the mobile thread
+header (`useThreadPlayWebBuild`, passed to `ThreadGitControls` as `onPlayWebBuild`), and a row
+under the project scripts in the desktop thread details panel (`PlayWebBuildControl`; the
+project's own "Play" script is the desktop build). It shows only when the environment's play
+server (`/play/__health`'s `repo`, read once per connection) serves the thread's project root,
+and opens `/play/__open?path=<worktree, or the project root>`: the play server owns worktree
+naming and redirects to `/play/<name>/`, whose launcher explains or starts a missing, stale or
+failed build. The clients never poll build state.
+
 ## Verification
 
 - Focused behavioral tests, scoped lint, and typechecks for affected packages. No repository-wide

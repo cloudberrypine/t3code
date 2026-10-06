@@ -49,6 +49,7 @@ import { useKnownTerminalSessions } from "../../state/use-terminal-session";
 import { useSelectedThreadDetailState } from "../../state/use-thread-detail";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { GitActionProgressOverlay } from "./GitActionProgressOverlay";
+import { useThreadPlayWebBuild } from "../play/playEnvironments";
 import {
   buildTerminalMenuSessions,
   nextOpenTerminalId,
@@ -98,7 +99,7 @@ function ThreadHeader(
 ) {
   const navigation = useNavigation();
   const { layout, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
-  const { onOpenTerminal, onMergeBack } = props.gitControls;
+  const { onOpenTerminal, onMergeBack, onPlayWebBuild } = props.gitControls;
   const native = useThreadHeaderOptions(props);
   const androidHeaderActions = useMemo<ReadonlyArray<ScreenHeaderAction>>(() => {
     const actions: ScreenHeaderAction[] = [];
@@ -137,6 +138,13 @@ function ThreadHeader(
         onPress: onMergeBack,
       });
     }
+    if (onPlayWebBuild) {
+      actions.push({
+        accessibilityLabel: "Play web build",
+        icon: "play",
+        onPress: onPlayWebBuild,
+      });
+    }
     return actions;
   }, [
     props.inspectorMode,
@@ -144,6 +152,7 @@ function ThreadHeader(
     props.onOpenFilesInspector,
     onOpenTerminal,
     onMergeBack,
+    onPlayWebBuild,
     props.onOpenGitInspector,
     toggleAuxiliaryPane,
     props.onReturnToThread,
@@ -817,6 +826,11 @@ function ThreadRouteContent(
       terminalMenuSessions,
     ],
   );
+  const playWebBuild = useThreadPlayWebBuild({
+    environmentId: selectedThread?.environmentId ?? null,
+    projectRoot: selectedThreadProject?.workspaceRoot ?? null,
+    worktreePath: selectedThread?.worktreePath ?? null,
+  });
   const threadGitControlProps = {
     environmentId: environmentIdRaw ?? "",
     threadId: threadId ?? "",
@@ -850,6 +864,7 @@ function ThreadRouteContent(
     onOpenTerminal: handleOpenTerminal,
     onOpenNewTerminal: handleOpenNewTerminal,
     onRunProjectScript: handleRunProjectScript,
+    ...(playWebBuild ? { onPlayWebBuild: playWebBuild } : {}),
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };

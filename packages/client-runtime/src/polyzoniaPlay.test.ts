@@ -14,6 +14,7 @@ import {
   playLinkWithTicket,
   resolvePlayLink,
   sessionMayMintPlayTicket,
+  threadPlayPageUrl,
 } from "./polyzoniaPlay.ts";
 
 const DESK = EnvironmentId.make("desk");
@@ -133,5 +134,30 @@ describe("play links", () => {
       sessionMayMintPlayTicket({ authenticated: true, auth, scopes: ["orchestration:read"] }),
     ).toBe(false);
     expect(sessionMayMintPlayTicket({ authenticated: false, auth })).toBe(false);
+  });
+});
+
+describe("threadPlayPageUrl", () => {
+  const base = {
+    httpBaseUrl: `${RELAY_ORIGIN}/`,
+    playRepository: "/Users/me/polyzonia",
+    projectRoot: "/Users/me/polyzonia/",
+  };
+
+  it("opens the thread's worktree, or the checkout for a thread without one", () => {
+    const worktree = threadPlayPageUrl({ ...base, worktreePath: "/Users/me/wt/fix frog" });
+    expect(worktree).toBe(`${RELAY_ORIGIN}/play/__open?path=%2FUsers%2Fme%2Fwt%2Ffix+frog`);
+    expect(parsePlayLink(worktree ?? "")).not.toBeNull();
+    expect(threadPlayPageUrl({ ...base, worktreePath: null })).toBe(
+      `${RELAY_ORIGIN}/play/__open?path=%2FUsers%2Fme%2Fpolyzonia%2F`,
+    );
+  });
+
+  it("is null for another repository's threads or without a play server", () => {
+    expect(
+      threadPlayPageUrl({ ...base, projectRoot: "/Users/me/t3code", worktreePath: null }),
+    ).toBeNull();
+    expect(threadPlayPageUrl({ ...base, playRepository: null, worktreePath: null })).toBeNull();
+    expect(threadPlayPageUrl({ ...base, projectRoot: null, worktreePath: null })).toBeNull();
   });
 });

@@ -15,9 +15,9 @@
       "types": "./src/polyzoniaPlay.ts",
       "default": "./src/polyzoniaPlay.ts"
     },
-    "./state/polyzonia-play-ticket": {
-      "types": "./src/state/polyzoniaPlayTicket.ts",
-      "default": "./src/state/polyzoniaPlayTicket.ts"
+    "./state/polyzonia-play": {
+      "types": "./src/state/polyzoniaPlay.ts",
+      "default": "./src/state/polyzoniaPlay.ts"
     },
     "./cpp-navigation": {
       "types": "./src/cppNavigation.ts",

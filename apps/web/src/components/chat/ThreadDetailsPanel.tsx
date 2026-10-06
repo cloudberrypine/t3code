@@ -25,6 +25,7 @@ import { Button } from "../ui/button";
 import type { ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
+import { PlayWebBuildControl } from "./PlayWebBuildControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
@@ -191,6 +192,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   onDeleteScript={props.onDeleteProjectScript}
                 />
               ) : null}
+              {/* Fork: Polyzonia play */}
+              {props.draftId ? null : (
+                <PlayWebBuildControl
+                  environmentId={props.environmentId}
+                  threadId={props.threadId}
+                />
+              )}
             </div>
           </ThreadDetailsSection>
 

@@ -1,14 +1,21 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
-import { environmentPlayOrigins, resolvePlayLink } from "@t3tools/client-runtime/polyzonia-play";
-import { mintPlayTicket } from "@t3tools/client-runtime/state/polyzonia-play-ticket";
+import {
+  environmentPlayOrigins,
+  resolvePlayLink,
+  threadPlayPageUrl,
+} from "@t3tools/client-runtime/polyzonia-play";
+import {
+  createPlayRepositoryAtoms,
+  mintPlayTicket,
+} from "@t3tools/client-runtime/state/polyzonia-play";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
 import * as Option from "effect/Option";
 import { Atom } from "effect/unstable/reactivity";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
 import { connectionAtomRuntime } from "../../connection/runtime";
@@ -82,5 +89,55 @@ export function usePlayLinkOpener(environmentId: EnvironmentId | null): (href: s
       return true;
     },
     [environmentId, navigation, origins],
+  );
+}
+
+const playRepository = createPlayRepositoryAtoms(
+  connectionAtomRuntime,
+  environmentSession.preparedConnectionValueAtom,
+);
+const NO_PLAY_REPOSITORY_ATOM = Atom.make<string | null>(null).pipe(
+  Atom.withLabel("mobile-play-repository:none"),
+);
+const NO_PREPARED_CONNECTION_ATOM = Atom.make(Option.none<PreparedConnection>()).pipe(
+  Atom.withLabel("mobile-play-prepared-connection:none"),
+);
+
+/**
+ * "Play web build" for a thread: opens the play screen at its worktree's
+ * build. Null (no button) unless the environment's play server serves the
+ * thread's repository.
+ */
+export function useThreadPlayWebBuild(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly projectRoot: string | null;
+  readonly worktreePath: string | null;
+}): (() => void) | null {
+  const { environmentId, projectRoot, worktreePath } = input;
+  const navigation = useNavigation();
+  const repository = useAtomValue(
+    environmentId === null
+      ? NO_PLAY_REPOSITORY_ATOM
+      : playRepository.playRepositoryValueAtom(environmentId),
+  );
+  const prepared = useAtomValue(
+    environmentId === null
+      ? NO_PREPARED_CONNECTION_ATOM
+      : environmentSession.preparedConnectionValueAtom(environmentId),
+  );
+  const httpBaseUrl = Option.getOrNull(prepared)?.httpBaseUrl ?? null;
+  const url =
+    httpBaseUrl === null
+      ? null
+      : threadPlayPageUrl({ httpBaseUrl, playRepository: repository, projectRoot, worktreePath });
+  return useMemo(
+    () =>
+      url === null || environmentId === null
+        ? null
+        : () => {
+            void Haptics.selectionAsync();
+            navigation.navigate("Play", { url, environmentId });
+          },
+    [environmentId, navigation, url],
   );
 }
