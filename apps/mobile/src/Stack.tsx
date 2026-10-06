@@ -43,6 +43,7 @@ import { ReviewCommentComposerSheet } from "./features/review/ReviewCommentCompo
 import { ReviewSheet } from "./features/review/ReviewSheet";
 import { ThreadTerminalRouteScreen } from "./features/terminal/ThreadTerminalRouteScreen";
 import { DevicePreviewRouteScreen } from "./features/devices/DevicePreviewRouteScreen";
+import { PlayRouteScreen } from "./features/play/PlayRouteScreen";
 import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
@@ -701,6 +702,22 @@ const RootStackConfig = createNativeStackNavigator({
         gestureEnabled: false,
         autoHideHomeIndicator: true,
         navigationBarHidden: true,
+      },
+    }),
+    // Polyzonia play pages (fork-only): a thread's play link, or the deep link
+    // `<scheme>://play?url=<encoded play link>`.
+    Play: createNativeStackScreen({
+      screen: PlayRouteScreen,
+      linking: "play",
+      options: {
+        presentation: "fullScreenModal",
+        animation: "fade",
+        headerShown: false,
+        // A swipe in from the left edge closes it (PlayRouteScreen).
+        gestureEnabled: false,
+        autoHideHomeIndicator: true,
+        navigationBarHidden: true,
+        contentStyle: { backgroundColor: "#000000" },
       },
     }),
     ThreadReview: createNativeStackScreen({
