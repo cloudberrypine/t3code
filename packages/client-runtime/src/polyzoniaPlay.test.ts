@@ -15,6 +15,7 @@ import {
   resolvePlayLink,
   sessionMayMintPlayTicket,
   threadPlayPageUrl,
+  threadPlayState,
 } from "./polyzoniaPlay.ts";
 
 const DESK = EnvironmentId.make("desk");
@@ -159,5 +160,40 @@ describe("threadPlayPageUrl", () => {
     ).toBeNull();
     expect(threadPlayPageUrl({ ...base, playRepository: null, worktreePath: null })).toBeNull();
     expect(threadPlayPageUrl({ ...base, projectRoot: null, worktreePath: null })).toBeNull();
+  });
+});
+
+describe("threadPlayState", () => {
+  const thread = {
+    httpBaseUrl: `${RELAY_ORIGIN}/`,
+    projectRoot: "/Users/me/polyzonia",
+    worktreePath: "/Users/me/wt/frog",
+  };
+  const serving = { status: "serving", repository: "/Users/me/polyzonia" } as const;
+
+  it("loads while the play server is unknown or the connection has no address yet", () => {
+    expect(threadPlayState({ ...thread, playServer: { status: "checking" } })).toEqual({
+      status: "loading",
+    });
+    expect(threadPlayState({ ...thread, httpBaseUrl: null, playServer: serving })).toEqual({
+      status: "loading",
+    });
+  });
+
+  it("is ready for a thread of the served repository", () => {
+    expect(threadPlayState({ ...thread, playServer: serving })).toEqual({
+      status: "ready",
+      url: `${RELAY_ORIGIN}/play/__open?path=%2FUsers%2Fme%2Fwt%2Ffrog`,
+    });
+  });
+
+  it("is hidden without a play server, for another repository, or without a project", () => {
+    expect(threadPlayState({ ...thread, playServer: { status: "absent" } })).toBeNull();
+    expect(
+      threadPlayState({ ...thread, projectRoot: "/Users/me/t3code", playServer: serving }),
+    ).toBeNull();
+    expect(
+      threadPlayState({ ...thread, projectRoot: null, playServer: { status: "checking" } }),
+    ).toBeNull();
   });
 });

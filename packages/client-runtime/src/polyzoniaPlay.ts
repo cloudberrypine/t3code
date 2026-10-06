@@ -113,6 +113,46 @@ export function sessionMayMintPlayTicket(session: AuthSessionState | null): bool
 const withoutTrailingSlash = (path: string) => path.replace(/\/+$/, "");
 
 /**
+ * An environment's play server as the client knows it: "checking" until the
+ * first answer after connecting, then the repository it serves or "absent"
+ * (no play route, or the play server is not running).
+ */
+export type PlayServerState =
+  | { readonly status: "checking" }
+  | { readonly status: "serving"; readonly repository: string }
+  | { readonly status: "absent" };
+
+export const PLAY_SERVER_CHECKING: PlayServerState = { status: "checking" };
+
+/** A thread's "Play web build": loading while unknown, or ready with its page. */
+export type ThreadPlayState =
+  | { readonly status: "loading" }
+  | { readonly status: "ready"; readonly url: string };
+
+/**
+ * Whether a thread shows "Play web build", and its page: null (no button) for
+ * a thread without a project, or once the play server is known not to serve
+ * the thread's repository.
+ */
+export function threadPlayState(input: {
+  readonly httpBaseUrl: string | null;
+  readonly playServer: PlayServerState;
+  readonly projectRoot: string | null;
+  readonly worktreePath: string | null;
+}): ThreadPlayState | null {
+  const { playServer, projectRoot } = input;
+  if (projectRoot === null || playServer.status === "absent") return null;
+  if (playServer.status === "checking" || input.httpBaseUrl === null) return { status: "loading" };
+  const url = threadPlayPageUrl({
+    httpBaseUrl: input.httpBaseUrl,
+    playRepository: playServer.repository,
+    projectRoot,
+    worktreePath: input.worktreePath,
+  });
+  return url === null ? null : { status: "ready", url };
+}
+
+/**
  * A thread's "Play web build" page: the play server's redirect to the build of
  * the thread's worktree (the project's checkout when it has none). Null for
  * threads of any repository but the one the environment's play server serves.

@@ -13,13 +13,16 @@ import {
   environmentPlayOrigins,
   parsePlayLink,
   playLinkWithTicket,
+  PLAY_SERVER_CHECKING,
   resolvePlayLink,
-  threadPlayPageUrl,
+  threadPlayState,
+  type PlayServerState,
+  type ThreadPlayState,
 } from "@t3tools/client-runtime/polyzonia-play";
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
 import type { PlayTicketReply } from "@t3tools/client-runtime/state/polyzonia-play";
 import {
-  createPlayRepositoryAtoms,
+  createPlayServerAtoms,
   mintPlayTicket,
 } from "@t3tools/client-runtime/state/polyzonia-play";
 import {
@@ -39,7 +42,7 @@ import { environmentCatalog } from "~/connection/catalog";
 import { connectionAtomRuntime } from "~/connection/runtime";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { readLocalApi } from "~/localApi";
-import { environmentSession, readPreparedConnection, usePreparedConnection } from "~/state/session";
+import { readPreparedConnection, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 const mintPlayTicketCommand = createRuntimeCommand(connectionAtomRuntime, {
@@ -116,32 +119,29 @@ export function usePlayLinkOpener(
   );
 }
 
-const playRepository = createPlayRepositoryAtoms(
-  connectionAtomRuntime,
-  environmentSession.preparedConnectionValueAtom,
-);
-const NO_PLAY_REPOSITORY_ATOM = Atom.make<string | null>(null).pipe(
-  Atom.withLabel("web-play-repository:none"),
+const playServer = createPlayServerAtoms(connectionAtomRuntime);
+const NO_PLAY_SERVER_ATOM = Atom.make<PlayServerState>(PLAY_SERVER_CHECKING).pipe(
+  Atom.withLabel("web-play-server:none"),
 );
 
 /**
- * The address of a thread's "Play web build" (the play server's redirect to
- * its worktree's build), or null unless the environment's play server serves
- * the thread's repository. Open it with `usePlayLinkOpener`.
+ * A thread's "Play web build": loading until the environment's play server has
+ * answered since this client connected, then its page (the play server's
+ * redirect to the thread's worktree build), or null once the play server does
+ * not serve the thread's repository. Follows connects and reconnects. Open the
+ * page with `usePlayLinkOpener`.
  */
-export function useThreadPlayPageUrl(input: {
+export function useThreadPlayState(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRoot: string | null;
   readonly worktreePath: string | null;
-}): string | null {
+}): ThreadPlayState | null {
   const { environmentId, projectRoot, worktreePath } = input;
-  const repository = useAtomValue(
-    environmentId === null
-      ? NO_PLAY_REPOSITORY_ATOM
-      : playRepository.playRepositoryValueAtom(environmentId),
+  const server = useAtomValue(
+    environmentId === null ? NO_PLAY_SERVER_ATOM : playServer.playServerValueAtom(environmentId),
   );
   const httpBaseUrl = Option.getOrNull(usePreparedConnection(environmentId))?.httpBaseUrl ?? null;
-  return httpBaseUrl === null
+  return environmentId === null
     ? null
-    : threadPlayPageUrl({ httpBaseUrl, playRepository: repository, projectRoot, worktreePath });
+    : threadPlayState({ httpBaseUrl, playServer: server, projectRoot, worktreePath });
 }

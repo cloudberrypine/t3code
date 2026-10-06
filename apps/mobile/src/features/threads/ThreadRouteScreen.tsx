@@ -99,7 +99,7 @@ function ThreadHeader(
 ) {
   const navigation = useNavigation();
   const { layout, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
-  const { onOpenTerminal, onMergeBack, onPlayWebBuild } = props.gitControls;
+  const { onOpenTerminal, onMergeBack, playWebBuild } = props.gitControls;
   const native = useThreadHeaderOptions(props);
   const androidHeaderActions = useMemo<ReadonlyArray<ScreenHeaderAction>>(() => {
     const actions: ScreenHeaderAction[] = [];
@@ -138,11 +138,12 @@ function ThreadHeader(
         onPress: onMergeBack,
       });
     }
-    if (onPlayWebBuild) {
+    if (playWebBuild) {
       actions.push({
-        accessibilityLabel: "Play web build",
+        accessibilityLabel: playWebBuild.loading ? "Play web build (checking)" : "Play web build",
+        disabled: playWebBuild.loading,
         icon: "play",
-        onPress: onPlayWebBuild,
+        onPress: playWebBuild.onPress,
       });
     }
     return actions;
@@ -152,7 +153,7 @@ function ThreadHeader(
     props.onOpenFilesInspector,
     onOpenTerminal,
     onMergeBack,
-    onPlayWebBuild,
+    playWebBuild,
     props.onOpenGitInspector,
     toggleAuxiliaryPane,
     props.onReturnToThread,
@@ -864,7 +865,7 @@ function ThreadRouteContent(
     onOpenTerminal: handleOpenTerminal,
     onOpenNewTerminal: handleOpenNewTerminal,
     onRunProjectScript: handleRunProjectScript,
-    ...(playWebBuild ? { onPlayWebBuild: playWebBuild } : {}),
+    ...(playWebBuild ? { playWebBuild } : {}),
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };

@@ -10,6 +10,7 @@ import {
 import { type GitActionRequestInput, resolveQuickAction } from "@t3tools/client-runtime/state/vcs";
 import { useNavigation } from "@react-navigation/native";
 import { NativeHeaderToolbar } from "../../native/StackHeader";
+import type { PlayWebBuildButton } from "../play/playEnvironments";
 import { useCallback, useMemo } from "react";
 import { Alert } from "react-native";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
@@ -105,7 +106,7 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly onOpenNewTerminal: () => void;
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
   /** Fork: Polyzonia's "Play web build" (features/play), on threads it can play. */
-  readonly onPlayWebBuild?: () => void;
+  readonly playWebBuild?: PlayWebBuildButton;
 };
 
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
@@ -371,15 +372,16 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
   );
 }
 
-function playWebBuildHeaderItems(onPress: (() => void) | undefined): HeaderItems {
-  if (onPress === undefined) return [];
+function playWebBuildHeaderItems(button: PlayWebBuildButton | undefined): HeaderItems {
+  if (button === undefined) return [];
   return [
     {
-      accessibilityLabel: "Play web build",
+      accessibilityLabel: button.loading ? "Play web build (checking)" : "Play web build",
+      disabled: button.loading,
       icon: { name: "play.fill", type: "sfSymbol" },
       identifier: "thread-right-play-web",
       label: "Play web build",
-      onPress,
+      onPress: button.onPress,
       sharesBackground: true,
       type: "button",
       variant: "plain",
@@ -389,32 +391,28 @@ function playWebBuildHeaderItems(onPress: (() => void) | undefined): HeaderItems
 
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
-  const { onPlayWebBuild } = props;
+  const { playWebBuild } = props;
   // Fork: the compact (iPhone) header has no terminal button. With Play web
   // build, four buttons leave no room for the thread title.
   return useMemo(
     () =>
-      [
-        actionItems.git,
-        actionItems.files,
-        ...playWebBuildHeaderItems(onPlayWebBuild),
-      ] as HeaderItems,
-    [actionItems, onPlayWebBuild],
+      [actionItems.git, actionItems.files, ...playWebBuildHeaderItems(playWebBuild)] as HeaderItems,
+    [actionItems, playWebBuild],
   );
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
-  const { onPlayWebBuild } = props;
+  const { playWebBuild } = props;
   return useMemo(
     () =>
       [
         actionItems.files,
         actionItems.git,
         actionItems.terminal,
-        ...playWebBuildHeaderItems(onPlayWebBuild),
+        ...playWebBuildHeaderItems(playWebBuild),
       ] as HeaderItems,
-    [actionItems, onPlayWebBuild],
+    [actionItems, playWebBuild],
   );
 }
 
@@ -503,11 +501,14 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
         />
       ) : null}
       {showActionControls ? createNativeHeaderMenu(threadGitMenuDefinition(props, model)) : null}
-      {showActionControls && props.onPlayWebBuild ? (
+      {showActionControls && props.playWebBuild ? (
         <NativeHeaderToolbar.Button
-          accessibilityLabel="Play web build"
+          accessibilityLabel={
+            props.playWebBuild.loading ? "Play web build (checking)" : "Play web build"
+          }
+          disabled={props.playWebBuild.loading}
           icon="play.fill"
-          onPress={props.onPlayWebBuild}
+          onPress={props.playWebBuild.onPress}
           separateBackground
         />
       ) : null}

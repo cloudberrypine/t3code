@@ -2,11 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import {
   environmentPlayOrigins,
+  PLAY_SERVER_CHECKING,
   resolvePlayLink,
-  threadPlayPageUrl,
+  threadPlayState,
+  type PlayServerState,
 } from "@t3tools/client-runtime/polyzonia-play";
 import {
-  createPlayRepositoryAtoms,
+  createPlayServerAtoms,
   mintPlayTicket,
 } from "@t3tools/client-runtime/state/polyzonia-play";
 import { createRuntimeCommand } from "@t3tools/client-runtime/state/runtime";
@@ -92,52 +94,63 @@ export function usePlayLinkOpener(environmentId: EnvironmentId | null): (href: s
   );
 }
 
-const playRepository = createPlayRepositoryAtoms(
-  connectionAtomRuntime,
-  environmentSession.preparedConnectionValueAtom,
-);
-const NO_PLAY_REPOSITORY_ATOM = Atom.make<string | null>(null).pipe(
-  Atom.withLabel("mobile-play-repository:none"),
+const playServer = createPlayServerAtoms(connectionAtomRuntime);
+const NO_PLAY_SERVER_ATOM = Atom.make<PlayServerState>(PLAY_SERVER_CHECKING).pipe(
+  Atom.withLabel("mobile-play-server:none"),
 );
 const NO_PREPARED_CONNECTION_ATOM = Atom.make(Option.none<PreparedConnection>()).pipe(
   Atom.withLabel("mobile-play-prepared-connection:none"),
 );
 
+/** The thread header's "Play web build": disabled while its availability is being checked. */
+export interface PlayWebBuildButton {
+  readonly loading: boolean;
+  readonly onPress: () => void;
+}
+
+const NOTHING_TO_PLAY = () => {};
+
 /**
  * "Play web build" for a thread: opens the play screen at its worktree's
- * build. Null (no button) unless the environment's play server serves the
- * thread's repository.
+ * build. Loading until the environment's play server has answered since the
+ * app connected; null (no button) once it does not serve the thread's
+ * repository. Follows connects and reconnects while the thread is open.
  */
 export function useThreadPlayWebBuild(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRoot: string | null;
   readonly worktreePath: string | null;
-}): (() => void) | null {
+}): PlayWebBuildButton | null {
   const { environmentId, projectRoot, worktreePath } = input;
   const navigation = useNavigation();
-  const repository = useAtomValue(
-    environmentId === null
-      ? NO_PLAY_REPOSITORY_ATOM
-      : playRepository.playRepositoryValueAtom(environmentId),
+  const server = useAtomValue(
+    environmentId === null ? NO_PLAY_SERVER_ATOM : playServer.playServerValueAtom(environmentId),
   );
   const prepared = useAtomValue(
     environmentId === null
       ? NO_PREPARED_CONNECTION_ATOM
       : environmentSession.preparedConnectionValueAtom(environmentId),
   );
-  const httpBaseUrl = Option.getOrNull(prepared)?.httpBaseUrl ?? null;
-  const url =
-    httpBaseUrl === null
+  const state =
+    environmentId === null
       ? null
-      : threadPlayPageUrl({ httpBaseUrl, playRepository: repository, projectRoot, worktreePath });
-  return useMemo(
-    () =>
-      url === null || environmentId === null
-        ? null
-        : () => {
-            void Haptics.selectionAsync();
-            navigation.navigate("Play", { url, environmentId });
-          },
-    [environmentId, navigation, url],
-  );
+      : threadPlayState({
+          httpBaseUrl: Option.getOrNull(prepared)?.httpBaseUrl ?? null,
+          playServer: server,
+          projectRoot,
+          worktreePath,
+        });
+  const url = state?.status === "ready" ? state.url : null;
+  const loading = state?.status === "loading";
+  return useMemo(() => {
+    if (loading) return { loading: true, onPress: NOTHING_TO_PLAY };
+    if (url === null || environmentId === null) return null;
+    return {
+      loading: false,
+      onPress: () => {
+        void Haptics.selectionAsync();
+        navigation.navigate("Play", { url, environmentId });
+      },
+    };
+  }, [environmentId, loading, navigation, url]);
 }

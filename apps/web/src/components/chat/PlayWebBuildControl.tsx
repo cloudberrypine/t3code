@@ -10,7 +10,7 @@ import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contract
 import { PlayIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 
-import { usePlayLinkOpener, useThreadPlayPageUrl } from "../../browser/playLinks";
+import { usePlayLinkOpener, useThreadPlayState } from "../../browser/playLinks";
 import { openUrlInPreview } from "../../browser/openFileInPreview";
 import { recordVisitForThread } from "../../browserHistoryStore";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
@@ -24,13 +24,18 @@ import { isPlayWebBuildShortcut, PLAY_WEB_BUILD_COMMAND } from "./playWebBuildSh
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { THREAD_DETAILS_PANEL_ICON_CLASS } from "./threadDetailsPanelStyles";
 
-/** Plays the thread's web build, or null when the play server does not serve its project. */
-function usePlayWebBuild(threadRef: ScopedThreadRef): (() => void) | null {
+/**
+ * Plays the thread's web build: `loading` while the play server is being
+ * checked, null when it does not serve the thread's project.
+ */
+function usePlayWebBuild(
+  threadRef: ScopedThreadRef,
+): { readonly loading: true } | { readonly loading: false; readonly play: () => void } | null {
   const thread = useThreadShell(threadRef);
   const project = useProject(
     thread ? scopeProjectRef(thread.environmentId, thread.projectId) : null,
   );
-  const url = useThreadPlayPageUrl({
+  const state = useThreadPlayState({
     environmentId: threadRef.environmentId,
     projectRoot: project?.workspaceRoot ?? null,
     worktreePath: thread?.worktreePath ?? null,
@@ -45,10 +50,12 @@ function usePlayWebBuild(threadRef: ScopedThreadRef): (() => void) | null {
     [openPreview, threadRef],
   );
   const openPlayLink = usePlayLinkOpener(threadRef.environmentId, openInPreview);
-  return useMemo(
-    () => (url === null ? null : () => void openPlayLink(url, true)),
-    [openPlayLink, url],
-  );
+  const url = state?.status === "ready" ? state.url : null;
+  const loading = state?.status === "loading";
+  return useMemo(() => {
+    if (loading) return { loading: true };
+    return url === null ? null : { loading: false, play: () => void openPlayLink(url, true) };
+  }, [loading, openPlayLink, url]);
 }
 
 export function PlayWebBuildControl(props: {
@@ -59,9 +66,9 @@ export function PlayWebBuildControl(props: {
     () => scopeThreadRef(props.environmentId, props.threadId),
     [props.environmentId, props.threadId],
   );
-  const play = usePlayWebBuild(threadRef);
+  const playWebBuild = usePlayWebBuild(threadRef);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  if (play === null) return null;
+  if (playWebBuild === null) return null;
   const shortcutLabel = shortcutLabelForCommand(keybindings, PLAY_WEB_BUILD_COMMAND);
   return (
     <Tooltip>
@@ -72,7 +79,8 @@ export function PlayWebBuildControl(props: {
             variant="ghost"
             part="row"
             aria-label="Play web build"
-            onClick={play}
+            disabled={playWebBuild.loading}
+            {...(playWebBuild.loading ? {} : { onClick: playWebBuild.play })}
           />
         }
       >
@@ -80,7 +88,11 @@ export function PlayWebBuildControl(props: {
         <span className="truncate">Play web build</span>
       </TooltipTrigger>
       <TooltipPopup side="top">
-        {shortcutLabel ? `Play web build (${shortcutLabel})` : "Play web build"}
+        {playWebBuild.loading
+          ? "Checking the play server…"
+          : shortcutLabel
+            ? `Play web build (${shortcutLabel})`
+            : "Play web build"}
       </TooltipPopup>
     </Tooltip>
   );
@@ -95,7 +107,8 @@ export function PlayWebBuildShortcut(props: {
   readonly getShortcutContext: (target: EventTarget | null) => Partial<ShortcutMatchContext>;
 }) {
   const { getShortcutContext } = props;
-  const play = usePlayWebBuild(props.threadRef);
+  const playWebBuild = usePlayWebBuild(props.threadRef);
+  const play = playWebBuild?.loading === false ? playWebBuild.play : null;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   useEffect(() => {
     if (play === null) return;
