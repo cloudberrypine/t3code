@@ -19,6 +19,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import {
   HttpBody,
   HttpClient,
@@ -29,7 +30,12 @@ import {
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import { httpCompressionLayer } from "../http.ts";
-import { makePlayProxyRoutes, privateCacheControl } from "./PlayProxy.ts";
+import {
+  PLAY_REQUEST_TIMEOUT_MS,
+  createPlayHttpServer,
+  makePlayProxyRoutes,
+  privateCacheControl,
+} from "./PlayProxy.ts";
 import {
   makeCookieValue,
   makeTicket,
@@ -132,6 +138,7 @@ const authStub = Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
 const startProxy = Effect.fn("PlayProxyTest.start")(function* (options: {
   readonly upstreamPort: number;
   readonly enabled?: boolean;
+  readonly tracer?: Tracer.Tracer;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -143,10 +150,26 @@ const startProxy = Effect.fn("PlayProxyTest.start")(function* (options: {
       ...(options.enabled === false ? { enabled: false } : {}),
     }),
   );
-  return yield* serveProxy(stateDir);
+  return yield* serveProxy(stateDir, options.tracer);
 });
 
-const serveProxy = Effect.fn("PlayProxyTest.serve")(function* (stateDir: string) {
+/** A tracer that keeps every span, as the server's trace file would. */
+const recordingTracer = () => {
+  const spans: Array<Tracer.NativeSpan> = [];
+  const tracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
+      spans.push(span);
+      return span;
+    },
+  });
+  return { spans, tracer };
+};
+
+const serveProxy = Effect.fn("PlayProxyTest.serve")(function* (
+  stateDir: string,
+  tracer?: Tracer.Tracer,
+) {
   const appLayer = Layer.merge(
     makePlayProxyRoutes({ stateDir, key: KEY }),
     httpCompressionLayer,
@@ -156,9 +179,11 @@ const serveProxy = Effect.fn("PlayProxyTest.serve")(function* (stateDir: string)
     Layer.provideMerge(NodeServices.layer),
   );
   // Handlers read EnvironmentAuth per request, as in server.ts.
+  const served = HttpRouter.serve(appLayer, { disableListenLog: true, disableLogger: true }).pipe(
+    Layer.provide(authStub),
+  );
   const services = yield* Layer.build(
-    HttpRouter.serve(appLayer, { disableListenLog: true, disableLogger: true }).pipe(
-      Layer.provide(authStub),
+    (tracer ? served.pipe(Layer.provide(Layer.succeed(Tracer.Tracer)(tracer))) : served).pipe(
       Layer.provideMerge(NodeHttpServer.layerTest),
     ),
   );
@@ -206,12 +231,15 @@ const rawRequest = (
 
 const cookieFrom = (setCookie: string | undefined) => setCookie?.split(";")[0] ?? "";
 
+/** The secret as Polyzonia's scripts send it: in the body, which is never traced. */
+const mintRequest = (key = KEY_HEX, extra: Record<string, unknown> = {}) => ({
+  method: "POST" as const,
+  body: HttpBody.text(JSON.stringify({ key, ...extra }), "application/json"),
+});
+
 const signIn = (proxy: Effect.Success<ReturnType<typeof serveProxy>>) =>
   Effect.gen(function* () {
-    const minted = yield* proxy.request("/play/__auth/ticket", {
-      method: "POST",
-      headers: { "x-t3-play-key": KEY_HEX },
-    });
+    const minted = yield* proxy.request("/play/__auth/ticket", mintRequest());
     const { ticket } = (yield* minted.json) as { ticket: string };
     const redeemed = yield* proxy.request("/play/__auth/redeem", {
       method: "POST",
@@ -290,10 +318,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
     Effect.gen(function* () {
       const upstream = yield* fakePlayServer;
       const proxy = yield* startProxy({ upstreamPort: upstream.port });
-      const minted = yield* proxy.request("/play/__auth/ticket", {
-        method: "POST",
-        headers: { "x-t3-play-key": KEY_HEX },
-      });
+      const minted = yield* proxy.request("/play/__auth/ticket", mintRequest());
       const { ticket } = (yield* minted.json) as { ticket: string };
       const response = yield* rawRequest(proxy.port, {
         method: "POST",
@@ -315,15 +340,27 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
     Effect.gen(function* () {
       const upstream = yield* fakePlayServer;
       const proxy = yield* startProxy({ upstreamPort: upstream.port });
-      for (const [headers, status] of [
+      const json = (value: unknown) => HttpBody.text(JSON.stringify(value), "application/json");
+      for (const [options, status] of [
         [{}, 401],
-        [{ "x-t3-play-key": "00".repeat(32) }, 401],
-        [{ authorization: "Bearer reader" }, 401],
-        [{ authorization: "Bearer operator" }, 200],
-        [{ "x-t3-play-key": KEY_HEX }, 200],
+        [{ body: json({ key: "00".repeat(32) }) }, 401],
+        [{ body: json({ key: 7 }) }, 401],
+        [{ headers: { "x-t3-play-key": "00".repeat(32) } }, 401],
+        [{ headers: { authorization: `T3Play ${"00".repeat(32)}` } }, 401],
+        [{ headers: { authorization: "Bearer reader" } }, 401],
+        [{ headers: { authorization: "Bearer operator" } }, 200],
+        // The secret in the body, as Polyzonia's scripts send it.
+        [{ body: json({ key: KEY_HEX, ttlSeconds: 7 * 24 * 3600 }) }, 200],
+        [{ headers: { authorization: `T3Play ${KEY_HEX}` } }, 200],
+        // The old header, from scripts that predate the body.
+        [{ headers: { "x-t3-play-key": KEY_HEX } }, 200],
       ] as const) {
-        const response = yield* proxy.request("/play/__auth/ticket", { method: "POST", headers });
+        const response = yield* proxy.request("/play/__auth/ticket", {
+          method: "POST",
+          ...options,
+        });
         expect(response.status).toBe(status);
+        expect(response.headers["cache-control"]).toBe("private, no-store");
         if (status === 200) {
           const body = (yield* response.json) as { ticket: string; expiresAt: string };
           expect(body.ticket).toMatch(/^v1\.\d+\./);
@@ -331,6 +368,117 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
           expect(Date.parse(body.expiresAt)).toBeGreaterThan(sixDaysOn);
         }
       }
+    }),
+  );
+
+  it.effect("never writes the secret into the server's traces", () =>
+    Effect.gen(function* () {
+      const upstream = yield* fakePlayServer;
+      const { spans, tracer } = recordingTracer();
+      const proxy = yield* startProxy({ upstreamPort: upstream.port, tracer });
+      const fromBody = yield* proxy.request("/play/__auth/ticket", mintRequest());
+      expect(fromBody.status).toBe(200);
+      const fromScheme = yield* proxy.request("/play/__auth/ticket", {
+        method: "POST",
+        headers: { authorization: `T3Play ${KEY_HEX}` },
+      });
+      expect(fromScheme.status).toBe(200);
+      const fromOldHeader = yield* proxy.request("/play/__auth/ticket", {
+        method: "POST",
+        headers: { "x-t3-play-key": KEY_HEX },
+      });
+      expect(fromOldHeader.status).toBe(200);
+      // The server span is ended after the response is sent.
+      yield* Effect.sleep("50 millis");
+
+      const minted = spans.filter(
+        (span) => span.attributes.get("url.path") === "/play/__auth/ticket",
+      );
+      expect(minted).toHaveLength(3);
+      const recorded = minted.flatMap((span) => [...span.attributes.values()].map(String));
+      expect(recorded.some((value) => value.includes(KEY_HEX))).toBe(false);
+      const oldHeaderSpan = minted.find((span) =>
+        span.attributes.has("http.request.header.x-t3-play-key"),
+      );
+      expect(oldHeaderSpan?.attributes.get("http.request.header.x-t3-play-key")).toBe("<redacted>");
+      const schemeSpan = minted.find((span) =>
+        span.attributes.has("http.request.header.authorization"),
+      );
+      expect(schemeSpan?.attributes.get("http.request.header.authorization")).toBe("<redacted>");
+    }),
+  );
+
+  it.effect("signs a browser out only on a POST from this origin", () =>
+    Effect.gen(function* () {
+      const upstream = yield* fakePlayServer;
+      const proxy = yield* startProxy({ upstreamPort: upstream.port });
+      const viaLink = yield* proxy.request("/play/__auth/logout");
+      expect(viaLink.status).toBe(405);
+      expect(viaLink.headers["set-cookie"]).toBeUndefined();
+      const crossSite = yield* rawRequest(proxy.port, {
+        method: "POST",
+        path: "/play/__auth/logout",
+        headers: { origin: "https://evil.example" },
+      });
+      expect(crossSite.status).toBe(403);
+      expect(crossSite.headers["set-cookie"]).toBeUndefined();
+      const own = yield* rawRequest(proxy.port, {
+        method: "POST",
+        path: "/play/__auth/logout",
+        headers: { origin: `http://127.0.0.1:${proxy.port}` },
+      });
+      expect(own.status).toBe(204);
+      expect(String(own.headers["set-cookie"])).toContain("t3_play=; Path=/play; Max-Age=0");
+    }),
+  );
+
+  it.effect("keeps error replies out of shared caches", () =>
+    Effect.gen(function* () {
+      const upstream = yield* fakePlayServer;
+      const proxy = yield* startProxy({ upstreamPort: upstream.port });
+      const { cookie } = yield* signIn(proxy);
+      const replies = [
+        yield* rawRequest(proxy.port, { path: "/play/__auth/redeem" }),
+        yield* rawRequest(proxy.port, {
+          method: "POST",
+          path: "/play/__auth/redeem",
+          headers: { origin: "https://evil.example" },
+        }),
+        yield* rawRequest(proxy.port, { path: "/play/__auth/ticket" }),
+        yield* rawRequest(proxy.port, {
+          method: "POST",
+          path: "/play/main/__build",
+          headers: { cookie, origin: "https://evil.example", "content-length": "0" },
+        }),
+        yield* rawRequest(proxy.port, {
+          method: "POST",
+          path: "/play/main/__build",
+          headers: { cookie, "content-length": String(200 * 1024 * 1024) },
+        }),
+      ];
+      expect(replies.map((reply) => reply.status)).toEqual([405, 403, 405, 403, 413]);
+      for (const reply of replies) {
+        expect(reply.headers["cache-control"]).toBe("private, no-store");
+        expect(reply.headers["x-content-type-options"]).toBe("nosniff");
+      }
+      const off = yield* startProxy({ upstreamPort: upstream.port, enabled: false });
+      const notFound = yield* rawRequest(off.port, { path: "/play/main/" });
+      expect(notFound.status).toBe(404);
+      expect(notFound.headers["cache-control"]).toBe("private, no-store");
+    }),
+  );
+
+  it.effect("reopens the page without its query after signing in", () =>
+    Effect.gen(function* () {
+      const upstream = yield* fakePlayServer;
+      const proxy = yield* startProxy({ upstreamPort: upstream.port });
+      const page = yield* proxy.request("/play/main/?arg=--quit", {
+        headers: { accept: "text/html" },
+      });
+      expect(page.status).toBe(401);
+      const html = yield* page.text;
+      expect(html).toContain("const page = location.pathname;");
+      expect(html).not.toContain("location.search");
     }),
   );
 
@@ -478,6 +626,15 @@ describe("play tokens", () => {
     expect(playCookieHeader("v", true, 10)).toBe(
       "t3_play=v; Path=/play; Max-Age=10; HttpOnly; SameSite=Strict; Secure",
     );
+  });
+
+  it("gives a slow upload half an hour instead of Node's 5 minutes", () => {
+    const server = createPlayHttpServer();
+    expect(PLAY_REQUEST_TIMEOUT_MS).toBe(30 * 60 * 1000);
+    expect(server.requestTimeout).toBe(PLAY_REQUEST_TIMEOUT_MS);
+    // Headers still have to arrive promptly.
+    expect(server.headersTimeout).toBe(NodeHttp.createServer().headersTimeout);
+    server.close();
   });
 
   it("never lets a response be cached publicly", () => {

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - createPlayHttpServer configures the Node HTTP server.
 /**
  * Authenticated reverse proxy from `/play/*` to a loopback "play server" (fork-only).
  *
@@ -11,9 +12,12 @@
  * `https://<host>/play/<wt>/#ticket=<ticket>`: without access, page loads get a
  * small page that redeems the fragment's ticket (`POST /play/__auth/redeem`) for
  * an HttpOnly cookie on `Path=/play`. Tickets come from `POST /play/__auth/ticket`
- * with an operate session or the `play-proxy` secret in `x-t3-play-key` (local
- * scripts read it from the secrets folder). Secrets never go in query strings:
- * request URLs are traced.
+ * with an operate session or the `play-proxy` secret (local scripts read it from
+ * the secrets folder) as `{"key": "<hex>"}` in the JSON body, or in
+ * `authorization: T3Play <hex>`. Secrets never go in query strings or in headers
+ * the HTTP tracer records: request URLs and headers are traced (to
+ * `server.trace.ndjson`), bodies are not. The old `x-t3-play-key` header still
+ * works for scripts from before, and is redacted from traces like `authorization`.
  *
  * Every response is `Cache-Control: private` (Cloudflare caches public responses
  * on T3 Connect hostnames). The client is node:http, which never decompresses, so
@@ -23,6 +27,7 @@
  * `"upstream"` (loopback http, default http://127.0.0.1:8790), `"publicOrigin"`
  * for minted links.
  */
+import * as NodeHttp from "node:http";
 import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Clock from "effect/Clock";
@@ -36,6 +41,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import {
+  Headers,
   HttpClient,
   HttpClientRequest,
   HttpRouter,
@@ -67,6 +73,36 @@ const CONFIG_FILE = "play-proxy.json";
 const REDEEMED_FILE = "play-proxy-redeemed.json";
 /** Flag uploads (zipped saves, recordings, screenshots); Cloudflare caps bodies at 100 MB. */
 const PLAY_MAX_REQUEST_BYTES = 100 * 1024 * 1024;
+/** The old header local scripts sent the secret in (still accepted, never traced). */
+const PLAY_KEY_HEADER = "x-t3-play-key";
+
+/**
+ * Header names the HTTP tracer records as `<redacted>`: Effect's defaults
+ * (Headers.CurrentRedactedNames) and the play key's old header. The play routes
+ * provide it to the whole server (HttpRouter.serve takes it from the routes).
+ */
+export const PLAY_REDACTED_HEADER_NAMES: ReadonlyArray<string | RegExp> = [
+  "authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
+  PLAY_KEY_HEADER,
+];
+const redactedHeaderNamesLayer = Layer.succeed(Headers.CurrentRedactedNames)(
+  PLAY_REDACTED_HEADER_NAMES,
+);
+
+/**
+ * Node's HTTP server cuts a request that takes longer than `requestTimeout`
+ * (300 s by default) to arrive. A flag upload from a phone on a slow uplink
+ * can take longer, and the page would send it again from the start every
+ * time. Headers must still arrive within `headersTimeout` (60 s).
+ */
+export const PLAY_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** The T3 server's node:http server (server.ts), with room for slow /play uploads. */
+export const createPlayHttpServer = () =>
+  NodeHttp.createServer({ requestTimeout: PLAY_REQUEST_TIMEOUT_MS });
 
 const DROPPED_REQUEST_HEADERS = new Set([
   "host",
@@ -178,10 +214,12 @@ export const privateCacheControl = (value: string | undefined) => {
 
 const SIGN_IN_SCRIPT = `
 // A link tapped while this page is open may only change the fragment.
+// The page is reopened without its query: a link's query is not carried
+// through the sign-in into the game.
 const signIn = async () => {
   const message = document.getElementById("message");
   const match = /(?:^#|&)ticket=([^&]+)/.exec(location.hash);
-  const page = location.pathname + location.search;
+  const page = location.pathname;
   if (match) {
     history.replaceState(null, "", page);
     try {
@@ -236,6 +274,24 @@ ${script ? `<script>${script}</script>` : ""}</body></html>`,
   );
 
 const nowSeconds = Effect.map(Clock.currentTimeMillis, (millis) => Math.floor(millis / 1000));
+
+/** Plain-text error replies, never cached (Cloudflare caches a 404 that says nothing). */
+const textReply = (body: string, status: number) =>
+  HttpServerResponse.text(body, { status, headers: PAGE_HEADERS });
+
+/**
+ * The secret as a local script offers it: `key` in the JSON body (bodies are
+ * not traced), `authorization: T3Play <hex>`, or the old `x-t3-play-key`.
+ */
+const offeredKey = (
+  request: HttpServerRequest.HttpServerRequest,
+  body: Record<string, unknown>,
+): string | undefined => {
+  if (typeof body.key === "string") return body.key;
+  const scheme = /^T3Play\s+(\S+)$/i.exec(request.headers.authorization ?? "");
+  if (scheme) return scheme[1];
+  return request.headers[PLAY_KEY_HEADER];
+};
 
 const readJsonBody = (request: HttpServerRequest.HttpServerRequest) =>
   request.json.pipe(
@@ -342,10 +398,8 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
 
   const redeem = (request: HttpServerRequest.HttpServerRequest) =>
     Effect.gen(function* () {
-      if (request.method !== "POST") {
-        return HttpServerResponse.text("Method Not Allowed", { status: 405 });
-      }
-      if (!sameOriginWrite(request)) return HttpServerResponse.text("Forbidden", { status: 403 });
+      if (request.method !== "POST") return textReply("Method Not Allowed", 405);
+      if (!sameOriginWrite(request)) return textReply("Forbidden", 403);
       const body = yield* readJsonBody(request);
       const now = yield* nowSeconds;
       const verified =
@@ -353,10 +407,7 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
           ? verifyTicket(input.key, body.ticket, now)
           : null;
       if (!input.key || !verified || !(yield* claimTicket(verified.id, verified.expiresAt, now))) {
-        return HttpServerResponse.text("This play link was already used or has expired.", {
-          status: 401,
-          headers: PAGE_HEADERS,
-        });
+        return textReply("This play link was already used or has expired.", 401);
       }
       return HttpServerResponse.empty({
         status: 204,
@@ -366,18 +417,13 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
 
   const mint = (request: HttpServerRequest.HttpServerRequest) =>
     Effect.gen(function* () {
-      if (request.method !== "POST") {
-        return HttpServerResponse.text("Method Not Allowed", { status: 405 });
-      }
+      if (request.method !== "POST") return textReply("Method Not Allowed", 405);
       const key = input.key;
+      const body = yield* readJsonBody(request);
       const allowed =
         key !== null &&
-        (keyMatches(key, request.headers["x-t3-play-key"]) ||
-          (yield* sessionAllows(request, true)));
-      if (!allowed || key === null) {
-        return HttpServerResponse.text("Unauthorized", { status: 401, headers: PAGE_HEADERS });
-      }
-      const body = yield* readJsonBody(request);
+        (keyMatches(key, offeredKey(request, body)) || (yield* sessionAllows(request, true)));
+      if (!allowed || key === null) return textReply("Unauthorized", 401);
       const ttl =
         typeof body.ttlSeconds === "number" ? body.ttlSeconds : PLAY_TICKET_DEFAULT_TTL_SECONDS;
       const { ticket, expiresAt } = makeTicket(key, yield* nowSeconds, ttl);
@@ -432,10 +478,7 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
           502,
           `The Polyzonia play server is not running on this Mac (${upstream.host}). Start it with <code>scripts/play_web.sh</code>.`,
         )
-      : HttpServerResponse.text("The Polyzonia play server is not running.", {
-          status: 502,
-          headers: PAGE_HEADERS,
-        });
+      : textReply("The Polyzonia play server is not running.", 502);
 
   const proxy = (
     request: HttpServerRequest.HttpServerRequest,
@@ -482,9 +525,7 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const current = yield* config;
     const url = HttpServerRequest.toURL(request);
-    if (!current.enabled || Option.isNone(url)) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
+    if (!current.enabled || Option.isNone(url)) return textReply("Not Found", 404);
     const { pathname, search } = url.value;
     if (pathname === PLAY_ROUTE_PREFIX) {
       return HttpServerResponse.empty({
@@ -492,12 +533,14 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
         headers: { ...PAGE_HEADERS, location: `${PLAY_ROUTE_PREFIX}/${search}` },
       });
     }
-    if (!pathname.startsWith(`${PLAY_ROUTE_PREFIX}/`)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
-    }
+    if (!pathname.startsWith(`${PLAY_ROUTE_PREFIX}/`)) return textReply("Bad Request", 400);
     if (pathname === "/play/__auth/redeem") return yield* redeem(request);
     if (pathname === "/play/__auth/ticket") return yield* mint(request);
     if (pathname === "/play/__auth/logout") {
+      // A write like any other: a link or another site's page cannot sign this
+      // browser out.
+      if (request.method !== "POST") return textReply("Method Not Allowed", 405);
+      if (!sameOriginWrite(request)) return textReply("Forbidden", 403);
       return HttpServerResponse.empty({
         status: 204,
         headers: {
@@ -515,23 +558,16 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
     if (!allowed || !input.key) {
       return isPageLoad(request)
         ? htmlPage(401, "Signing in…", SIGN_IN_SCRIPT)
-        : HttpServerResponse.text("Open a play link from a T3 Code thread first.", {
-            status: 401,
-            headers: PAGE_HEADERS,
-          });
+        : textReply("Open a play link from a T3 Code thread first.", 401);
     }
     const { proto, origin } = requestOrigin(request);
     const hostname = (request.headers.host ?? "").replace(/:\d+$/, "");
     if (proto === "https" && !isLoopbackHost(hostname)) yield* Ref.set(learnedOrigin, origin);
     if (write) {
-      if (!sameOriginWrite(request)) return HttpServerResponse.text("Forbidden", { status: 403 });
+      if (!sameOriginWrite(request)) return textReply("Forbidden", 403);
       const length = request.headers["content-length"];
-      if (length === undefined) {
-        return HttpServerResponse.text("Length Required", { status: 411, headers: PAGE_HEADERS });
-      }
-      if (!(Number(length) <= PLAY_MAX_REQUEST_BYTES)) {
-        return HttpServerResponse.text("Payload Too Large", { status: 413, headers: PAGE_HEADERS });
-      }
+      if (length === undefined) return textReply("Length Required", 411);
+      if (!(Number(length) <= PLAY_MAX_REQUEST_BYTES)) return textReply("Payload Too Large", 413);
     }
     const setCookie = allowed.renew ? newCookie(input.key, request, yield* nowSeconds) : undefined;
     return yield* proxy(request, current.upstream, `${pathname}${search}`, setCookie);
@@ -546,7 +582,7 @@ export const makePlayProxyRoutes = (input: {
   Layer.unwrap(
     // The wildcard route also takes the bare prefix.
     Effect.map(makePlayProxy(input), (handler) =>
-      HttpRouter.add("*", `${PLAY_ROUTE_PREFIX}/*`, handler),
+      Layer.merge(HttpRouter.add("*", `${PLAY_ROUTE_PREFIX}/*`, handler), redactedHeaderNamesLayer),
     ),
   );
 

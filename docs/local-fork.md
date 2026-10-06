@@ -52,16 +52,24 @@ proxy is described below.
 
 `apps/server/src/play/` proxies `/play/*` to Polyzonia's play server on `127.0.0.1:8790`, so the
 phone plays any worktree's web build over the same T3 Connect, Tailscale or LAN connection
-(Polyzonia's `docs/remote_play.md` has the whole picture). It is two lines in `server.ts`.
+(Polyzonia's `docs/remote_play.md` has the whole picture). In `server.ts` it is the route
+layer and `createPlayHttpServer()`, Node's HTTP server with a 30-minute `requestTimeout` (Node's
+default of 5 minutes cuts slow flag uploads from a phone).
 
 - Access is a T3 session (read scope; operate for writes) or the `t3_play` cookie (`Path=/play`,
   HttpOnly, SameSite=Strict, 90 days, renewed on use). A browser gets the cookie from a one-time
   link `https://<host>/play/<worktree>/#ticket=<ticket>` that an agent posts in a thread.
 - Links come from `POST /play/__auth/ticket`, with an operate session or the hex of
-  `userdata/secrets/play-proxy.bin` in `x-t3-play-key` (Polyzonia's `scripts/play_web.sh` reads it).
-  Replacing that file and restarting revokes every link and cookie.
+  `userdata/secrets/play-proxy.bin` as `{"key": "<hex>"}` in the JSON body, or in
+  `authorization: T3Play <hex>` (Polyzonia's `scripts/play_web.sh` reads the file). Never in
+  another header: the HTTP tracer writes request headers to `userdata/logs/server.trace.ndjson`
+  except the redacted names. The play routes add `x-t3-play-key` (the header scripts used before,
+  still accepted) to those names. Replacing the secret file and restarting revokes every link and
+  cookie.
 - Every response is `Cache-Control: private`: Cloudflare caches public responses on the T3 Connect
-  hostname. The client is node:http, so precompressed bodies pass through untouched.
+  hostname. The proxy's own replies (errors included) are `private, no-store`. The client is
+  node:http, so precompressed bodies pass through untouched.
+- `POST /play/__auth/logout` (same origin only) clears the cookie.
 - Optional `userdata/play-proxy.json`: `{"enabled": false}` turns it off; `"upstream"` (loopback
   http only) and `"publicOrigin"` (for minted links) override the defaults.
 - Tests: `vp test run src/play/PlayProxy.test.ts` in `apps/server`.
