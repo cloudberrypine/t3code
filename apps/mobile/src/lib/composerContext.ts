@@ -1,4 +1,5 @@
 import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
+import { assistantCitationEditorTokens } from "../features/citations/assistantCitation";
 import { filePreviewKind } from "@t3tools/shared/filePreview";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
@@ -146,15 +147,18 @@ export function pullRequestComposerContext(
 /** Native editors collapse the canonical source range to a single atomic attachment. */
 export function composerContextEditorTokens(text: string, tokens: readonly ComposerInlineToken[]) {
   const references = collectComposerContextReferences(text);
+  const citations = assistantCitationEditorTokens(text);
+  const atomic = [...references, ...citations];
   return [
     ...tokens.filter(
-      (token) => !references.some((ref) => token.start < ref.end && token.end > ref.start),
+      (token) => !atomic.some((ref) => token.start < ref.end && token.end > ref.start),
     ),
     ...references.map((ref) => ({
       type: "context" as const,
       value: ref.label,
       ...ref,
     })),
+    ...citations,
   ].sort((a, b) => a.start - b.start);
 }
 

@@ -87,6 +87,15 @@ export interface SelectableMarkdownTextProps {
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
   readonly onFileContextMenuAction?: (href: string, actionId: string) => void;
   readonly renderImage?: MarkdownImageRenderer;
+  /**
+   * Offers "Cite" beside Copy for selected text. Offsets are UTF-16 into `text`, the
+   * selected block's whole rendered string (each block is its own native text view).
+   */
+  readonly onCite?: (selection: {
+    readonly start: number;
+    readonly end: number;
+    readonly text: string;
+  }) => void;
   readonly marginTop?: number;
   readonly marginBottom?: number;
 }

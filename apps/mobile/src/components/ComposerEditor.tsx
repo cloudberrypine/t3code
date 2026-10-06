@@ -23,6 +23,7 @@ import {
 } from "../state/use-composer-drafts";
 import { importComposerContextClipboard } from "../lib/composerContextClipboard";
 import { mobilePreferencesAtom } from "../state/preferences";
+import { editDraftCitationComment } from "../features/citations/composerCitations";
 import { ComposerContextSheet } from "./ComposerContextSheet";
 import { AppText as Text } from "./AppText";
 import {
@@ -190,6 +191,7 @@ export function ComposerEditor({
             onOpenAttachment(document);
             return;
           }
+          if (draftKey && editDraftCitationComment(draftKey, selection)) return;
           setSelected(selection);
         }}
         onSelectionChange={(selection) => {

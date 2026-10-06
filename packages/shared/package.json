@@ -379,6 +379,10 @@
       "types": "./src/cppNavigation.ts",
       "default": "./src/cppNavigation.ts"
     },
+    "./assistantCitationSelector": {
+      "types": "./src/assistantCitationSelector.ts",
+      "default": "./src/assistantCitationSelector.ts"
+    },
     "./fileReviewComment": {
       "types": "./src/fileReviewComment.ts",
       "default": "./src/fileReviewComment.ts"

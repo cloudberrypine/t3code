@@ -287,6 +287,7 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
   UILongPressGestureRecognizer *_longPressGestureRecognizer;
   UITapGestureRecognizer *_pressGestureRecognizer;
   NSArray *_contextAccessibilityElements;
+  BOOL _citable;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider
@@ -621,6 +622,8 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
     _textView.textContainer.maximumNumberOfLines = newViewProps.numberOfLines;
   }
 
+  _citable = newViewProps.citable;
+
   if (oldViewProps.selectable != newViewProps.selectable) {
     _textView.selectable = newViewProps.selectable;
   }
@@ -802,6 +805,38 @@ T3MarkdownOutsideTapCoordinatorForWindow(UIWindow *window)
   UIMenu *menu = [child contextMenu];
   if (child.contextChipInteractive && menu == nil) return nil;
   return [UITextItemMenuConfiguration configurationWithMenu:menu ?: defaultMenu];
+}
+
+/// Adds "Cite" beside Copy when the host can quote this text (assistant messages).
+- (nullable UIMenu *)textView:(UITextView *)textView
+       editMenuForTextInRange:(NSRange)range
+             suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0))
+{
+  if (!_citable || range.location == NSNotFound || range.length == 0) return nil;
+  __weak T3MarkdownText *weakSelf = self;
+  UIAction *cite = [UIAction actionWithTitle:@"Cite"
+                                       image:[UIImage systemImageNamed:@"quote.opening"]
+                                  identifier:nil
+                                     handler:^(__kindof UIAction *action) {
+    [weakSelf emitCiteForRange:range];
+  }];
+  NSMutableArray<UIMenuElement *> *children = [suggestedActions mutableCopy];
+  [children insertObject:cite atIndex:MIN((NSUInteger)1, children.count)];
+  return [UIMenu menuWithChildren:children];
+}
+
+- (void)emitCiteForRange:(NSRange)range
+{
+  NSString *text = _textView.text ?: @"";
+  if (_eventEmitter == nullptr || NSMaxRange(range) > text.length) return;
+  std::dynamic_pointer_cast<const facebook::react::T3MarkdownTextEventEmitter>(_eventEmitter)
+    ->onCite(facebook::react::T3MarkdownTextEventEmitter::OnCite{
+      static_cast<int>(self.tag),
+      static_cast<int>(range.location),
+      static_cast<int>(NSMaxRange(range)),
+      std::string(text.UTF8String ?: ""),
+    });
+  _textView.selectedRange = NSMakeRange(range.location, 0);
 }
 
 - (void)textViewDidChangeSelection:(UITextView *)textView

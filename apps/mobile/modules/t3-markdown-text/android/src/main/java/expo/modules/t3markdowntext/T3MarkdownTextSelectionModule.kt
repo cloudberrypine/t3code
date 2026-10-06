@@ -119,18 +119,39 @@ private fun contextClipData(selectedText: String, fragment: String): ClipData {
   )
 }
 
+private const val CITE_ITEM_ID = 0x7431_6369
+
 private class SanitizingSelectionActionModeCallback(
   private val textView: TextView,
   private val delegate: ActionMode.Callback?,
   var contextClipboardConfig: String
 ) : ActionMode.Callback {
-  override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean =
-    delegate?.onCreateActionMode(mode, menu) ?: true
+  /** Set when the host can quote this text; receives the selected UTF-16 range. */
+  var onCite: ((start: Int, end: Int) -> Unit)? = null
+
+  /** Whether installCopySanitizer set this view up (Cite alone may have installed it). */
+  var sanitizesCopy = false
+
+  override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+    val created = delegate?.onCreateActionMode(mode, menu) ?: true
+    if (onCite != null && menu.findItem(CITE_ITEM_ID) == null) {
+      menu.add(Menu.NONE, CITE_ITEM_ID, 1, "Cite")
+        .setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+    }
+    return created
+  }
 
   override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean =
     delegate?.onPrepareActionMode(mode, menu) ?: false
 
   override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+    if (item.itemId == CITE_ITEM_ID) {
+      val start = min(textView.selectionStart, textView.selectionEnd)
+      val end = max(textView.selectionStart, textView.selectionEnd)
+      if (start >= 0 && end > start) onCite?.invoke(start, end)
+      mode.finish()
+      return true
+    }
     if (item.itemId == android.R.id.copy && copySelection()) {
       mode.finish()
       return true
@@ -280,6 +301,39 @@ class T3MarkdownTextSelectionModule : Module() {
       result
     }
 
+    Events("onCite")
+
+    Function("setCiteEnabled") { reactTag: Int, enabled: Boolean ->
+      val reactContext = appContext.reactContext as? ReactContext ?: return@Function
+      reactContext.runOnUiQueueThread {
+        val textView =
+          runCatching {
+            UIManagerHelper.getUIManagerForReactTag(reactContext, reactTag)?.resolveView(reactTag)
+          }
+            .getOrNull() as? TextView ?: return@runOnUiQueueThread
+        val current = textView.customSelectionActionModeCallback
+        val callback = current as? SanitizingSelectionActionModeCallback
+          ?: SanitizingSelectionActionModeCallback(textView, current, "").also {
+            textView.customSelectionActionModeCallback = it
+          }
+        callback.onCite = if (enabled) {
+          { start, end ->
+            sendEvent(
+              "onCite",
+              mapOf(
+                "reactTag" to reactTag,
+                "start" to start,
+                "end" to end,
+                "text" to textView.text.toString()
+              )
+            )
+          }
+        } else {
+          null
+        }
+      }
+    }
+
     Function("installCopySanitizer") { reactTag: Int, contextClipboardConfig: String ->
       val reactContext = appContext.reactContext as? ReactContext ?: return@Function
       reactContext.runOnUiQueueThread {
@@ -291,11 +345,16 @@ class T3MarkdownTextSelectionModule : Module() {
         val currentCallback = textView.customSelectionActionModeCallback
         if (currentCallback is SanitizingSelectionActionModeCallback) {
           currentCallback.contextClipboardConfig = contextClipboardConfig
+          if (!currentCallback.sanitizesCopy) {
+            textView.setSpannableFactory(MarkdownSpannableFactory)
+            currentCallback.sanitizesCopy = true
+          }
           return@runOnUiQueueThread
         }
         textView.setSpannableFactory(MarkdownSpannableFactory)
         textView.customSelectionActionModeCallback =
           SanitizingSelectionActionModeCallback(textView, currentCallback, contextClipboardConfig)
+            .apply { sanitizesCopy = true }
       }
     }
   }

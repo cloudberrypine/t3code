@@ -19,6 +19,13 @@ interface SelectionChangeEvent extends TargetedEvent {
   end: CodegenTypes.Int32;
 }
 
+/** "Cite" chosen from the selection menu; offsets are UTF-16 into `text`, the whole view's text. */
+interface CiteEvent extends TargetedEvent {
+  start: CodegenTypes.Int32;
+  end: CodegenTypes.Int32;
+  text: string;
+}
+
 type EllipsizeMode = "head" | "middle" | "tail" | "clip";
 
 interface NativeProps extends ViewProps {
@@ -27,6 +34,9 @@ interface NativeProps extends ViewProps {
   allowFontScaling?: CodegenTypes.WithDefault<boolean, true>;
   ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, "tail">;
   selectable?: boolean;
+  /** Offers "Cite" in the selection menu, reported through onCite. */
+  citable?: boolean;
+  onCite?: CodegenTypes.BubblingEventHandler<CiteEvent>;
   onTextLayout?: CodegenTypes.BubblingEventHandler<TextLayoutEvent>;
   /**
    * Callback fired when the text selection changes.

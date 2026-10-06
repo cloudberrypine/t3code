@@ -12,7 +12,7 @@ import {
   View,
 } from "react-native";
 
-import { MarkdownTextPrimitive } from "./MarkdownTextPrimitive";
+import { MarkdownTextPrimitive, type MarkdownCiteSelection } from "./MarkdownTextPrimitive";
 import { markdownFileIconSource, markdownIconAssetUri } from "./markdownFileIcons";
 import { markdownLinkIconSource } from "./markdownLinkIcons";
 import { resolveMarkdownFileIcon, resolveMarkdownLinkIcon } from "./markdownLinks";
@@ -30,6 +30,11 @@ import { parseComposerContextHref } from "@t3tools/shared/composerContextReferen
 import { contextChipPresentation } from "./nativeMarkdownText";
 
 export const MarkdownContextClipboardContext = createContext("");
+
+/** Set by SelectableMarkdownText when the host can quote the text ("Cite" beside Copy). */
+export const MarkdownCiteContext = createContext<
+  ((selection: MarkdownCiteSelection) => void) | null
+>(null);
 
 export interface MarkdownFileContextMenuHandlers {
   readonly fileContextMenu: (href: string) => MarkdownFileContextMenu | undefined;
@@ -199,6 +204,7 @@ export function NativeMarkdownSelectableText(props: {
 }) {
   const colorScheme = useColorScheme();
   const menu = useContext(MarkdownFileContextMenuContext);
+  const cite = useContext(MarkdownCiteContext);
   const contextClipboardFragment = useContext(MarkdownContextClipboardContext);
   const contextRecords = useMemo(
     () => decodeComposerContextFragment(contextClipboardFragment)?.records ?? [],
@@ -333,6 +339,7 @@ export function NativeMarkdownSelectableText(props: {
       key={appearanceKey}
       nativeTextRef={attachAndroidText}
       contextClipboardConfig={contextClipboardConfig}
+      onCite={cite ?? undefined}
       accessibilityLabel={
         Platform.OS === "android" && containsInlineIcon
           ? props.runs.map((run) => run.skillLabel ?? run.text).join("")

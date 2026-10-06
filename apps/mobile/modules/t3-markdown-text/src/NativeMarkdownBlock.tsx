@@ -9,7 +9,7 @@ import {
   nativeMarkdownListItemBlocks,
   nativeMarkdownNodePosition,
 } from "./nativeMarkdownText";
-import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText";
+import { MarkdownCiteContext, NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText";
 import type {
   MarkdownCodeHighlighter,
   MarkdownHighlightedToken,
@@ -117,6 +117,7 @@ function HighlightedCodeText(props: {
     }),
     [props.textStyle.codeColor, fontSize, lineHeight],
   );
+  const cite = useContext(MarkdownCiteContext);
   let offset = 0;
   const lines = [];
   if (props.highlighted) {
@@ -138,6 +139,7 @@ function HighlightedCodeText(props: {
       selectable
       selectionColor={props.textStyle.selectionColor}
       selectionHandleColor={props.textStyle.selectionHandleColor}
+      onCite={cite ?? undefined}
       style={style}
     >
       {props.highlighted ? lines : props.content}

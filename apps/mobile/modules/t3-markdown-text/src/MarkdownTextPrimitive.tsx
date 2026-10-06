@@ -10,7 +10,10 @@ import {
   type TextProps,
   type ViewStyle,
 } from "react-native";
-import { setMarkdownSelectionHandleColor } from "./T3MarkdownTextSelectionModule";
+import {
+  enableMarkdownCite,
+  setMarkdownSelectionHandleColor,
+} from "./T3MarkdownTextSelectionModule";
 import T3MarkdownTextRunNativeComponent from "./T3MarkdownTextRunNativeComponent";
 import T3MarkdownTextNativeComponent from "./T3MarkdownTextNativeComponent";
 import { flattenStyles } from "./util";
@@ -35,6 +38,9 @@ export type SelectionChangeEvent = {
   nativeEvent: { target: number; start: number; end: number };
 };
 
+/** "Cite" from the selection menu: UTF-16 offsets into `text`, the whole text view's string. */
+export type MarkdownCiteSelection = { start: number; end: number; text: string };
+
 export type ContextMenuActionEvent = {
   nativeEvent: { target: number; actionIdentifier: string };
 };
@@ -57,12 +63,15 @@ export type MarkdownTextPrimitiveProps = Omit<TextProps, "onTextLayout"> & {
    * off this event should debounce.
    */
   onSelectionChange?: (event: SelectionChangeEvent) => void;
+  /** Offers "Cite" beside Copy in the selection menu (iOS with `uiTextView`, and Android). */
+  onCite?: (selection: MarkdownCiteSelection) => void;
 };
 
 function MarkdownTextPrimitiveChild({
   style,
   children,
   nativeTextRef: _nativeTextRef,
+  onCite,
   ...rest
 }: MarkdownTextPrimitiveProps) {
   const [isAncestor, rootStyle] = useTextAncestorContext();
@@ -105,6 +114,8 @@ function MarkdownTextPrimitiveChild({
         <T3MarkdownTextNativeComponent
           {...textDefaults}
           {...containerProps}
+          citable={onCite !== undefined}
+          onCite={onCite ? (event) => onCite(event.nativeEvent) : undefined}
           style={[flattenedStyle]}
         >
           {nativeChildren}
@@ -123,7 +134,8 @@ function MarkdownTextPrimitiveInner({ nativeTextRef, ...props }: MarkdownTextPri
   // normal selection (i.e. base RN text) if the text doesn't need to be
   // selectable
   if ((!props.selectable || !props.uiTextView) && !isAncestor) {
-    return <RNText ref={nativeTextRef} {...props} />;
+    const { onCite: _onCite, ...textProps } = props;
+    return <RNText ref={nativeTextRef} {...textProps} />;
   }
   return <MarkdownTextPrimitiveChild {...props} />;
 }
@@ -132,6 +144,7 @@ function AndroidMarkdownText({
   nativeTextRef,
   selectionHandleColor,
   onLayout,
+  onCite,
   contextClipboardConfig: _contextClipboardConfig,
   ...props
 }: MarkdownTextPrimitiveProps) {
@@ -151,6 +164,16 @@ function AndroidMarkdownText({
   // RN's selectionColor only sets the highlight. Retint mounted handles when
   // the theme changes, and after layout when the native view first exists.
   React.useEffect(applyHandleColor, [applyHandleColor]);
+  const citeRef = React.useRef(onCite);
+  React.useEffect(() => {
+    citeRef.current = onCite;
+  }, [onCite]);
+  const citable = onCite !== undefined;
+  React.useEffect(() => {
+    const reactTag = citable && textRef.current ? findNodeHandle(textRef.current) : null;
+    if (reactTag == null) return;
+    return enableMarkdownCite(reactTag, (selection) => citeRef.current?.(selection));
+  }, [citable]);
 
   return (
     <RNText
@@ -168,11 +191,16 @@ export function MarkdownTextPrimitive({
   selectionHandleColor,
   ...props
 }: MarkdownTextPrimitiveProps) {
-  if (Platform.OS === "android" && selectionHandleColor !== undefined) {
+  if (Platform.OS === "android" && (selectionHandleColor !== undefined || props.onCite)) {
     return <AndroidMarkdownText {...props} selectionHandleColor={selectionHandleColor} />;
   }
   if (Platform.OS !== "ios") {
-    const { nativeTextRef, contextClipboardConfig: _contextClipboardConfig, ...textProps } = props;
+    const {
+      nativeTextRef,
+      contextClipboardConfig: _contextClipboardConfig,
+      onCite: _onCite,
+      ...textProps
+    } = props;
     return <RNText ref={nativeTextRef} {...textProps} />;
   }
   return <MarkdownTextPrimitiveInner {...props} />;
