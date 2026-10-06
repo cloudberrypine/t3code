@@ -676,6 +676,11 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               if (options?.open) {
                 nextState = setThreadTerminalOpen(nextState, true);
               }
+              // Fork: `open: false` registers the terminal without opening the
+              // drawer (project scripts run quietly).
+              if (options?.open === false) {
+                nextState = { ...nextState, terminalOpen: state.terminalOpen };
+              }
               return normalizeThreadTerminalUiState(nextState);
             },
             { terminalId, suppressed: false },

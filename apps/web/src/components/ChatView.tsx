@@ -4833,11 +4833,9 @@ export default function ChatView(props: ChatViewProps) {
         cwd: targetCwd,
         worktreePath: targetWorktreePath,
       });
-      setTerminalOpen(true);
       if (!activeThreadRef) {
         return;
       }
-      setTerminalFocusRequestId((value) => value + 1);
 
       const runtimeEnv = projectScriptRuntimeEnv({
         project: {
@@ -4867,11 +4865,9 @@ export default function ChatView(props: ChatViewProps) {
             env: runtimeEnv,
           };
 
-      if (shouldCreateNewTerminal) {
-        storeNewTerminal(activeThreadRef, targetTerminalId);
-      } else {
-        storeSetActiveTerminal(activeThreadRef, targetTerminalId);
-      }
+      // Fork: scripts run without opening or focusing the terminal drawer.
+      // Opening it later shows the script's terminal with its output so far.
+      storeEnsureTerminal(activeThreadRef, targetTerminalId, { open: false });
 
       const openResult =
         isBaseTerminalBusy && !shouldCreateNewTerminal
@@ -4937,10 +4933,8 @@ export default function ChatView(props: ChatViewProps) {
       activeThreadId,
       activeThreadRef,
       gitCwd,
-      setTerminalOpen,
       setThreadError,
-      storeNewTerminal,
-      storeSetActiveTerminal,
+      storeEnsureTerminal,
       setLastInvokedScriptByProjectId,
       environmentId,
       openTerminal,

@@ -154,6 +154,48 @@ describe("terminalUiStateStore actions", () => {
     ]);
   });
 
+  it("registers a terminal without opening the drawer when open is false", () => {
+    const store = useTerminalUiStateStore.getState();
+    store.ensureTerminal(THREAD_REF, DEFAULT_THREAD_TERMINAL_ID, { open: false });
+    store.ensureTerminal(THREAD_REF, "terminal-2", { open: false });
+
+    const terminalUiState = selectThreadTerminalUiState(
+      useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+      THREAD_REF,
+    );
+    expect(terminalUiState.terminalOpen).toBe(false);
+    expect(terminalUiState.terminalIds).toEqual([DEFAULT_THREAD_TERMINAL_ID, "terminal-2"]);
+    expect(terminalUiState.activeTerminalId).toBe("terminal-2");
+  });
+
+  it("leaves an open drawer open when ensuring a terminal with open false", () => {
+    const store = useTerminalUiStateStore.getState();
+    store.setTerminalOpen(THREAD_REF, true);
+    store.ensureTerminal(THREAD_REF, DEFAULT_THREAD_TERMINAL_ID, { open: false });
+
+    const terminalUiState = selectThreadTerminalUiState(
+      useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+      THREAD_REF,
+    );
+    expect(terminalUiState.terminalOpen).toBe(true);
+    expect(terminalUiState.terminalIds).toEqual([DEFAULT_THREAD_TERMINAL_ID]);
+  });
+
+  it("re-registers a closed terminal without opening the drawer", () => {
+    const store = useTerminalUiStateStore.getState();
+    store.setTerminalOpen(THREAD_REF, true);
+    store.closeTerminal(THREAD_REF, DEFAULT_THREAD_TERMINAL_ID);
+    store.ensureTerminal(THREAD_REF, DEFAULT_THREAD_TERMINAL_ID, { open: false });
+    store.reconcileTerminalIds(THREAD_REF, [DEFAULT_THREAD_TERMINAL_ID]);
+
+    const terminalUiState = selectThreadTerminalUiState(
+      useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+      THREAD_REF,
+    );
+    expect(terminalUiState.terminalOpen).toBe(false);
+    expect(terminalUiState.terminalIds).toEqual([DEFAULT_THREAD_TERMINAL_ID]);
+  });
+
   it("keeps state isolated per environment when raw thread ids collide", () => {
     const store = useTerminalUiStateStore.getState();
     store.setTerminalOpen(THREAD_REF, true);
