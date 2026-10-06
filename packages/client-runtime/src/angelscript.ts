@@ -8,6 +8,7 @@ import {
   angelScriptNavigationFile,
   angelScriptNavigationDependencies,
   createAngelScriptNavigation,
+  type AngelScriptDefinition,
   type AngelScriptSource,
 } from "@t3tools/shared/angelscriptNavigation";
 
@@ -16,22 +17,30 @@ export interface ScriptingApiReader {
   read: (path: string) => Promise<ProjectReadFileResult | null>;
 }
 
-/** Reads use the caller's environment; no local-machine paths or language server are required. */
-export async function resolveAngelScriptNavigation({
-  source,
-  api,
-  offset,
-  read,
-}: {
+type AngelScriptNavigationInput = {
   source: AngelScriptSource;
   api: AngelScriptApi | null;
   offset: number;
   read: ScriptingApiReader["read"];
-}) {
+};
+
+/** Reads use the caller's environment; no local-machine paths or language server are required. */
+export async function resolveAngelScriptNavigation(input: AngelScriptNavigationInput) {
+  const definitions = await resolveAngelScriptDefinitions(input);
+  return definitions.length === 1 ? definitions[0]! : null;
+}
+
+/** Like resolveAngelScriptNavigation, but keeps equal-ranked overloads for a picker. */
+export async function resolveAngelScriptDefinitions({
+  source,
+  api,
+  offset,
+  read,
+}: AngelScriptNavigationInput): Promise<AngelScriptDefinition[]> {
   const sources = [source];
   if (api?.source && api.source.path !== source.path) sources.push(api.source);
-  const local = createAngelScriptNavigation(sources).resolve(source.path, offset);
-  if (local) return local;
+  const local = createAngelScriptNavigation(sources).resolveAll(source.path, offset);
+  if (local.length === 1) return local;
   const path = angelScriptNavigationFile(source, offset);
   const lineStart = source.contents.lastIndexOf("\n", offset - 1) + 1;
   const include =
@@ -55,7 +64,7 @@ export async function resolveAngelScriptNavigation({
   while (pending.length) {
     const batch = [...new Set(pending)].filter((candidate) => !visited.has(candidate));
     if (!batch.length) break;
-    if (visited.size + batch.length > 64) return null;
+    if (visited.size + batch.length > 64) return local;
     for (const candidate of batch) visited.add(candidate);
     const files = await Promise.all(
       batch.map(async (candidate) => {
@@ -67,14 +76,13 @@ export async function resolveAngelScriptNavigation({
     for (const file of files) {
       if (!file) continue;
       bytes += file.contents.length;
-      if (bytes > 8_000_000) return null;
+      if (bytes > 8_000_000) return local;
       sources.push(file);
       if (!include) pending.push(...angelScriptNavigationDependencies(file, true));
     }
   }
-  if (include) return path && sources.some((file) => file.path === path) ? { path, line: 1 } : null;
-  const definition = createAngelScriptNavigation(sources).resolve(source.path, offset);
-  return definition;
+  if (include) return path && sources.some((file) => file.path === path) ? [{ path, line: 1 }] : [];
+  return createAngelScriptNavigation(sources).resolveAll(source.path, offset);
 }
 
 export function createApiStore() {

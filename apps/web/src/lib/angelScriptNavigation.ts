@@ -1,10 +1,6 @@
 import type { FileContents } from "@pierre/diffs";
-import {
-  angelScriptStateTree,
-  isAngelScriptPath,
-  tokenizeAngelScript,
-  type AngelScriptApi,
-} from "@t3tools/shared/angelscript";
+import type { AngelScriptApi } from "@t3tools/shared/angelscript";
+import { navigationTargets } from "@t3tools/shared/angelscriptNavigation";
 import { createAngelScriptReferenceHighlights } from "./angelScriptReferences";
 import { textRange } from "~/components/diffs/diffSearch";
 
@@ -44,46 +40,15 @@ export function createAngelScriptClickNavigation(
     const offsets = [0];
     for (let i = 0; i < file.contents.length; i++)
       if (file.contents[i] === "\n") offsets.push(i + 1);
-    const tokens = tokenizeAngelScript(file.contents);
-    for (const token of tokens) {
-      if (token.comment || !/^[A-Za-z_]\w*$/.test(token.text)) continue;
-      const line = lines.get(token.line) ?? [];
+    for (const target of navigationTargets({ path: file.name, contents: file.contents }, partial)) {
+      const line = lines.get(target.line) ?? [];
+      const lineStart = offsets[target.line - 1]!;
       line.push({
-        start: token.start - offsets[token.line - 1]!,
-        end: token.end - offsets[token.line - 1]!,
-        offset: token.start,
+        start: target.start - lineStart,
+        end: target.end - lineStart,
+        offset: target.start,
       });
-      lines.set(token.line, line);
-    }
-    if (isAngelScriptPath(file.name)) {
-      for (const entry of angelScriptStateTree(file.contents, partial)) {
-        const line = lines.get(entry.line) ?? [];
-        const start = offsets[entry.line - 1]!;
-        line.push({ start: entry.start - start, end: entry.end - start, offset: entry.start });
-        if (entry.file && entry.fileStart !== undefined) {
-          line.push({
-            start: entry.fileStart - start,
-            end: entry.fileStart + entry.file.length - start,
-            offset: entry.fileStart,
-          });
-        }
-        lines.set(entry.line, line);
-      }
-    }
-    for (const [index, start] of offsets.entries()) {
-      const text = file.contents.slice(start, offsets[index + 1]);
-      const include = /^\s*#\s*include\s+["'<]([^"'>]+)["'>]/.exec(text);
-      if (!include) continue;
-      const first = text.indexOf(include[1]!);
-      if (
-        tokens.some(
-          (token) => token.comment && token.start <= start + first && start + first < token.end,
-        )
-      )
-        continue;
-      const line = lines.get(index + 1) ?? [];
-      line.push({ start: first, end: first + include[1]!.length, offset: start + first });
-      lines.set(index + 1, line);
+      lines.set(target.line, line);
     }
     cache.set(file, { contents: file.contents, partial, lines });
     return lines;

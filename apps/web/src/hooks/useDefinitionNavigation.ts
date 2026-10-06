@@ -2,10 +2,8 @@ import type { FileJumpLocation } from "~/lib/fileJumpHistory";
 import type { DiffPanelSelection } from "~/diffPanelStore";
 import type { FileContents } from "@pierre/diffs";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { usesAngelScript, type AngelScriptApi } from "@t3tools/shared/angelscript";
-import { angelScriptCppSymbol, isCppPath } from "@t3tools/shared/cppNavigation";
-import { resolveAngelScriptNavigation } from "@t3tools/client-runtime/angelscript";
-import { resolveCppNavigation } from "@t3tools/client-runtime/cpp-navigation";
+import type { AngelScriptApi } from "@t3tools/shared/angelscript";
+import { resolveDefinitions } from "@t3tools/client-runtime/definition-navigation";
 import { useCallback } from "react";
 import { revisionLine } from "~/lib/revisionLine";
 import type { AngelScriptWorkspace } from "./useAngelScript";
@@ -44,7 +42,6 @@ export function useDefinitionNavigation(
       side?: "additions" | "deletions",
     ) => {
       if (!environmentId || !cwd || !threadRef) return;
-      const angelScript = usesAngelScript(current.name, current.contents, api);
       const from: FileJumpLocation = {
         path: current.name,
         line: current.contents.slice(0, offset).split("\n").length,
@@ -58,39 +55,35 @@ export function useDefinitionNavigation(
         });
         return result._tag === "Success" ? result.value : null;
       };
-      const apiSymbol = angelScript ? angelScriptCppSymbol(source, offset) : null;
       const resolve = async () => {
-        if (isCppPath(current.name) || apiSymbol) {
-          const definition = await resolveCppNavigation({
-            source,
-            offset,
-            ...(apiSymbol ? { apiSymbol } : {}),
-            read,
-            search: async (query) => {
-              const result = await searchDefinitionContents({
-                environmentId,
-                input: {
-                  cwd,
-                  query,
-                  limit: 500,
-                  caseSensitive: true,
-                  wholeWord: false,
-                  useRegex: true,
-                },
-              });
-              return result._tag === "Success" ? result.value : null;
-            },
-            findFiles: async (exactFileName) => {
-              const result = await findDefinitionFiles({
-                environmentId,
-                input: { cwd, query: exactFileName, exactFileName, kind: "file", limit: 200 },
-              });
-              return result._tag === "Success" ? result.value : null;
-            },
-          });
-          if (definition || !angelScript) return definition;
-        }
-        return resolveAngelScriptNavigation({ source, api, offset, read });
+        const definitions = await resolveDefinitions({
+          source,
+          offset,
+          api,
+          read,
+          search: async (query) => {
+            const result = await searchDefinitionContents({
+              environmentId,
+              input: {
+                cwd,
+                query,
+                limit: 500,
+                caseSensitive: true,
+                wholeWord: false,
+                useRegex: true,
+              },
+            });
+            return result._tag === "Success" ? result.value : null;
+          },
+          findFiles: async (exactFileName) => {
+            const result = await findDefinitionFiles({
+              environmentId,
+              input: { cwd, query: exactFileName, exactFileName, kind: "file", limit: 200 },
+            });
+            return result._tag === "Success" ? result.value : null;
+          },
+        });
+        return definitions.length === 1 ? definitions[0]! : null;
       };
       void resolve()
         .then(async (definition) => {

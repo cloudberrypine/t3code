@@ -1,5 +1,7 @@
 import { parseAngelScriptApi, tokenizeAngelScript } from "./angelscript.ts";
 import {
+  uniqueDefinitions,
+  type AngelScriptDefinition,
   createAngelScriptNavigation,
   indexNavigationSource,
   qualifiedScope,
@@ -169,6 +171,15 @@ export function cppSymbolAt(
 
 /** Prefer a body over a prototype. Equal-ranked overloads and unrelated owners stay unresolved. */
 export function findCppDefinition(sources: readonly AngelScriptSource[], symbol: CppSymbol) {
+  const choices = findCppDefinitions(sources, symbol);
+  return choices.length === 1 ? choices[0]! : null;
+}
+
+/** Every equal-ranked candidate (bodies over prototypes), for callers that offer a choice. */
+export function findCppDefinitions(
+  sources: readonly AngelScriptSource[],
+  symbol: CppSymbol,
+): AngelScriptDefinition[] {
   const names = [symbol.name, ...(symbol.nativeName ? [symbol.nativeName] : [])];
   const qualified = names.map((name) => [symbol.owner, name].filter(Boolean).join("::"));
   const candidates = sources
@@ -231,9 +242,7 @@ export function findCppDefinition(sources: readonly AngelScriptSource[], symbol:
       ];
     });
   const definitions = candidates.filter((d) => d.definition);
-  const choices = definitions.length ? definitions : candidates;
-  if (choices.length !== 1) return null;
-  return { path: choices[0]!.path, line: choices[0]!.line };
+  return uniqueDefinitions(definitions.length ? definitions : candidates);
 }
 
 /** Registration macros can rename a script member to an unrelated C++ wrapper. */

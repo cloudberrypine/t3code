@@ -23,6 +23,10 @@
       "types": "./src/cppNavigation.ts",
       "default": "./src/cppNavigation.ts"
     },
+    "./definition-navigation": {
+      "types": "./src/definitionNavigation.ts",
+      "default": "./src/definitionNavigation.ts"
+    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"

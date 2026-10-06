@@ -5,6 +5,7 @@ import {
   cppBindingTargets,
   cppSymbolAt,
   findCppDefinition,
+  findCppDefinitions,
 } from "./cppNavigation.js";
 const header = {
   path: "src/model.h",
@@ -305,4 +306,20 @@ it("maps PascalCase await declarations to native methods without renaming other 
       awaited,
     ),
   ).toEqual([{ name: "Component_await" }]);
+});
+
+it("lists equal-ranked C++ overloads instead of picking one", () => {
+  const sources = [
+    {
+      path: "src/math.cpp",
+      contents:
+        "int scale(int value) { return value; }\nfloat scale(float value) { return value; }",
+    },
+    { path: "src/math.h", contents: "int scale(int value);\nfloat scale(float value);" },
+  ];
+  expect(findCppDefinition(sources, { name: "scale", arity: 1 })).toBeNull();
+  expect(findCppDefinitions(sources, { name: "scale", arity: 1 })).toEqual([
+    { path: "src/math.cpp", line: 1 },
+    { path: "src/math.cpp", line: 2 },
+  ]);
 });

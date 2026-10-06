@@ -7,6 +7,7 @@ import {
   createAngelScriptNavigation,
   indexNavigationSource,
   qualifiedScope,
+  type AngelScriptDefinition,
   type AngelScriptSource,
 } from "@t3tools/shared/angelscriptNavigation";
 import {
@@ -16,6 +17,7 @@ import {
   cppImplementationQuery,
   cppSymbolAt,
   findCppDefinition,
+  findCppDefinitions,
   isCppPath,
   type CppSymbol,
 } from "@t3tools/shared/cppNavigation";
@@ -36,19 +38,27 @@ function relativeInclude(sourcePath: string, include: string) {
   return parts.join("/");
 }
 
+type CppNavigationInput = CppNavigationReader & {
+  source: AngelScriptSource;
+  offset: number;
+  apiSymbol?: CppSymbol;
+};
+
 /** On-demand, bounded reads over the existing environment RPCs; never scan/download the whole tree. */
-export async function resolveCppNavigation({
+export async function resolveCppNavigation(input: CppNavigationInput) {
+  const definitions = await resolveCppDefinitions(input);
+  return definitions.length === 1 ? definitions[0]! : null;
+}
+
+/** Like resolveCppNavigation, but keeps equal-ranked overloads for a picker. */
+export async function resolveCppDefinitions({
   source,
   offset,
   apiSymbol,
   read,
   search,
   findFiles,
-}: CppNavigationReader & {
-  source: AngelScriptSource;
-  offset: number;
-  apiSymbol?: CppSymbol;
-}) {
+}: CppNavigationInput): Promise<AngelScriptDefinition[]> {
   const sources: AngelScriptSource[] = isCppPath(source.path) ? [source] : [];
   const seen = new Set(sources.map((s) => s.path));
   let remainingBytes = 8_000_000;
@@ -91,16 +101,16 @@ export async function resolveCppNavigation({
   if (!apiSymbol && include) {
     const path = relativeInclude(source.path, include[1]!);
     if (path) await load([path]);
-    if (path && sources.some((s) => s.path === path)) return { path, line: 1 };
+    if (path && sources.some((s) => s.path === path)) return [{ path, line: 1 }];
     const result = await findFiles(include[1]!.split("/").at(-1)!);
     const matches =
       result?.entries.filter(
         (e) => e.kind === "file" && (e.path === include[1] || e.path.endsWith(`/${include[1]}`)),
       ) ?? [];
-    return !result?.truncated && matches.length === 1 ? { path: matches[0]!.path, line: 1 } : null;
+    return !result?.truncated && matches.length === 1 ? [{ path: matches[0]!.path, line: 1 }] : [];
   }
   let symbol = apiSymbol ?? cppSymbolAt(source, offset);
-  if (!symbol) return null;
+  if (!symbol) return [];
   if (!apiSymbol) {
     const local = createAngelScriptNavigation(sources, true).resolve(source.path, offset);
     if (local) {
@@ -115,7 +125,7 @@ export async function resolveCppNavigation({
           declaration.definition) &&
         declaration.token.start !== offset
       )
-        return local;
+        return [local];
       if (declaration && !symbol.owner) {
         const owner = declaration.owner ?? qualifiedScope(declaration.scope);
         if (owner) symbol = { ...symbol, owner };
@@ -126,7 +136,7 @@ export async function resolveCppNavigation({
     const counterpart = await resolveCppCounterpart(source.path, findFiles);
     if (counterpart) await load([counterpart.path]);
     const declaration = findCppDefinition(sources, symbol);
-    if (declaration) return declaration;
+    if (declaration) return [declaration];
   }
   const implementationQuery = symbol.declarationOnly ? null : cppImplementationQuery(symbol);
   if (implementationQuery) {
@@ -139,7 +149,7 @@ export async function resolveCppNavigation({
           : {}),
         implementationOnly: true,
       });
-      if (implementation) return implementation;
+      if (implementation) return [implementation];
     }
   }
   // Searching the owner first avoids fetching hundreds of files for common fields like "position".
@@ -201,16 +211,20 @@ export async function resolveCppNavigation({
     );
   };
   let direct = findDirect();
-  if (apiSymbol && direct) return direct;
+  if (apiSymbol && direct) return [direct];
   if (!apiSymbol && !direct) {
     await load(await searchFiles(cppDefinitionQuery(symbol.name)));
     direct = findDirect();
   }
-  if (direct) return direct;
-  if (!apiSymbol)
-    return symbol.implementationOnly || symbol.declarationOnly
-      ? null
-      : createAngelScriptNavigation(sources, true).resolve(source.path, offset);
+  if (direct) return [direct];
+  if (!apiSymbol) {
+    const fallback =
+      symbol.implementationOnly || symbol.declarationOnly
+        ? []
+        : createAngelScriptNavigation(sources, true).resolveAll(source.path, offset);
+    const candidates = fallback.length === 1 ? fallback : findCppDefinitions(sources, symbol);
+    return candidates.length > 1 ? candidates : fallback;
+  }
   // CLion's bridge resolves wrapper registrations in addition to direct struct members.
   const registrationQuery = symbol.owner
     ? `RegisterObjectMethod\\s*\\(\\s*"${symbol.owner.replaceAll("::", "_")}"`
@@ -221,10 +235,10 @@ export async function resolveCppNavigation({
     await load(await searchFiles(`"${symbol.owner.replaceAll("::", "_")}"`));
     targets = cppBindingTargets(sources, symbol);
   }
-  if (targets.length !== 1) return null;
+  if (targets.length !== 1) return [];
   const target = targets[0]!;
   await load(await searchFiles(cppDefinitionQuery(target.name)));
-  return findCppDefinition(sources, target);
+  return findCppDefinitions(sources, target);
 }
 
 /** Match a source/header basename, preferring siblings and then the nearest project directory. */

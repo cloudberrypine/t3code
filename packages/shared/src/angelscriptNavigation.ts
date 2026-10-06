@@ -1,4 +1,4 @@
-import { angelScriptStateTree, tokenizeAngelScript } from "./angelscript.ts";
+import { angelScriptStateTree, isAngelScriptPath, tokenizeAngelScript } from "./angelscript.ts";
 
 export interface AngelScriptSource {
   path: string;
@@ -460,14 +460,16 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
     .filter((source) => source.contents.length <= 2_000_000)
     .map((source) => indexNavigationSource(source, cpp));
   const stateTrees = new Map<SourceIndex, ReturnType<typeof angelScriptStateTree>>();
+  // Equal-ranked candidates of the clicked name's lookup, so a caller can offer a choice.
+  let ambiguous: Array<{ index: SourceIndex; declaration: Declaration }> = [];
   const navigation = {
     resolve(
       path: string,
       offset: number,
       withIdentity = false,
-    ): (AngelScriptDefinition & { start?: number; kind?: Declaration["kind"] }) | null {
+    ): Array<AngelScriptDefinition & { start?: number; kind?: Declaration["kind"] }> {
       const current = indices.find((entry) => entry.source.path === path);
-      if (!current) return null;
+      if (!current) return [];
       if (!cpp) {
         let entries = stateTrees.get(current);
         if (!entries) {
@@ -477,7 +479,7 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
         const tree = entries.find((entry) => entry.start <= offset && offset < entry.end);
         if (tree) {
           const file = tree.file ? relativeScriptPath(current.source, tree.file) : undefined;
-          if (tree.file && !file) return null;
+          if (tree.file && !file) return [];
           const candidates = indices.flatMap((index) =>
             index.declarations
               .filter(
@@ -499,16 +501,17 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
               : qualifiedScope(entry.scope) === tree.namespace,
           );
           const matches = !tree.file && local.length ? local : candidates;
-          return matches.length === 1
-            ? { path: matches[0]!.index.source.path, line: matches[0]!.entry.token.line }
-            : null;
+          return matches.map(({ index, entry }) => ({
+            path: index.source.path,
+            line: entry.token.line,
+          }));
         }
       }
       const tokenIndex = current.tokens.findIndex(
         (token) => token.start <= offset && offset < token.end,
       );
       const token = current.tokens[tokenIndex];
-      if (!token || !identifier.test(token.text)) return null;
+      if (!token || !identifier.test(token.text)) return [];
       const scope = current.scopeAt(offset);
       const location = (index: SourceIndex, declaration: Declaration) => ({
         path: index.source.path,
@@ -528,7 +531,7 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
             entry.token.text === token.text &&
             entry.scope === stateMember.scope.parent,
         );
-        return states.length === 1 ? location(current, states[0]!) : null;
+        return states.map((state) => location(current, state));
       }
       const callInfo = (nameIndex: number) => {
         let open = nameIndex + 1;
@@ -572,6 +575,7 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
           candidates = candidates.filter((entry) => entry.declaration.definition);
         if (candidates.length === 1) return candidates[0];
         // Equal-arity overloads still need argument typing; never pick arbitrarily.
+        ambiguous = candidates;
         return undefined;
       };
       const lookup = (name: string, at: number, owner?: string, count?: number) => {
@@ -750,10 +754,11 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
       let owner: string | undefined;
       if (previous === "." || (cpp && previous === "->")) {
         owner = receiverType(tokenIndex - 2);
-        if (!owner) return null;
+        if (!owner) return [];
       } else if (previous === "::") {
         owner = qualifiedOwner(tokenIndex);
       }
+      ambiguous = [];
       const found = lookup(token.text, offset, owner, callInfo(tokenIndex)?.count);
       if (
         !cpp &&
@@ -775,20 +780,25 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
               entry.token.text === token.text &&
               entry.scope === found.declaration.scope.parent,
           );
-          if (states.length === 1) return location(current, states[0]!);
+          if (states.length === 1) return [location(current, states[0]!)];
         }
       }
-      return found ? location(found.index, found.declaration) : null;
+      if (found) return [location(found.index, found.declaration)];
+      return ambiguous.map(({ index, declaration }) => location(index, declaration));
     },
   };
+  const unique = <T>(results: T[]) => (results.length === 1 ? results[0]! : null);
   const references = new Map<string, Array<{ start: number; end: number; line: number }>>();
   return {
     resolve: (path: string, offset: number): AngelScriptDefinition | null =>
-      navigation.resolve(path, offset),
+      unique(navigation.resolve(path, offset)),
+    /** Every equal-ranked definition, for callers that let the user choose between overloads. */
+    resolveAll: (path: string, offset: number): AngelScriptDefinition[] =>
+      uniqueDefinitions(navigation.resolve(path, offset)),
     /** Exact declaration offsets keep shadowed variables separate, even on one line. */
     references(path: string, offset: number) {
       const current = indices.find((entry) => entry.source.path === path);
-      const target = navigation.resolve(path, offset, true);
+      const target = unique(navigation.resolve(path, offset, true));
       if (!current || target?.kind !== "variable" || target.start === undefined) return [];
       const key = JSON.stringify([path, target.path, target.start]);
       const cached = references.get(key);
@@ -798,7 +808,7 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
       const matches = current.tokens
         .filter((candidate) => {
           if (candidate.text !== token.text) return false;
-          const location = navigation.resolve(path, candidate.start, true);
+          const location = unique(navigation.resolve(path, candidate.start, true));
           return (
             location?.kind === "variable" &&
             location.path === target.path &&
@@ -810,6 +820,88 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
       return matches;
     },
   };
+}
+
+export interface NavigationTarget {
+  /** 1-based line of `start`. */
+  line: number;
+  /** Absolute offsets into the source. */
+  start: number;
+  end: number;
+}
+
+/**
+ * Ranges a click or long press may follow: identifiers outside comments, behavior state-tree
+ * names and their files, and include paths. Pass `partial` for a fragment such as a diff hunk.
+ */
+export function navigationTargets(source: AngelScriptSource, partial = false): NavigationTarget[] {
+  const { contents } = source;
+  const offsets = [0];
+  for (let i = 0; i < contents.length; i++) if (contents[i] === "\n") offsets.push(i + 1);
+  const lineAt = (offset: number) => {
+    let low = 0;
+    let high = offsets.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (offsets[middle]! <= offset) low = middle;
+      else high = middle - 1;
+    }
+    return low + 1;
+  };
+  const targets: NavigationTarget[] = [];
+  const tokens = tokenizeAngelScript(contents);
+  for (const token of tokens) {
+    if (token.comment || !identifier.test(token.text)) continue;
+    targets.push({ line: token.line, start: token.start, end: token.end });
+  }
+  if (isAngelScriptPath(source.path)) {
+    for (const entry of angelScriptStateTree(contents, partial)) {
+      targets.push({ line: entry.line, start: entry.start, end: entry.end });
+      if (entry.file && entry.fileStart !== undefined) {
+        targets.push({
+          line: lineAt(entry.fileStart),
+          start: entry.fileStart,
+          end: entry.fileStart + entry.file.length,
+        });
+      }
+    }
+  }
+  for (const [index, start] of offsets.entries()) {
+    const text = contents.slice(start, offsets[index + 1]);
+    const include = /^\s*#\s*include\s+["'<]([^"'>]+)["'>]/.exec(text);
+    if (!include) continue;
+    const first = start + text.indexOf(include[1]!);
+    if (tokens.some((token) => token.comment && token.start <= first && first < token.end))
+      continue;
+    targets.push({ line: index + 1, start: first, end: first + include[1]!.length });
+  }
+  return targets;
+}
+
+/** The narrowest navigation target containing `offset`, or null when nothing there can be followed. */
+export function navigationTargetAt(
+  source: AngelScriptSource,
+  offset: number,
+): NavigationTarget | null {
+  let best: NavigationTarget | null = null;
+  for (const target of navigationTargets(source)) {
+    if (
+      target.start <= offset &&
+      offset < target.end &&
+      (!best || target.end - target.start < best.end - best.start)
+    )
+      best = target;
+  }
+  return best;
+}
+
+/** One entry per location, in first-seen order, without resolver-internal fields. */
+export function uniqueDefinitions(
+  definitions: readonly AngelScriptDefinition[],
+): AngelScriptDefinition[] {
+  const seen = new Map<string, AngelScriptDefinition>();
+  for (const { path, line } of definitions) seen.set(`${line}:${path}`, { path, line });
+  return [...seen.values()];
 }
 
 /** Only explicit includes and namespace qualifiers may request another file. */

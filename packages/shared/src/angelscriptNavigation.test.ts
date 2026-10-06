@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { angelScriptNavigationFile, createAngelScriptNavigation } from "./angelscriptNavigation.js";
+import {
+  angelScriptNavigationFile,
+  createAngelScriptNavigation,
+  navigationTargetAt,
+} from "./angelscriptNavigation.js";
 
 function resolve(contents: string, needle: string, api = "", occurrence = "last") {
   const navigation = createAngelScriptNavigation([
@@ -515,4 +519,37 @@ ${keyword} Animal {
  state Rest { void run() {} }
 }`;
   expect(resolve(source, "Rest", "", "first")).toEqual({ path: "scripts/main.as", line: 6 });
+});
+
+it("offers every equal-ranked overload for a picker while resolve stays unique-only", () => {
+  const api = "void run(int a);\nvoid run(string a);\nvoid run(int a, int b);";
+  const contents = "void main() { run(value); }";
+  const navigation = createAngelScriptNavigation([
+    { path: "scripts/main.as", contents },
+    { path: "scripts/ScriptingAPI.as", contents: api },
+  ]);
+  const offset = contents.indexOf("run");
+  expect(navigation.resolve("scripts/main.as", offset)).toBeNull();
+  expect(navigation.resolveAll("scripts/main.as", offset)).toEqual([
+    { path: "scripts/ScriptingAPI.as", line: 1 },
+    { path: "scripts/ScriptingAPI.as", line: 2 },
+  ]);
+  expect(navigation.resolveAll("scripts/main.as", contents.indexOf("main"))).toEqual([
+    { path: "scripts/main.as", line: 1 },
+  ]);
+});
+
+it("finds the followable symbol under an offset, and nothing in comments or whitespace", () => {
+  const contents = '#include "shared/util.as"\nvoid run() {\n  // helper here\n  helper(1);\n}';
+  const source = { path: "scripts/main.as", contents };
+  const at = (needle: string, delta = 0) => {
+    const target = navigationTargetAt(source, contents.indexOf(needle) + delta);
+    return target && contents.slice(target.start, target.end);
+  };
+  expect(at("helper(1)", 3)).toBe("helper");
+  expect(at("util.as")).toBe("shared/util.as");
+  expect(at("helper here")).toBeNull();
+  expect(at("  helper(1)")).toBeNull();
+  expect(at("(1)")).toBeNull();
+  expect(navigationTargetAt(source, contents.indexOf("helper(1)"))?.line).toBe(4);
 });
