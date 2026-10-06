@@ -22,7 +22,16 @@ enum T3PlayOrientationPolicy {
   static func setRotationAllowed(_ allowed: Bool) {
     guard allowed != rotationAllowed else { return }
     rotationAllowed = allowed
-    let mask = mask(for: UIDevice.current.userInterfaceIdiom)
+    let device = UIDevice.current
+    if allowed {
+      device.beginGeneratingDeviceOrientationNotifications()
+    }
+    // Opening turns the screen the way the phone is held; closing turns it
+    // back upright. Turns in between follow the device.
+    let target = allowed ? heldLandscape(device.orientation) : mask(for: device.userInterfaceIdiom)
+    if !allowed {
+      device.endGeneratingDeviceOrientationNotifications()
+    }
     for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
       for window in scene.windows {
         var controller = window.rootViewController
@@ -31,11 +40,18 @@ enum T3PlayOrientationPolicy {
           controller = current.presentedViewController
         }
       }
-      // Turns a landscape screen back upright on close; allowing rotation
-      // follows the device by itself.
-      if !allowed {
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+      if let target {
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
       }
+    }
+  }
+
+  /// The interface orientation for a phone held sideways (the two are mirrored).
+  private static func heldLandscape(_ orientation: UIDeviceOrientation) -> UIInterfaceOrientationMask? {
+    switch orientation {
+    case .landscapeLeft: return .landscapeRight
+    case .landscapeRight: return .landscapeLeft
+    default: return nil
     }
   }
 
