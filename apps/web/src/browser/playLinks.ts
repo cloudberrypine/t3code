@@ -78,20 +78,23 @@ export const isPlayLinkHref = (href: string): boolean => parsePlayLink(href) !==
 
 /**
  * Opens a thread's play link in the integrated browser at its normal size,
- * whatever "Open links in" says; one that is not a play page of the thread's
- * environment goes to the system browser, as before.
+ * whatever "Open links in" says. A link that is not a play page of the
+ * thread's environment opens where any other link would: in the integrated
+ * browser when `inApp` (the setting's answer for this click), else the
+ * system browser.
  */
 export function usePlayLinkOpener(
   environmentId: EnvironmentId | null,
   openInPreview: (url: string) => Promise<AtomCommandResult<void, unknown>>,
-): (href: string) => Promise<void> {
+): (href: string, inApp: boolean) => Promise<void> {
   const mint = useAtomCommand(mintPlayTicketCommand, { reportFailure: false });
   return useCallback(
-    async (href: string) => {
-      const url =
+    async (href: string, inApp: boolean) => {
+      const playUrl =
         environmentId === null
           ? null
           : await resolvePlayLinkForPreview({ href, environmentId, mint });
+      const url = playUrl ?? (inApp ? href : null);
       if (url !== null) {
         const result = await openInPreview(url);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;

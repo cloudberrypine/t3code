@@ -3119,7 +3119,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
               return;
             }
             // Fork: a Polyzonia play link opens in the integrated browser whatever
-            // the setting says; a modifier click still leaves it to the shell.
+            // the setting says; a modifier click still leaves it to the shell, and
+            // a /play/ page of another host follows the setting.
             if (
               !event.defaultPrevented &&
               canOpenInPreview &&
@@ -3129,7 +3130,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
             ) {
               event.preventDefault();
               event.stopPropagation();
-              void openPlayLink(href);
+              const inApp =
+                resolveLinkTarget({
+                  url: href,
+                  event,
+                  preference: linkTargetPreference,
+                  canOpenInApp: canOpenInPreview,
+                }) === "app";
+              void openPlayLink(href, inApp);
               return;
             }
             // Anything else follows the "Open links in" setting. The system browser
