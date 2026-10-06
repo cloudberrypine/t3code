@@ -200,6 +200,7 @@ import {
   BrowserSettingsReadError,
 } from "../browser/openFileInPreview";
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
+import { isPlayLinkHref, usePlayLinkOpener } from "../browser/playLinks";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 
 interface ChatMarkdownProps {
@@ -3025,6 +3026,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
       renderContextReference,
       text,
     } = use(ChatMarkdownRendererContext);
+    // Fork: Polyzonia play links (browser/playLinks.ts).
+    const openPlayLink = usePlayLinkOpener(
+      threadRef?.environmentId ?? null,
+      openExternalLinkInPreview,
+    );
     const citation = href ? parseAssistantCitationHref(href) : null;
     if (citation) return <AssistantCitationChip citation={citation} />;
     const contextReference = href ? parseComposerContextHref(href) : null;
@@ -3110,6 +3116,20 @@ const CHAT_MARKDOWN_COMPONENTS = {
               !href ||
               openChangeRequestLink(event, href, undefined, environmentId ?? undefined)
             ) {
+              return;
+            }
+            // Fork: a Polyzonia play link opens in the integrated browser whatever
+            // the setting says; a modifier click still leaves it to the shell.
+            if (
+              !event.defaultPrevented &&
+              canOpenInPreview &&
+              !event.metaKey &&
+              !event.ctrlKey &&
+              isPlayLinkHref(href)
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              void openPlayLink(href);
               return;
             }
             // Anything else follows the "Open links in" setting. The system browser
