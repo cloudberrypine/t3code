@@ -8,13 +8,13 @@ import jsxLanguage from "@shikijs/langs/jsx";
 import tsxLanguage from "@shikijs/langs/tsx";
 import typescriptLanguage from "@shikijs/langs/typescript";
 import yamlLanguage from "@shikijs/langs/yaml";
-import { getFiletypeFromFileName } from "@pierre/diffs/utils/getFiletypeFromFileName";
 import * as Schema from "effect/Schema";
 
 import {
   resolveReviewHighlighterEngine,
   resolveReviewHighlighterEnginePreference,
 } from "./reviewHighlighterEngine";
+import { desktopCodeLanguage } from "./desktopCodeLanguages";
 import { DESKTOP_CODE_THEME_NAMES, DESKTOP_CODE_THEMES } from "./desktopCodeThemes";
 import { createIncrementalSnippet } from "./incrementalSnippet";
 import type { ReviewRenderableLineRow } from "./reviewModel";
@@ -85,6 +85,8 @@ const languageImports: Partial<Record<string, () => Promise<unknown>>> = {
   kotlin: () => import("@shikijs/langs/kotlin"),
   swift: () => import("@shikijs/langs/swift"),
   "objective-c": () => import("@shikijs/langs/objective-c"),
+  // Pierre (and so desktop) highlights `.h` and `.mm` as Objective-C++.
+  "objective-cpp": () => import("@shikijs/langs/objective-cpp"),
   c: () => import("@shikijs/langs/c"),
   cpp: () => import("@shikijs/langs/cpp"),
   csharp: () => import("@shikijs/langs/csharp"),
@@ -321,7 +323,7 @@ function resolveLoadedLanguageFromPath(
   path: string,
   languageHint: string | null = null,
 ): string | null {
-  const detectedLanguage = languageHint ?? getFiletypeFromFileName(path);
+  const detectedLanguage = languageHint ?? desktopCodeLanguage(path);
   if (!detectedLanguage) {
     return "text";
   }
@@ -382,7 +384,7 @@ async function resolveLanguageFromPath(
     return loadedLanguage;
   }
 
-  const detectedLanguage = languageHint ?? getFiletypeFromFileName(path);
+  const detectedLanguage = languageHint ?? desktopCodeLanguage(path);
   if (!detectedLanguage) {
     return "text";
   }
