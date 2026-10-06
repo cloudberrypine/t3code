@@ -104,7 +104,10 @@ project's own "Play" script is the desktop build). It shows only when the enviro
 server (`/play/__health`'s `repo`, read once per connection) serves the thread's project root,
 and opens `/play/__open?path=<worktree, or the project root>`: the play server owns worktree
 naming and redirects to `/play/<name>/`, whose launcher explains or starts a missing, stale or
-failed build. The clients never poll build state. To keep the thread title on an iPhone, the
+failed build. On web and desktop, ⌥⇧⌘D (Ctrl+Alt+Shift+D elsewhere) plays it from anywhere in the
+thread, the terminal included: the `play.webBuild` keybinding command, rebindable in Settings →
+Keybindings and backfilled into existing `keybindings.json` files at startup. The clients never
+poll build state. To keep the thread title on an iPhone, the
 compact thread header drops upstream's terminal button (`useThreadGitRightHeaderItems`); split
 view and Android keep theirs.
 

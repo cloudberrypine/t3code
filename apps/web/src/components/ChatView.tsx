@@ -228,6 +228,7 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { PlayWebBuildShortcut } from "./chat/PlayWebBuildControl";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -10820,6 +10821,10 @@ export default function ChatView(props: ChatViewProps) {
       ref={workspaceLayoutRef}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
+      {/* Fork: Polyzonia play */}
+      {isServerThread && activeThreadRef ? (
+        <PlayWebBuildShortcut threadRef={activeThreadRef} getShortcutContext={getShortcutContext} />
+      ) : null}
       <Dialog
         open={
           deviceSetupThread !== null &&
