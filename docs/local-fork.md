@@ -141,7 +141,7 @@ seconds after a web change, 14 after a server-only change and 12 with no change,
 the old uncached ZIP build.
 
 Use a unique `+local` version. Local builds disable automatic updates so custom features stay.
-As of 5 October 2026 the installed build is `0.0.46+local.20261005.installer.1`.
+As of 6 October 2026 the installed build is `0.0.46+local.20261006.playweb.1`.
 
 ## Installing while T3 Code is running
 
