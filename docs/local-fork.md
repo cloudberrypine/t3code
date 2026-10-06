@@ -48,6 +48,27 @@ rendering; and Cmd+1–9 / session traversal while a terminal has focus, without
 chords to the shell. The diff reset we fixed originated upstream in #15005. The Polyzonia `/play`
 proxy is described below.
 
+## Mobile code navigation, line comments and citations
+
+Mobile reuses desktop's logic rather than its own copies: code is coloured with desktop's Pierre
+syntax themes (`apps/mobile/src/features/review/desktopCodeThemes.ts`, plus AngelScript's semantic
+colours), and go-to-definition is `resolveDefinitions` in
+`packages/client-runtime/src/definitionNavigation.ts`, which desktop's hook also calls. Where the
+logic is upstream web-only code, a shared copy carries a parity test against it
+(`fileReviewComment.ts`, `assistantCitationSelector.ts`).
+
+- In the file viewer (`apps/mobile/src/features/code-navigation/`), long-pressing a symbol opens its
+  definition as a pushed screen, or a picker for overloads, which desktop leaves unresolved.
+  Long-pressing a line number opens the review-comment sheet, and the result is the same file-comment
+  record desktop's Files panel sends. With word wrap on, symbols take the long press; the rest of the
+  line stays selectable.
+- In chat (`apps/mobile/src/features/citations/`), Cite beside Copy turns selected assistant text into
+  desktop's `[Assistant quote](t3-citation://…)` link, shown as a composer chip. Tap the chip to edit
+  its comment.
+- The native code canvas (`modules/t3-review-diff`) reports long-press gutter or column hits and draws
+  the symbol tint. The markdown text module (`modules/t3-markdown-text`) adds the Cite menu item.
+  Both need a rebuilt app.
+
 ## Polyzonia play proxy
 
 `apps/server/src/play/` proxies `/play/*` to Polyzonia's play server on `127.0.0.1:8790`, so the
