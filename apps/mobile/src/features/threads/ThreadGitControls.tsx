@@ -10,7 +10,7 @@ import {
 import { type GitActionRequestInput, resolveQuickAction } from "@t3tools/client-runtime/state/vcs";
 import { useNavigation } from "@react-navigation/native";
 import { NativeHeaderToolbar } from "../../native/StackHeader";
-import type { PlayWebBuildButton } from "../play/playEnvironments";
+import type { PlayWebBuildButton } from "../play/playWebBuildButton";
 import { useCallback, useMemo } from "react";
 import { Alert } from "react-native";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";

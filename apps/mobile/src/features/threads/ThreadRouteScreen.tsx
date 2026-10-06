@@ -50,6 +50,7 @@ import { useSelectedThreadDetailState } from "../../state/use-thread-detail";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { GitActionProgressOverlay } from "./GitActionProgressOverlay";
 import { useThreadPlayWebBuild } from "../play/playEnvironments";
+import { playWebBuildOptionsVersion } from "../play/playWebBuildButton";
 import {
   buildTerminalMenuSessions,
   nextOpenTerminalId,
@@ -168,7 +169,10 @@ function ThreadHeader(
         subtitle={props.subtitle}
         sidebar={native.sidebar}
         options={native.options}
-        optionsVersion={props.gitControls.projectScripts}
+        optionsVersion={[
+          props.gitControls.projectScripts,
+          playWebBuildOptionsVersion(props.gitControls.playWebBuild),
+        ]}
         trailing={
           props.fileInspectorSupported && props.hasThreadCwd ? (
             <ScreenHeaderButton

@@ -124,7 +124,9 @@ under the project scripts in the desktop thread details panel (`PlayWebBuildCont
 project's own "Play" script is the desktop build). It shows when the environment's play server
 (`/play/__health`'s `repo`) serves the thread's project root, and is disabled while that is not
 known yet. `createPlayServerAtoms` asks on every connect and reconnect, and every 15 seconds
-while the play server does not answer, so an open thread follows the connection. It opens
+while the play server does not answer, so an open thread follows the connection. The iOS header
+re-applies its native items only when its `optionsVersion` changes (the item factory is
+stabilized), so the thread header includes `playWebBuildOptionsVersion`. It opens
 `/play/__open?path=<worktree, or the project root>`: the play server owns worktree naming and
 redirects to `/play/<name>/`, whose launcher explains or starts a missing, stale or failed
 build. On web and desktop, ⌥⇧⌘D (Ctrl+Alt+Shift+D elsewhere) plays it from anywhere in the

@@ -24,6 +24,7 @@ import { connectionAtomRuntime } from "../../connection/runtime";
 import { relayEnvironmentDiscovery } from "../../state/relay";
 import { environmentSession } from "../../state/session";
 import type { PlayEnvironments } from "./playRoute";
+import type { PlayWebBuildButton } from "./playWebBuildButton";
 
 function samePlayEnvironments(left: PlayEnvironments, right: PlayEnvironments): boolean {
   if (left.ready !== right.ready || left.origins.size !== right.origins.size) return false;
@@ -102,12 +103,6 @@ const NO_PREPARED_CONNECTION_ATOM = Atom.make(Option.none<PreparedConnection>())
   Atom.withLabel("mobile-play-prepared-connection:none"),
 );
 
-/** The thread header's "Play web build": disabled while its availability is being checked. */
-export interface PlayWebBuildButton {
-  readonly loading: boolean;
-  readonly onPress: () => void;
-}
-
 const NOTHING_TO_PLAY = () => {};
 
 /**
@@ -147,6 +142,7 @@ export function useThreadPlayWebBuild(input: {
     if (url === null || environmentId === null) return null;
     return {
       loading: false,
+      url,
       onPress: () => {
         void Haptics.selectionAsync();
         navigation.navigate("Play", { url, environmentId });
