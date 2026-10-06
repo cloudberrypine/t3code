@@ -104,7 +104,9 @@ project's own "Play" script is the desktop build). It shows only when the enviro
 server (`/play/__health`'s `repo`, read once per connection) serves the thread's project root,
 and opens `/play/__open?path=<worktree, or the project root>`: the play server owns worktree
 naming and redirects to `/play/<name>/`, whose launcher explains or starts a missing, stale or
-failed build. The clients never poll build state.
+failed build. The clients never poll build state. To keep the thread title on an iPhone, the
+compact thread header drops upstream's terminal button (`useThreadGitRightHeaderItems`); split
+view and Android keep theirs.
 
 ## Verification
 

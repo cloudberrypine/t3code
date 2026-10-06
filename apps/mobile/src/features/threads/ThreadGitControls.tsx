@@ -390,12 +390,13 @@ function playWebBuildHeaderItems(onPress: (() => void) | undefined): HeaderItems
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
   const { onPlayWebBuild } = props;
+  // Fork: the compact (iPhone) header has no terminal button. With Play web
+  // build, four buttons leave no room for the thread title.
   return useMemo(
     () =>
       [
         actionItems.git,
         actionItems.files,
-        actionItems.terminal,
         ...playWebBuildHeaderItems(onPlayWebBuild),
       ] as HeaderItems,
     [actionItems, onPlayWebBuild],
