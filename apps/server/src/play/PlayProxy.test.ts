@@ -17,6 +17,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
@@ -29,12 +30,16 @@ import {
 } from "effect/unstable/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { CLOUD_ENDPOINT_RUNTIME_CONFIG } from "../cloud/config.ts";
+import * as ServerConfig from "../config.ts";
 import { httpCompressionLayer } from "../http.ts";
 import {
   PLAY_REQUEST_TIMEOUT_MS,
   createPlayHttpServer,
   makePlayProxyRoutes,
   managedEndpointOrigin,
+  playProxyRouteLayer,
   privateCacheControl,
 } from "./PlayProxy.ts";
 import {
@@ -665,6 +670,54 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
         publicOrigin: "https://mac.tailnet.ts.net:8443",
         publicOriginSource: "config",
       });
+    }),
+  );
+
+  it.effect("reads only the tunnel's name from T3 Connect's stored config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-play-proxy-" });
+      // As the relay sends it and the server keeps it (cloud/config.ts).
+      const stored = JSON.stringify({
+        providerKind: "cloudflare_tunnel",
+        connectorToken: "connector-token-not-for-links",
+        tunnelId: "f0e1d2c3-0000-4000-8000-000000000000",
+        tunnelName: "t3coderelay-managedendpoint-prod-0123456789abcdef",
+      });
+      const secrets = Layer.succeed(ServerSecretStore.ServerSecretStore, {
+        get: (name: string) =>
+          Effect.succeed(
+            name === CLOUD_ENDPOINT_RUNTIME_CONFIG
+              ? Option.some(new TextEncoder().encode(stored))
+              : Option.none(),
+          ),
+        getOrCreateRandom: () => Effect.succeed(KEY),
+      } as unknown as ServerSecretStore.ServerSecretStore["Service"]);
+      const config = Layer.succeed(ServerConfig.ServerConfig, {
+        stateDir,
+      } as unknown as ServerConfig.ServerConfig["Service"]);
+      const served = HttpRouter.serve(
+        playProxyRouteLayer.pipe(
+          Layer.provide(Layer.merge(secrets, config)),
+          Layer.provideMerge(NodeHttpPlatform.layer),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+        { disableListenLog: true, disableLogger: true },
+      ).pipe(Layer.provide(authStub));
+      const services = yield* Layer.build(
+        served.pipe(Layer.provideMerge(NodeHttpServer.layerTest)),
+      );
+      const client = Context.get(services, HttpClient.HttpClient);
+      const minted = yield* client.execute(
+        HttpClientRequest.make("POST")("/play/__auth/ticket", mintRequest()),
+      );
+      expect(minted.status).toBe(200);
+      const text = yield* minted.text;
+      expect(JSON.parse(text)).toMatchObject({
+        publicOrigin: `https://${RELAY_HOST}`,
+        publicOriginSource: "t3-connect",
+      });
+      expect(text).not.toContain("connector-token-not-for-links");
     }),
   );
 
