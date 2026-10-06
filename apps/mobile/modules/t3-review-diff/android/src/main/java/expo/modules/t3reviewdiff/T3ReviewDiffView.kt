@@ -56,7 +56,7 @@ class T3ReviewDiffView(context: Context, appContext: AppContext) : ExpoView(cont
   private var velocityTracker: VelocityTracker? = null
 
   init {
-    canvasView.onRowTap = { row, gesture, target -> handleRowTap(row, gesture, target) }
+    canvasView.onRowTap = { row, gesture, target, press -> handleRowTap(row, gesture, target, press) }
     canvasView.onVisibleRowsChanged = { first, last ->
       onDebug(
         mapOf(
@@ -106,6 +106,17 @@ class T3ReviewDiffView(context: Context, appContext: AppContext) : ExpoView(cont
   fun setSelectedRowIdsJson(value: String) {
     selectedRowIds = parseStringSet(value)
     canvasView.selectedRowIds = selectedRowIds
+  }
+
+  /** `{"rowId","start","end"}` in row content offsets, or an empty string to clear. */
+  fun setSymbolHighlightJson(value: String) {
+    canvasView.symbolHighlight = try {
+      JSONObject(value).let {
+        SymbolHighlight(it.getString("rowId"), it.getInt("start"), it.getInt("end"))
+      }
+    } catch (_: Exception) {
+      null
+    }
   }
 
   fun setCollapsedCommentIdsJson(value: String) {
@@ -351,7 +362,12 @@ class T3ReviewDiffView(context: Context, appContext: AppContext) : ExpoView(cont
     applyPendingInitialScroll()
   }
 
-  private fun handleRowTap(row: DiffRow, gesture: String, target: RowTapTarget) {
+  private fun handleRowTap(
+    row: DiffRow,
+    gesture: String,
+    target: RowTapTarget,
+    press: Map<String, Any>,
+  ) {
     when (row.kind) {
       "file" -> {
         if (gesture != "tap") return
@@ -371,6 +387,7 @@ class T3ReviewDiffView(context: Context, appContext: AppContext) : ExpoView(cont
         )
         row.oldLineNumber?.let { payload["oldLineNumber"] = it }
         row.newLineNumber?.let { payload["newLineNumber"] = it }
+        payload.putAll(press)
         onPressLine(payload)
       }
     }
@@ -652,6 +669,8 @@ internal data class DiffStyle(
   }
 }
 
+internal data class SymbolHighlight(val rowId: String, val start: Int, val end: Int)
+
 private class DiffCanvasView(context: Context) : View(context) {
   private val density = resources.displayMetrics.density
   private val drawing = ReviewDiffCanvasDrawing(context)
@@ -679,15 +698,18 @@ private class DiffCanvasView(context: Context) : View(context) {
           } else {
             RowTapTarget.ROW
           }
-          onRowTap?.invoke(hit.row, "tap", target)
+          onRowTap?.invoke(hit.row, "tap", target, emptyMap())
         }
         return true
       }
 
       override fun onLongPress(event: MotionEvent) {
-        rowHitAt(event.y)?.row
-          ?.takeIf { it.kind == "line" }
-          ?.let { onRowTap?.invoke(it, "longPress", RowTapTarget.ROW) }
+        rowHitAt(event.y)
+          ?.takeIf { it.row.kind == "line" }
+          ?.let { hit ->
+            val press = pressLocation(hit, event.x, event.y)
+            onRowTap?.invoke(hit.row, "longPress", RowTapTarget.ROW, press)
+          }
       }
     },
   )
@@ -751,7 +773,12 @@ private class DiffCanvasView(context: Context) : View(context) {
       clampHeaderPathOffsets()
       invalidate()
     }
-  var onRowTap: ((DiffRow, String, RowTapTarget) -> Unit)? = null
+  var onRowTap: ((DiffRow, String, RowTapTarget, Map<String, Any>) -> Unit)? = null
+  var symbolHighlight: SymbolHighlight? = null
+    set(value) {
+      field = value
+      invalidate()
+    }
   var onVisibleRowsChanged: ((Int, Int) -> Unit)? = null
 
   fun prepareRows() = drawing.prepareRows(tokensByRowId, style, width)
@@ -906,6 +933,30 @@ private class DiffCanvasView(context: Context) : View(context) {
       }
     }
     return low.coerceIn(0, rows.lastIndex)
+  }
+
+  /** Where a long press landed: the line-number gutter, or a code column (UTF-16 offset into the row). */
+  private fun pressLocation(hit: RowHit, x: Float, y: Float): Map<String, Any> {
+    val gutterEnd = style.changeBarWidthPx + style.gutterWidthPx
+    if (x < gutterEnd) return mapOf("region" to "gutter")
+    val lines = codeWrap.lines(hit.row.id)
+    drawing.configureCodePaint(theme.text, 0, style)
+    val characterWidth = textPaint.measureText("M")
+    val offsetX = x - (gutterEnd + style.codePaddingPx - horizontalOffset)
+    if (lines.nativeLayout != null || characterWidth <= 0f || offsetX < 0f) {
+      return mapOf("region" to "code")
+    }
+    val line = if (lines.starts.size == 1 || lines.height <= 0) {
+      0
+    } else {
+      ((y - hit.top) / lines.height).toInt().coerceIn(0, lines.starts.size - 1)
+    }
+    val column = lines.starts[line] + (offsetX / characterWidth).toInt()
+    return if (column < lines.end(line, hit.row.content.length)) {
+      mapOf("region" to "code", "column" to column)
+    } else {
+      mapOf("region" to "code")
+    }
   }
 
   private fun rowHitAt(y: Float): RowHit? {
@@ -1238,6 +1289,9 @@ private class DiffCanvasView(context: Context) : View(context) {
     drawScrollableCode(canvas, top, bottom) { codeX ->
       drawing.configureCodePaint(theme.text, 0, style)
       drawing.drawWordDiffRanges(canvas, row, codeX, top, firstLineBottom, lines)
+      symbolHighlight?.takeIf { it.rowId == row.id }?.let {
+        drawing.drawSymbolHighlight(canvas, it, codeX, top, firstLineBottom, lines)
+      }
       val baseline = lines.baseline(top, firstLineBottom, textPaint)
       drawing.drawCode(canvas, row.content, tokensByRowId[row.id], codeX, baseline, style, lines)
     }

@@ -23,6 +23,12 @@ private struct ReviewDiffNativeRow: Decodable, Sendable {
   let commentSectionTitle: String?
 }
 
+struct ReviewDiffSymbolHighlight: Equatable {
+  let rowId: String
+  let start: Int
+  let end: Int
+}
+
 private struct ReviewDiffNativeWordDiffRange: Decodable, Sendable {
   let start: Int
   let end: Int
@@ -617,6 +623,19 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     contentView.selectedRowIds = decodeFileIdSet(selectedRowIdsJson)
   }
 
+  /// `{"rowId","start","end"}` in row content offsets, or an empty string to clear.
+  func setSymbolHighlightJson(_ symbolHighlightJson: String) {
+    guard let data = symbolHighlightJson.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let rowId = object["rowId"] as? String,
+          let start = object["start"] as? Int,
+          let end = object["end"] as? Int else {
+      contentView.symbolHighlight = nil
+      return
+    }
+    contentView.symbolHighlight = ReviewDiffSymbolHighlight(rowId: rowId, start: start, end: end)
+  }
+
   func setCollapsedCommentIdsJson(_ collapsedCommentIdsJson: String) {
     contentView.collapsedCommentIds = decodeFileIdSet(collapsedCommentIdsJson)
     updateContentMetrics()
@@ -977,6 +996,11 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     }
   }
   var selectedRowIds: Set<String> = [] {
+    didSet {
+      setNeedsDisplayForVisibleBounds()
+    }
+  }
+  var symbolHighlight: ReviewDiffSymbolHighlight? {
     didSet {
       setNeedsDisplayForVisibleBounds()
     }
@@ -1364,7 +1388,30 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
       return
     }
 
-    onPressLine?(linePressPayload(for: row, gesture: "longPress"))
+    var payload = linePressPayload(for: row, gesture: "longPress")
+    payload.merge(pressLocation(for: row, rowIndex: rowIndex, point: point)) { _, location in location }
+    onPressLine?(payload)
+  }
+
+  /// Where a long press landed: the line-number gutter, or a code column (UTF-16 offset into the row).
+  private func pressLocation(for row: ReviewDiffNativeRow, rowIndex: Int, point: CGPoint) -> [String: Any] {
+    if point.x < stickyWidth {
+      return ["region": "gutter"]
+    }
+    let layout = codeLayoutsByRowId[row.id]
+    let x = point.x - (codeStartX - horizontalOffset(for: resolvedFileId(for: row)))
+    guard layout?.usesNativeLayout != true, codeCharacterWidth > 0, x >= 0 else {
+      return ["region": "code"]
+    }
+    let lineStarts = layout?.starts ?? [0]
+    let localY = point.y - (rowOffsets[rowIndex] - verticalOffset)
+    let line = lineStarts.count == 1
+      ? 0
+      : min(lineStarts.count - 1, max(0, Int(localY / codeWrapLineHeight)))
+    let length = ((row.content ?? "") as NSString).length
+    let lineEnd = line + 1 < lineStarts.count ? lineStarts[line + 1] : length
+    let column = lineStarts[line] + Int(floor(x / codeCharacterWidth))
+    return column < lineEnd ? ["region": "code", "column": column] : ["region": "code"]
   }
 
   private func linePressPayload(for row: ReviewDiffNativeRow, gesture: String) -> [String: Any] {
@@ -2365,6 +2412,14 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
       context: context,
       horizontalOffset: horizontalOffset
     )
+    if let symbolHighlight, symbolHighlight.rowId == row.id {
+      drawSymbolHighlight(
+        symbolHighlight,
+        lineStarts: lineStarts,
+        firstLineRect: firstLineRect,
+        horizontalOffset: horizontalOffset
+      )
+    }
     if let tokens = tokensByRowId[row.id], !tokens.isEmpty {
       let attributedText = tokenAttributedString(
         rowId: row.id,
@@ -2424,6 +2479,36 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
 
     theme.hunkText.withAlphaComponent(0.95).setFill()
     context.fill(CGRect(x: 0, y: rect.minY, width: style.changeBarWidth, height: rect.height))
+  }
+
+  /// Tints a long-pressed symbol, split at each visual line of a wrapped row.
+  private func drawSymbolHighlight(
+    _ highlight: ReviewDiffSymbolHighlight,
+    lineStarts: [Int],
+    firstLineRect: CGRect,
+    horizontalOffset: CGFloat
+  ) {
+    guard highlight.end > highlight.start else {
+      return
+    }
+    let highlightHeight = max(4, min(firstLineRect.height - 2, codeFont.lineHeight + 2))
+    let highlightY = firstLineRect.midY - highlightHeight / 2
+    theme.hunkText.withAlphaComponent(0.25).setFill()
+    for (line, lineStart) in lineStarts.enumerated() {
+      let lineEnd = line + 1 < lineStarts.count ? lineStarts[line + 1] : Int.max
+      let start = max(highlight.start, lineStart)
+      let end = min(highlight.end, lineEnd)
+      guard end > start else {
+        continue
+      }
+      let rect = CGRect(
+        x: codeStartX - horizontalOffset + CGFloat(start - lineStart) * codeCharacterWidth - 1,
+        y: highlightY + CGFloat(line) * codeWrapLineHeight,
+        width: CGFloat(end - start) * codeCharacterWidth + 2,
+        height: highlightHeight
+      )
+      UIBezierPath(roundedRect: rect, cornerRadius: 3).fill()
+    }
   }
 
   private func drawWordDiffRanges(

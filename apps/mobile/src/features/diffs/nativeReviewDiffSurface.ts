@@ -117,6 +117,8 @@ export interface NativeReviewDiffViewProps extends ViewProps {
   readonly collapsedFileIdsJson?: string;
   readonly viewedFileIdsJson?: string;
   readonly selectedRowIdsJson?: string;
+  /** `{"rowId","start","end"}` (row content offsets) briefly tinted, or "" for none. */
+  readonly symbolHighlightJson?: string;
   readonly collapsedCommentIdsJson?: string;
   readonly appearanceScheme: "light" | "dark";
   readonly themeJson: string;
@@ -141,6 +143,9 @@ export interface NativeReviewDiffViewProps extends ViewProps {
       readonly oldLineNumber?: number;
       readonly newLineNumber?: number;
       readonly change?: "context" | "add" | "delete";
+      /** Long presses only: the line-number gutter or the code, and the pressed code column. */
+      readonly region?: "gutter" | "code";
+      readonly column?: number;
     }>,
   ) => void;
   readonly onToggleComment?: (event: NativeSyntheticEvent<{ readonly commentId?: string }>) => void;

@@ -1,9 +1,12 @@
 import { useSyncExternalStore } from "react";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 
+import { formatFileReviewCommentContext } from "../code-navigation/fileLineComment";
 import type { ReviewRenderableLineRow } from "./reviewModel";
 
 export interface ReviewCommentTarget {
+  /** "file" for a source-file line (code navigation), which desktop formats differently. */
+  readonly source?: "file";
   readonly sectionId: string;
   readonly sectionTitle: string;
   readonly filePath: string;
@@ -238,6 +241,7 @@ function parseReviewInlineComment(
 }
 
 export function formatReviewCommentContext(target: ReviewCommentTarget, comment: string): string {
+  if (target.source === "file") return formatFileReviewCommentContext(target, comment);
   const rangeLabel = formatReviewSelectedRangeLabel(target);
   const diff = formatReviewSelectedDiff(target);
   const longestBacktickRun = Math.max(

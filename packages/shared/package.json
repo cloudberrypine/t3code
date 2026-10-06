@@ -379,6 +379,10 @@
       "types": "./src/cppNavigation.ts",
       "default": "./src/cppNavigation.ts"
     },
+    "./fileReviewComment": {
+      "types": "./src/fileReviewComment.ts",
+      "default": "./src/fileReviewComment.ts"
+    },
     "./angelscriptNavigation": {
       "types": "./src/angelscriptNavigation.ts",
       "import": "./src/angelscriptNavigation.ts"

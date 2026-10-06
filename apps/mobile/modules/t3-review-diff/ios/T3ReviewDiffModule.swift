@@ -25,6 +25,10 @@ public class T3ReviewDiffModule: Module {
         view.setSelectedRowIdsJson(selectedRowIdsJson)
       }
 
+      Prop("symbolHighlightJson") { (view: T3ReviewDiffView, symbolHighlightJson: String) in
+        view.setSymbolHighlightJson(symbolHighlightJson)
+      }
+
       Prop("collapsedCommentIdsJson") { (view: T3ReviewDiffView, collapsedCommentIdsJson: String) in
         view.setCollapsedCommentIdsJson(collapsedCommentIdsJson)
       }

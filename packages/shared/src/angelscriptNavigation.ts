@@ -822,6 +822,50 @@ export function createAngelScriptNavigation(sources: readonly AngelScriptSource[
   };
 }
 
+// Language keywords and built-in types never have a definition to follow.
+const keywords = new Set([
+  ...nonTypes,
+  "void",
+  "bool",
+  "int",
+  "uint",
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+  "float",
+  "double",
+  "char",
+  "short",
+  "long",
+  "unsigned",
+  "signed",
+  "auto",
+  "const",
+  "static",
+  "true",
+  "false",
+  "null",
+  "nullptr",
+  "do",
+  "default",
+  "struct",
+  "public",
+  "private",
+  "protected",
+  "virtual",
+  "override",
+  "inline",
+  "template",
+  "typename",
+  "sizeof",
+  "operator",
+]);
+
 export interface NavigationTarget {
   /** 1-based line of `start`. */
   line: number;
@@ -851,7 +895,7 @@ export function navigationTargets(source: AngelScriptSource, partial = false): N
   const targets: NavigationTarget[] = [];
   const tokens = tokenizeAngelScript(contents);
   for (const token of tokens) {
-    if (token.comment || !identifier.test(token.text)) continue;
+    if (token.comment || !identifier.test(token.text) || keywords.has(token.text)) continue;
     targets.push({ line: token.line, start: token.start, end: token.end });
   }
   if (isAngelScriptPath(source.path)) {

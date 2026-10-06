@@ -332,6 +332,7 @@ function FileContent(props: {
             cwd: props.cwd,
             revision: props.fileContents,
           }}
+          threadId={props.threadId}
           contents={props.fileContents}
           path={props.relativePath}
           initialLine={props.initialLine}

@@ -269,6 +269,43 @@ internal class ReviewDiffCanvasDrawing(context: Context) {
     }
   }
 
+  /** Tints a long-pressed symbol; [top]..[bottom] is the row's first visual line. */
+  @Suppress("LongParameterList")
+  fun drawSymbolHighlight(
+    canvas: Canvas,
+    highlight: SymbolHighlight,
+    codeX: Float,
+    top: Int,
+    bottom: Int,
+    lines: CodeLines
+  ) {
+    if (lines.nativeLayout != null || highlight.end <= highlight.start) return
+    backgroundPaint.color = withAlpha(theme.hunkText, 64)
+    val characterWidth = textPaint.measureText("M")
+    val fontHeight = textPaint.fontMetrics.run { descent - ascent }
+    val highlightHeight =
+      max(4f * density, min(bottom - top - 2f * density, fontHeight + 2f * density))
+    val highlightTop = (top + bottom - highlightHeight) / 2f
+    lines.starts.forEachIndexed { line, lineStart ->
+      val start = max(highlight.start, lineStart)
+      val end = min(highlight.end, lines.end(line, Int.MAX_VALUE))
+      if (end <= start) return@forEachIndexed
+      val left = codeX + (start - lineStart) * characterWidth
+      val lineTop = highlightTop + line * lines.height
+      canvas.drawRoundRect(
+        RectF(
+          left - density,
+          lineTop,
+          left + (end - start) * characterWidth + density,
+          lineTop + highlightHeight,
+        ),
+        3f * density,
+        3f * density,
+        backgroundPaint,
+      )
+    }
+  }
+
   /** Draws a code row's text, or its syntax [tokens] when present, one visual line per start. */
   @Suppress("LongParameterList")
   fun drawCode(

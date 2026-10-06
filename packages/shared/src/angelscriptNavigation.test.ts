@@ -551,5 +551,6 @@ it("finds the followable symbol under an offset, and nothing in comments or whit
   expect(at("helper here")).toBeNull();
   expect(at("  helper(1)")).toBeNull();
   expect(at("(1)")).toBeNull();
+  expect(at("void")).toBeNull();
   expect(navigationTargetAt(source, contents.indexOf("helper(1)"))?.line).toBe(4);
 });
