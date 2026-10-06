@@ -72,6 +72,13 @@ default of 5 minutes cuts slow flag uploads from a phone).
 - `POST /play/__auth/logout` (same origin only) clears the cookie.
 - Optional `userdata/play-proxy.json`: `{"enabled": false}` turns it off; `"upstream"` (loopback
   http only) and `"publicOrigin"` (for minted links) override the defaults.
+- A minted link's address (`publicOrigin` in the ticket reply, with `publicOriginSource`):
+  play-proxy.json's (`config`), else the https address a signed-in play page was last opened at,
+  kept in `userdata/play-proxy-origin.json` across restarts (`learned`; never from a request
+  without access), else T3 Connect's address derived from the managed tunnel's name in the
+  `cloud-endpoint-runtime-config` secret (`t3-connect`: the relay names the tunnel
+  `t3coderelay-managedendpoint-<stage>-<hash>` and the host `<stage>-<hash>.t3coderelay.com`; only
+  the name is read, never the connector token).
 - Tests: `vp test run src/play/PlayProxy.test.ts` in `apps/server`.
 
 ## Verification

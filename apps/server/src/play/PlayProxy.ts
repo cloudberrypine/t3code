@@ -26,6 +26,12 @@
  * Optional `<state dir>/play-proxy.json`: `{"enabled": false}` turns the route off,
  * `"upstream"` (loopback http, default http://127.0.0.1:8790), `"publicOrigin"`
  * for minted links.
+ *
+ * Minted links name the address the phone reaches T3 at: play-proxy.json's
+ * `publicOrigin`, else the https address a signed-in play page was last opened
+ * at (kept in `<state dir>/play-proxy-origin.json` across restarts), else the
+ * T3 Connect address of this environment's managed tunnel (derived from its
+ * tunnel name, the way the relay names both).
  */
 import * as NodeHttp from "node:http";
 import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
@@ -52,6 +58,7 @@ import {
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { CLOUD_ENDPOINT_RUNTIME_CONFIG, decodeRuntimeConfig } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
 import {
   PLAY_COOKIE_MAX_AGE_SECONDS,
@@ -71,6 +78,9 @@ const PLAY_SECRET_NAME = "play-proxy";
 const DEFAULT_UPSTREAM = "http://127.0.0.1:8790";
 const CONFIG_FILE = "play-proxy.json";
 const REDEEMED_FILE = "play-proxy-redeemed.json";
+const ORIGIN_FILE = "play-proxy-origin.json";
+/** T3 Connect's managed endpoints: `<stage>-<hash>.t3coderelay.com` (infra/relay deploymentConfig). */
+const MANAGED_ENDPOINT_BASE_DOMAIN = "t3coderelay.com";
 /** Flag uploads (zipped saves, recordings, screenshots); Cloudflare caps bodies at 100 MB. */
 const PLAY_MAX_REQUEST_BYTES = 100 * 1024 * 1024;
 /** The old header local scripts sent the secret in (still accepted, never traced). */
@@ -152,14 +162,41 @@ const decodeConfigFile = Schema.decodeUnknownEffect(PlayProxyConfigFile);
 const RedeemedFile = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Number));
 const decodeRedeemed = Schema.decodeUnknownEffect(RedeemedFile);
 const encodeRedeemed = Schema.encodeEffect(RedeemedFile);
+const OriginFile = Schema.fromJsonString(
+  Schema.Struct({ origin: Schema.String, learnedAt: Schema.optional(Schema.String) }),
+);
+const decodeOriginFile = Schema.decodeUnknownEffect(OriginFile);
+const encodeOriginFile = Schema.encodeEffect(OriginFile);
+/** Where a minted link's address comes from. */
+const PublicOriginSource = Schema.Literals(["config", "learned", "t3-connect"]);
+type PublicOriginSource = typeof PublicOriginSource.Type;
 const TicketResponse = Schema.fromJsonString(
   Schema.Struct({
     ticket: Schema.String,
     expiresAt: Schema.String,
     publicOrigin: Schema.NullOr(Schema.String),
+    publicOriginSource: Schema.NullOr(PublicOriginSource),
   }),
 );
 const encodeTicketResponse = Schema.encodeEffect(TicketResponse);
+
+const isOrigin = (value: string) => /^https?:\/\/[^/]+$/.test(value);
+
+/**
+ * The T3 Connect address of a managed tunnel, from its name: the relay names
+ * the tunnel `t3coderelay-managedendpoint-<stage>-<hash>` and its hostname
+ * `<stage>-<hash>.t3coderelay.com` (infra/relay/src/deploymentConfig.ts), the
+ * same 16 hex digits in both. Null for any other name.
+ */
+export const managedEndpointOrigin = (tunnelName: string | undefined): string | null => {
+  const match =
+    /^t3coderelay-managedendpoint-([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)-([0-9a-f]{16})$/.exec(
+      tunnelName ?? "",
+    );
+  if (!match) return null;
+  const label = `${match[1]}-${match[2]}`;
+  return label.length <= 63 ? `https://${label}.${MANAGED_ENDPOINT_BASE_DOMAIN}` : null;
+};
 
 interface PlayProxyConfig {
   readonly enabled: boolean;
@@ -317,12 +354,15 @@ const sessionAllows = (request: HttpServerRequest.HttpServerRequest, write: bool
 const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
   readonly stateDir: string;
   readonly key: Uint8Array | null;
+  /** The managed tunnel's name (T3 Connect), read when a link is minted. */
+  readonly managedTunnelName?: Effect.Effect<string | undefined>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const client = HttpClient.withScope(yield* HttpClient.HttpClient);
   const configPath = path.join(input.stateDir, CONFIG_FILE);
   const redeemedPath = path.join(input.stateDir, REDEEMED_FILE);
+  const originPath = path.join(input.stateDir, ORIGIN_FILE);
   const configCache = yield* Ref.make<{ readonly mtime: number; readonly config: PlayProxyConfig }>(
     {
       mtime: -1,
@@ -331,7 +371,44 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
   );
   const redeemed = yield* Ref.make<Map<string, number> | null>(null);
   const redeemLock = yield* Semaphore.make(1);
-  const learnedOrigin = yield* Ref.make<string | null>(null);
+  // The https address a signed-in play page was opened at; undefined until
+  // read from the origin file.
+  const learnedOrigin = yield* Ref.make<string | null | undefined>(undefined);
+  const originLock = yield* Semaphore.make(1);
+
+  const learned = Effect.gen(function* () {
+    const known = yield* Ref.get(learnedOrigin);
+    if (known !== undefined) return known;
+    const stored = yield* fs
+      .readFileString(originPath)
+      .pipe(Effect.flatMap(decodeOriginFile), Effect.option);
+    const origin = Option.match(stored, {
+      onNone: () => null,
+      onSome: (file) => (isOrigin(file.origin) ? file.origin : null),
+    });
+    yield* Ref.set(learnedOrigin, origin);
+    return origin;
+  });
+
+  /** Kept across restarts: T3 Code may restart before the next link is minted. */
+  const keepOrigin = (origin: string) =>
+    Effect.gen(function* () {
+      if ((yield* learned) === origin) return;
+      yield* Ref.set(learnedOrigin, origin);
+      const learnedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+      const contents = yield* encodeOriginFile({ origin, learnedAt });
+      yield* writeFileStringAtomically({ filePath: originPath, contents }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("play proxy: could not keep the public origin", error),
+        ),
+      );
+    });
+  /** Every signed-in request names it: written only when it changes. */
+  const learn = (origin: string) =>
+    Effect.gen(function* () {
+      if ((yield* learned) === origin) return;
+      yield* originLock.withPermits(1)(keepOrigin(origin));
+    });
 
   /** Re-read when the file changes; no file means the defaults. */
   const config = Effect.gen(function* () {
@@ -352,13 +429,27 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
         enabled: file.enabled !== false,
         upstream: parseUpstream(file.upstream),
         publicOrigin:
-          file.publicOrigin !== undefined && /^https?:\/\/[^/]+$/.test(file.publicOrigin)
+          file.publicOrigin !== undefined && isOrigin(file.publicOrigin)
             ? file.publicOrigin
             : undefined,
       }),
     });
     yield* Ref.set(configCache, { mtime, config: next });
     return next;
+  });
+
+  /** The address for minted links, and where it comes from. */
+  const publicOrigin = Effect.gen(function* () {
+    const configured = (yield* config).publicOrigin;
+    if (configured !== undefined) {
+      return { origin: configured, source: "config" as PublicOriginSource };
+    }
+    const seen = yield* learned;
+    if (seen !== null) return { origin: seen, source: "learned" as PublicOriginSource };
+    const tunnelName = input.managedTunnelName ? yield* input.managedTunnelName : undefined;
+    const managed = managedEndpointOrigin(tunnelName);
+    if (managed !== null) return { origin: managed, source: "t3-connect" as PublicOriginSource };
+    return { origin: null, source: null };
   });
 
   /** True when the ticket was not redeemed before (and now is). */
@@ -427,11 +518,12 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
       const ttl =
         typeof body.ttlSeconds === "number" ? body.ttlSeconds : PLAY_TICKET_DEFAULT_TTL_SECONDS;
       const { ticket, expiresAt } = makeTicket(key, yield* nowSeconds, ttl);
-      const publicOrigin = (yield* config).publicOrigin ?? (yield* Ref.get(learnedOrigin));
+      const { origin, source } = yield* publicOrigin;
       const json = yield* encodeTicketResponse({
         ticket,
         expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAt * 1000)),
-        publicOrigin,
+        publicOrigin: origin,
+        publicOriginSource: source,
       });
       return HttpServerResponse.text(json, {
         status: 200,
@@ -562,7 +654,8 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
     }
     const { proto, origin } = requestOrigin(request);
     const hostname = (request.headers.host ?? "").replace(/:\d+$/, "");
-    if (proto === "https" && !isLoopbackHost(hostname)) yield* Ref.set(learnedOrigin, origin);
+    // Learned from signed-in requests only: an unsigned one could name any host.
+    if (proto === "https" && !isLoopbackHost(hostname) && isOrigin(origin)) yield* learn(origin);
     if (write) {
       if (!sameOriginWrite(request)) return textReply("Forbidden", 403);
       const length = request.headers["content-length"];
@@ -578,6 +671,7 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
 export const makePlayProxyRoutes = (input: {
   readonly stateDir: string;
   readonly key: Uint8Array | null;
+  readonly managedTunnelName?: Effect.Effect<string | undefined>;
 }) =>
   Layer.unwrap(
     // The wildcard route also takes the bare prefix.
@@ -598,7 +692,18 @@ export const playProxyRouteLayer = Layer.unwrap(
           Effect.logWarning("play proxy disabled: no signing secret", error).pipe(Effect.as(null)),
         ),
       );
-    return makePlayProxyRoutes({ stateDir: config.stateDir, key });
+    // T3 Connect's tunnel as the relay configured it: only its name is read
+    // (the stored config also holds the connector's token).
+    const managedTunnelName = secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG).pipe(
+      Effect.map((bytes) =>
+        Option.isSome(bytes)
+          ? Option.getOrUndefined(decodeRuntimeConfig(new TextDecoder().decode(bytes.value)))
+              ?.tunnelName
+          : undefined,
+      ),
+      Effect.orElseSucceed(() => undefined),
+    );
+    return makePlayProxyRoutes({ stateDir: config.stateDir, key, managedTunnelName });
   }),
   // node:http hands bodies through as they are; fetch would decode them.
 ).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));

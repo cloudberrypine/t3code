@@ -34,6 +34,7 @@ import {
   PLAY_REQUEST_TIMEOUT_MS,
   createPlayHttpServer,
   makePlayProxyRoutes,
+  managedEndpointOrigin,
   privateCacheControl,
 } from "./PlayProxy.ts";
 import {
@@ -169,9 +170,16 @@ const recordingTracer = () => {
 const serveProxy = Effect.fn("PlayProxyTest.serve")(function* (
   stateDir: string,
   tracer?: Tracer.Tracer,
+  managedTunnelName?: string,
 ) {
   const appLayer = Layer.merge(
-    makePlayProxyRoutes({ stateDir, key: KEY }),
+    makePlayProxyRoutes({
+      stateDir,
+      key: KEY,
+      ...(managedTunnelName !== undefined
+        ? { managedTunnelName: Effect.succeed(managedTunnelName) }
+        : {}),
+    }),
     httpCompressionLayer,
   ).pipe(
     Layer.provide(NodeHttpClient.layerNodeHttp),
@@ -230,6 +238,8 @@ const rawRequest = (
   );
 
 const cookieFrom = (setCookie: string | undefined) => setCookie?.split(";")[0] ?? "";
+
+const RELAY_HOST = "prod-0123456789abcdef.t3coderelay.com";
 
 /** The secret as Polyzonia's scripts send it: in the body, which is never traced. */
 const mintRequest = (key = KEY_HEX, extra: Record<string, unknown> = {}) => ({
@@ -587,6 +597,77 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
     }),
   );
 
+  it.effect("keeps the address a signed-in page was opened at, across restarts", () =>
+    Effect.gen(function* () {
+      const upstream = yield* fakePlayServer;
+      const proxy = yield* startProxy({ upstreamPort: upstream.port });
+      const linkOrigin = (server: Effect.Success<ReturnType<typeof serveProxy>>) =>
+        Effect.gen(function* () {
+          const minted = yield* server.request("/play/__auth/ticket", mintRequest());
+          return (yield* minted.json) as {
+            publicOrigin: string | null;
+            publicOriginSource: string | null;
+          };
+        });
+      expect(yield* linkOrigin(proxy)).toMatchObject({
+        publicOrigin: null,
+        publicOriginSource: null,
+      });
+      // A request without access names no address: anyone could send it.
+      const unsigned = yield* rawRequest(proxy.port, {
+        path: "/play/main/",
+        headers: { accept: "text/html", "x-forwarded-proto": "https", host: "evil.example.com" },
+      });
+      expect(unsigned.status).toBe(401);
+      expect((yield* linkOrigin(proxy)).publicOrigin).toBeNull();
+
+      const { cookie } = yield* signIn(proxy);
+      const page = yield* rawRequest(proxy.port, {
+        path: "/play/main/",
+        headers: { cookie, "x-forwarded-proto": "https", host: RELAY_HOST },
+      });
+      expect(page.status).toBe(200);
+      expect(yield* linkOrigin(proxy)).toMatchObject({
+        publicOrigin: `https://${RELAY_HOST}`,
+        publicOriginSource: "learned",
+      });
+      // T3 Code restarts (an update, a reinstall): the address stays known.
+      const restarted = yield* serveProxy(proxy.stateDir);
+      expect(yield* linkOrigin(restarted)).toMatchObject({
+        publicOrigin: `https://${RELAY_HOST}`,
+        publicOriginSource: "learned",
+      });
+    }),
+  );
+
+  it.effect("names T3 Connect's address before any page was opened", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-play-proxy-" });
+      const proxy = yield* serveProxy(
+        stateDir,
+        undefined,
+        "t3coderelay-managedendpoint-prod-0123456789abcdef",
+      );
+      const minted = yield* proxy.request("/play/__auth/ticket", mintRequest());
+      expect(yield* minted.json).toMatchObject({
+        publicOrigin: `https://${RELAY_HOST}`,
+        publicOriginSource: "t3-connect",
+      });
+      // play-proxy.json's address comes first (Tailscale, say).
+      yield* fs.writeFileString(
+        path.join(stateDir, "play-proxy.json"),
+        JSON.stringify({ publicOrigin: "https://mac.tailnet.ts.net:8443" }),
+      );
+      const configured = yield* proxy.request("/play/__auth/ticket", mintRequest());
+      expect(yield* configured.json).toMatchObject({
+        publicOrigin: "https://mac.tailnet.ts.net:8443",
+        publicOriginSource: "config",
+      });
+    }),
+  );
+
   it.effect("can be turned off", () =>
     Effect.gen(function* () {
       const upstream = yield* fakePlayServer;
@@ -635,6 +716,23 @@ describe("play tokens", () => {
     // Headers still have to arrive promptly.
     expect(server.headersTimeout).toBe(NodeHttp.createServer().headersTimeout);
     server.close();
+  });
+
+  it("reads T3 Connect's address from the relay's tunnel names only", () => {
+    expect(managedEndpointOrigin("t3coderelay-managedendpoint-prod-0123456789abcdef")).toBe(
+      "https://prod-0123456789abcdef.t3coderelay.com",
+    );
+    for (const name of [
+      undefined,
+      "",
+      "my-tunnel",
+      "t3coderelay-managedendpoint-prod-0123",
+      "t3coderelay-managedendpoint-prod-0123456789ABCDEF",
+      "t3coderelay-managedendpoint--0123456789abcdef",
+      "t3coderelay-managedendpoint-prod-0123456789abcdef.evil.com",
+    ]) {
+      expect(managedEndpointOrigin(name)).toBeNull();
+    }
   });
 
   it("never lets a response be cached publicly", () => {
