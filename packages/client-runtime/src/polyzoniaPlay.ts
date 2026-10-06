@@ -1,0 +1,109 @@
+/**
+ * Polyzonia play links (fork-only; the server side is apps/server/src/play).
+ *
+ * An environment's `/play/*` route proxies Polyzonia's per-worktree web builds,
+ * and threads post links to them: `https://<host>/play/<worktree>/#ticket=<t>`.
+ * The ticket signs one browser in; the page redeems it for a cookie scoped to
+ * `/play`. Clients open a play link in their own web view, instead of the
+ * system browser, when its host is one of the thread's environment's own
+ * addresses: its T3 Connect host or a direct (LAN, tailnet) one.
+ */
+import { AuthOrchestrationOperateScope, type AuthSessionState } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+
+import type { ConnectionCatalogEntry } from "./connection/catalog.ts";
+import { connectionRoutes } from "./connection/routes.ts";
+
+/** Mints a ticket for an operate session (or the play key). */
+export const PLAY_TICKET_PATH = "/play/__auth/ticket";
+
+/** The page a play link opens, or null when `href` is not one. */
+export function parsePlayLink(href: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username !== "" || url.password !== "") return null;
+  // `/play/__auth/*` is the proxy's sign-in API, never a page.
+  if (!url.pathname.startsWith("/play/") || url.pathname.startsWith("/play/__auth/")) return null;
+  return url;
+}
+
+/** `scheme://host[:port]` of each URL that parses, without duplicates. */
+function originsOf(urls: Iterable<string | null | undefined>): ReadonlyArray<string> {
+  const origins = new Set<string>();
+  for (const value of urls) {
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol === "http:" || url.protocol === "https:") origins.add(url.origin);
+    } catch {
+      // Not a URL: nothing to match.
+    }
+  }
+  return [...origins];
+}
+
+/**
+ * The addresses play links of one environment may use: every direct route the
+ * client saved for it, plus `httpBaseUrls` the client knows at runtime (the
+ * prepared connection's, T3 Connect's endpoint for the environment).
+ */
+export function environmentPlayOrigins(input: {
+  readonly entry: ConnectionCatalogEntry | undefined;
+  readonly httpBaseUrls: ReadonlyArray<string | null | undefined>;
+}): ReadonlyArray<string> {
+  const saved: Array<string> = [];
+  if (input.entry) {
+    for (const route of connectionRoutes(input.entry)) {
+      if (route.target._tag === "PrimaryConnectionTarget") saved.push(route.target.httpBaseUrl);
+      const profile = Option.getOrUndefined(route.profile);
+      if (profile?._tag === "BearerConnectionProfile") saved.push(profile.httpBaseUrl);
+    }
+  }
+  return originsOf([...saved, ...input.httpBaseUrls]);
+}
+
+export interface PlayLinkRequest<EnvironmentId extends string = string> {
+  readonly environmentId: EnvironmentId;
+  readonly url: URL;
+}
+
+/**
+ * Which environment serves a play link: `preferred` first (the thread the link
+ * was tapped in), then any other. Null for anything but a play page on one of
+ * their addresses, so nothing else ever opens in a play view.
+ */
+export function resolvePlayLink<EnvironmentId extends string>(
+  href: string,
+  environments: ReadonlyMap<EnvironmentId, ReadonlyArray<string>>,
+  preferred?: EnvironmentId | null,
+): PlayLinkRequest<EnvironmentId> | null {
+  const url = parsePlayLink(href);
+  if (url === null) return null;
+  const candidates = [
+    ...(preferred != null && environments.has(preferred) ? [preferred] : []),
+    ...environments.keys(),
+  ];
+  const environmentId = candidates.find((id) => environments.get(id)?.includes(url.origin));
+  return environmentId === undefined ? null : { environmentId, url };
+}
+
+/** The play page at `origin` (default: the link's own) with `ticket` in its fragment. */
+export function playLinkWithTicket(url: URL, ticket: string, origin = url.origin): string {
+  const next = new URL(`${url.pathname}${url.search}`, origin);
+  next.hash = `ticket=${encodeURIComponent(ticket)}`;
+  return next.toString();
+}
+
+/**
+ * Whether a session may mint play tickets: the proxy wants the operate scope.
+ * Unknown (not loaded yet) counts as yes; the server has the last word.
+ */
+export function sessionMayMintPlayTicket(session: AuthSessionState | null): boolean {
+  if (session === null) return true;
+  return session.authenticated && (session.scopes ?? []).includes(AuthOrchestrationOperateScope);
+}

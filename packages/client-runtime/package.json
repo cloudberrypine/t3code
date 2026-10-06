@@ -11,6 +11,14 @@
       "types": "./src/polyzoniaMesh.ts",
       "default": "./src/polyzoniaMesh.ts"
     },
+    "./polyzonia-play": {
+      "types": "./src/polyzoniaPlay.ts",
+      "default": "./src/polyzoniaPlay.ts"
+    },
+    "./state/polyzonia-play-ticket": {
+      "types": "./src/state/polyzoniaPlayTicket.ts",
+      "default": "./src/state/polyzoniaPlayTicket.ts"
+    },
     "./cpp-navigation": {
       "types": "./src/cppNavigation.ts",
       "default": "./src/cppNavigation.ts"
