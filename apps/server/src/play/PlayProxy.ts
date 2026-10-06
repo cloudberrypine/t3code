@@ -180,7 +180,15 @@ const TicketResponse = Schema.fromJsonString(
 );
 const encodeTicketResponse = Schema.encodeEffect(TicketResponse);
 
-const isOrigin = (value: string) => /^https?:\/\/[^/]+$/.test(value);
+/**
+ * An http(s) origin and nothing else: a host name or IP address (IPv6 in
+ * brackets) and an optional port. No user info, so a Host header such as
+ * `<relay host>@other.example` cannot make minted links go to `other.example`.
+ */
+const isOrigin = (value: string) =>
+  /^https?:\/\/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*|\[[0-9a-f:.]+\])(?::\d{1,5})?$/i.test(
+    value,
+  );
 
 /**
  * The T3 Connect address of a managed tunnel, from its name: the relay names

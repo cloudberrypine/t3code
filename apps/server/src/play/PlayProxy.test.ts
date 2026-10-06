@@ -636,6 +636,15 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
         publicOrigin: `https://${RELAY_HOST}`,
         publicOriginSource: "learned",
       });
+      // A Host that is not a plain host name teaches nothing, even signed in:
+      // `https://<relay host>@other.example/...` would open other.example.
+      for (const host of [`${RELAY_HOST}@attacker.example`, `${RELAY_HOST}#x`, "a b.example"]) {
+        yield* rawRequest(proxy.port, {
+          path: "/play/main/",
+          headers: { cookie, "x-forwarded-proto": "https", host },
+        });
+        expect((yield* linkOrigin(proxy)).publicOrigin).toBe(`https://${RELAY_HOST}`);
+      }
       // T3 Code restarts (an update, a reinstall): the address stays known.
       const restarted = yield* serveProxy(proxy.stateDir);
       expect(yield* linkOrigin(restarted)).toMatchObject({
