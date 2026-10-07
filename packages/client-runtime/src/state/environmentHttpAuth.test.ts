@@ -4,6 +4,7 @@ import {
   ORCHESTRATION_PROTOCOL_HEADER,
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
   ProjectId,
+  ThreadId,
   type AuthSessionState,
   type OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadDetailSnapshot,
@@ -170,6 +171,7 @@ const LOADERS: ReadonlyArray<{
   readonly name: string;
   readonly method: string;
   readonly path: string;
+  readonly query?: string;
   readonly response: unknown;
   readonly expected: unknown;
   readonly load: (
@@ -230,6 +232,7 @@ const LOADERS: ReadonlyArray<{
     name: "older thread history",
     method: "GET",
     path: `/api/orchestration/threads/${THREAD.projection.thread.id}/history`,
+    query: "?cursor=older-page",
     response: THREAD_HISTORY,
     expected: THREAD_HISTORY,
     load: (input: HttpInput) =>
@@ -238,6 +241,31 @@ const LOADERS: ReadonlyArray<{
         threadId: THREAD.projection.thread.id,
         cursor: "older-page",
       }),
+  },
+];
+
+/** Thread routes, loaded for an id with a character that must be percent-encoded in a path. */
+const MCP_THREAD_LOADERS: ReadonlyArray<{
+  readonly name: string;
+  readonly load: (
+    input: HttpInput,
+    threadId: ThreadId,
+  ) => Effect.Effect<unknown, RemoteEnvironmentRequestError, HttpClient.HttpClient>;
+}> = [
+  {
+    name: "thread snapshot",
+    load: (input: HttpInput, threadId: ThreadId) =>
+      ThreadSnapshotLoader.fetchEnvironmentThreadSnapshot({ ...input, threadId }),
+  },
+  {
+    name: "bounded thread snapshot",
+    load: (input: HttpInput, threadId: ThreadId) =>
+      fetchEnvironmentBoundedThreadSnapshot({ ...input, threadId }),
+  },
+  {
+    name: "older thread history",
+    load: (input: HttpInput, threadId: ThreadId) =>
+      fetchEnvironmentThreadHistoryPage({ ...input, threadId, cursor: "older-page" }),
   },
 ];
 
@@ -277,7 +305,7 @@ describe("authenticated environment HTTP requests", () => {
       expect(harness.proofs).toEqual([
         {
           method: loader.method,
-          url: `${CURRENT_ORIGIN}${loader.path}`,
+          url: `${CURRENT_ORIGIN}${loader.path}${loader.query ?? ""}`,
           accessToken: "current-token",
         },
       ]);
@@ -344,12 +372,28 @@ describe("authenticated environment HTTP requests", () => {
         );
         expect(harness.proofs[1]).toEqual({
           method: "GET",
-          url: `${RENEWED_ORIGIN}${loader.path}`,
+          url: `${RENEWED_ORIGIN}${loader.path}${loader.query ?? ""}`,
           accessToken: "renewed-token",
         });
         if (loader.name === "older thread history") {
           expect(url.searchParams.get("cursor")).toBe("older-page");
         }
+      }),
+  );
+
+  it.effect.each(MCP_THREAD_LOADERS)(
+    "signs the percent-encoded $name URL it sends for an mcp: thread id",
+    (loader) =>
+      Effect.gen(function* () {
+        const harness = makeHarness(() => Response.json({}));
+        yield* loader
+          .load(harness.input, ThreadId.make("mcp:1a35fbc7-a151-466e-98f8-3a0baf07fdf3"))
+          .pipe(Effect.provide(harness.httpLayer), Effect.exit);
+
+        // The proof's htu must match the encoded path the server receives.
+        const sent = harness.calls[0]!.url;
+        expect(new URL(sent).pathname).toContain("/threads/mcp%3A1a35fbc7-");
+        expect(harness.proofs.map((proof) => proof.url)).toEqual([sent]);
       }),
   );
 
