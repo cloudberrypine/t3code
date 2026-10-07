@@ -151,6 +151,8 @@ export const makeWith = Effect.fn("CommandWatchService.makeWith")(function* (
   const lock = yield* Semaphore.make(1);
   const changes = yield* PubSub.sliding<void>(1);
   const entries = new Map<string, Entry>();
+  /** Exit and flood reports of watches that ended while their thread was settled. */
+  const heldReports = new Map<ThreadId, Array<string>>();
   let generation = 0;
 
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -197,12 +199,19 @@ export const makeWith = Effect.fn("CommandWatchService.makeWith")(function* (
       .wake(threadId, lines.join("\n"))
       .pipe(Effect.catchCause(logFailure("command watch could not wake its thread", { threadId })));
 
-  /** Ends a run's watch, unless it was stopped or replaced meanwhile. */
-  const finish = (entry: Entry) =>
+  /**
+   * Ends a run's watch, unless it was stopped or replaced meanwhile. A report to hold is told
+   * when the thread is active again.
+   */
+  const finish = (entry: Entry, holdReport?: ReadonlyArray<string>) =>
     locked(
       Effect.gen(function* () {
         if (!sameRun(entry)) return;
         entries.delete(keyOf(entry.stored.threadId, entry.stored.label));
+        if (holdReport !== undefined) {
+          const { threadId } = entry.stored;
+          heldReports.set(threadId, [...(heldReports.get(threadId) ?? []), ...holdReport]);
+        }
         yield* persist;
         yield* notify;
       }),
@@ -235,6 +244,19 @@ export const makeWith = Effect.fn("CommandWatchService.makeWith")(function* (
       }
       yield* wake(entry.stored.threadId, lines);
       return true;
+    });
+
+  /**
+   * Tells the thread a run ended, and ends the watch: an exited or flooding command is never
+   * started again. A settled thread hears when it is active again.
+   */
+  const deliverEnd = (entry: Entry, lines: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const thread = yield* readThreadOrActive(entry.stored.threadId);
+      if (thread.removed) return yield* finish(entry);
+      if (thread.settled) return yield* finish(entry, lines);
+      yield* wake(entry.stored.threadId, lines);
+      yield* finish(entry);
     });
 
   /** One run of a watch's command, until it exits, floods, pauses or is stopped. */
@@ -282,7 +304,7 @@ export const makeWith = Effect.fn("CommandWatchService.makeWith")(function* (
           end.type === "flood"
             ? floodLines(label)
             : [...outputLines(label, lines), ...exitLines(label, end)];
-        if (yield* deliver(entry, report)) yield* finish(entry);
+        yield* deliverEnd(entry, report);
         return;
       }
     }).pipe(
@@ -314,12 +336,13 @@ export const makeWith = Effect.fn("CommandWatchService.makeWith")(function* (
           message: `The working directory ${input.cwd} does not exist.`,
         });
       }
-      const thread = yield* deps.readThread(input.threadId);
-      if (thread.removed) {
-        return yield* new CommandWatchError({ message: "The thread is archived or deleted." });
-      }
+      // Read under the lock, so a settle or archive cannot pass between the read and the start.
       return yield* locked(
         Effect.gen(function* () {
+          const thread = yield* deps.readThread(input.threadId);
+          if (thread.removed) {
+            return yield* new CommandWatchError({ message: "The thread is archived or deleted." });
+          }
           const key = keyOf(input.threadId, input.label);
           const existing = entries.get(key);
           if (existing?.stored.command === input.command && existing.stored.cwd === input.cwd) {
@@ -370,11 +393,16 @@ export const makeWith = Effect.fn("CommandWatchService.makeWith")(function* (
       }),
     );
 
-  /** Archive and delete end a thread's watches; settling pauses them; activity resumes them. */
+  /**
+   * Archive and delete end a thread's watches; settling pauses them; activity resumes them, and
+   * tells the thread what ended while it was settled.
+   */
   const onThreadChange = (threadId: ThreadId, state: CommandWatchThreadState) =>
     Effect.gen(function* () {
-      const resumed = yield* locked(
+      const { held, resumed } = yield* locked(
         Effect.gen(function* () {
+          const held = state.settled ? [] : (heldReports.get(threadId) ?? []);
+          if (!state.settled || state.removed) heldReports.delete(threadId);
           const own = [...entries.entries()].filter(
             ([, entry]) => entry.stored.threadId === threadId,
           );
@@ -399,10 +427,11 @@ export const makeWith = Effect.fn("CommandWatchService.makeWith")(function* (
           if (state.removed && own.length > 0) yield* persist;
           if (own.length > 0) yield* notify;
           for (const key of stop) yield* FiberMap.remove(fibers, key);
-          return labels;
+          return { held: state.removed ? [] : held, resumed: labels };
         }),
       );
-      if (resumed.length > 0) yield* wake(threadId, resumed.map(resumedLine));
+      const news = [...held, ...resumed.map(resumedLine)];
+      if (news.length > 0) yield* wake(threadId, news);
     });
 
   const start: CommandWatchService["Service"]["start"] = () =>

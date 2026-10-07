@@ -145,12 +145,15 @@ view and Android keep theirs.
 - Watches live in `userdata/command-watches.json`, not in the thread projection, so upstream's
   orchestrator and migration ids stay untouched (a fork migration id would collide with upstream's
   next one). `migrate-dev-db` copies only the database, so a dev server never runs them.
-- The command runs in `$SHELL -lc` in its own process group; stopping it kills the group. Each
+- The command runs in `$SHELL -lc` in its own process group; stopping it, or its exit, kills the
+  group (output left open by a background process drains for a second after the exit). Each
   stdout line wakes the thread as `[watch <label>] <line>`, lines within 1.5 s as one message, sent
-  like `t3_thread_send` mode `auto` (steers an active run, else starts a turn). More than 60 lines in
-  a minute stops it; an exit reports the code and last stderr lines and is not restarted.
+  like `t3_thread_send` mode `auto` (steers an active run, else starts a turn). Output without line
+  breaks is cut into 4096-character lines. More than 60 lines in a minute stops it; an exit reports
+  the code and last stderr lines and is not restarted.
 - A settled thread's watches pause (the command stops) and resume, with one line, when the thread is
-  active again (unsettled or pinned). A watch never wakes, and so never un-settles, a settled thread.
+  active again (unsettled or pinned). A watch never wakes, and so never un-settles, a settled thread:
+  an exit or flood while it is settled ends the watch, and the thread hears it when active again.
   Archive and delete remove them. On server start each watch restarts and its thread hears once.
 - Callers must be full-access/default. The desktop and web thread details panel lists a thread's
   watches (`ThreadCommandWatchesPanel`) with a stop button, through the `commandWatches.subscribe`

@@ -65,10 +65,18 @@ const harness = Effect.fn("commandWatchHarness")(function* (options?: {
     readonly threadId: ThreadId;
     readonly state: CommandWatchThreadState;
   }>();
+  /** Runs once while the next read is in flight, after the state it returns was read. */
+  let duringNextRead: Effect.Effect<void> | undefined;
   const service = yield* makeWith({
     statePath,
     readThread: (threadId) =>
-      Effect.sync(() => threads.get(threadId) ?? { removed: true, settled: false }),
+      Effect.gen(function* () {
+        const state = threads.get(threadId) ?? { removed: true, settled: false };
+        const during = duringNextRead;
+        duringNextRead = undefined;
+        if (during !== undefined) yield* during;
+        return state;
+      }),
     threadChanges: Stream.fromPubSub(changes),
     wake: (threadId, text) => Queue.offer(wakes, { threadId, text }).pipe(Effect.asVoid),
     runProcess: ({ command }) =>
@@ -103,6 +111,9 @@ const harness = Effect.fn("commandWatchHarness")(function* (options?: {
   );
   return {
     service,
+    duringNextRead: (effect: Effect.Effect<void>) => {
+      duringNextRead = effect;
+    },
     runs,
     nextRun,
     wakes,
@@ -266,6 +277,47 @@ it.layer(NodeServices.layer)("CommandWatchService", (it) => {
       // Settled while the line waited; no change event reached the watch (it was not started).
       yield* h.setThread(threadA, settled);
       yield* h.closeWindow;
+      yield* Deferred.await(run.stopped);
+      assert.equal((yield* h.service.list())[0]?.status, "paused");
+      assert.equal(yield* Queue.size(h.wakes), 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "an exit while the thread is settled ends the watch; the thread hears when active",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* start(h);
+        const run = yield* h.nextRun;
+        // Settled with no change event reaching the watch (it was not started).
+        yield* h.setThread(threadA, settled);
+        yield* Queue.offer(run.output, { type: "exit", code: 0, reason: null, stderr: [] });
+        yield* Deferred.await(run.stopped);
+        assert.deepEqual(yield* h.service.list(), []);
+        assert.deepEqual(yield* h.storedLabels, []);
+        assert.equal(yield* Queue.size(h.wakes), 0);
+
+        yield* h.service.start();
+        yield* h.setThread(threadA, active);
+        assert.include((yield* Queue.take(h.wakes)).text, "exited with code 0");
+        assert.equal(yield* Queue.size(h.runs), 0);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a thread that settles while a watch starts pauses it", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.service.start();
+      // The watch read the thread as active; it settles before the watch is registered.
+      h.duringNextRead(
+        Effect.gen(function* () {
+          yield* h.setThread(threadA, settled);
+          for (let index = 0; index < 20; index++) yield* Effect.yieldNow;
+        }),
+      );
+      yield* start(h);
+      const run = yield* Queue.take(h.runs);
       yield* Deferred.await(run.stopped);
       assert.equal((yield* h.service.list())[0]?.status, "paused");
       assert.equal(yield* Queue.size(h.wakes), 0);
