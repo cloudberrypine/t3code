@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Stream from "effect/Stream";
@@ -45,6 +46,21 @@ it.layer(NodeServices.layer)("CommandWatchProcess", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("breaks output without line breaks into bounded lines", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-command-watch-process-" });
+      const processes = yield* CommandWatchProcess.make;
+      const outputs = yield* processes
+        .run({ command: "head -c 100000 /dev/zero | tr '\\0' x; printf '\\nend\\n'", cwd })
+        .pipe(Stream.runCollect);
+      const lines = outputs.flatMap((output) => (output.type === "line" ? [output.text] : []));
+      assert.isTrue(lines.every((line) => line.length <= CommandWatchProcess.MAX_LINE_LENGTH));
+      assert.equal(lines.slice(0, -1).join("").length, 100000);
+      assert.equal(lines.at(-1), "end");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("reports a working directory it cannot start in", () =>
     Effect.gen(function* () {
       const processes = yield* CommandWatchProcess.make;
@@ -58,3 +74,34 @@ it.layer(NodeServices.layer)("CommandWatchProcess", (it) => {
     }),
   );
 });
+
+// Live, outside the layer above: the wait for output after the exit runs on the real clock.
+it.live("ends when the command exits, stopping what it left running", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-command-watch-process-" });
+    const processes = yield* CommandWatchProcess.make;
+    // The shell exits at once; the sleep, not a job of its own (a login shell hangs up on
+    // those), still holds stdout and stderr.
+    const startedAt = yield* Clock.currentTimeMillis;
+    const outputs = yield* processes
+      .run({ command: "(sleep 30 & echo $!)", cwd })
+      .pipe(Stream.runCollect);
+    assert.isBelow((yield* Clock.currentTimeMillis) - startedAt, 10_000);
+    const [first] = outputs;
+    assert.equal(first?.type, "line");
+    assert.deepEqual(outputs.at(-1), { type: "exit", code: 0, reason: null, stderr: [] });
+    const pid = Number(first?.type === "line" ? first.text : NaN);
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    // The signal takes a moment to land.
+    for (let tries = 0; tries < 20 && alive(); tries++) yield* Effect.sleep("50 millis");
+    assert.isFalse(alive());
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

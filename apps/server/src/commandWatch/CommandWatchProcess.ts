@@ -12,6 +12,10 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 /** Stderr lines kept for the exit report. */
 export const STDERR_TAIL_LINES = 10;
+/** Output with no line break for this long is cut into lines, so it cannot pile up unread. */
+export const MAX_LINE_LENGTH = 4096;
+/** How long output may go on after the command exits (something it left running holds it). */
+const DRAIN_AFTER_EXIT = "1 second";
 
 export type CommandWatchOutput =
   | { readonly type: "line"; readonly text: string }
@@ -40,6 +44,32 @@ export class CommandWatchProcess extends Context.Service<
 
 const errorText = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
+/** Decoded text as lines, a line at most MAX_LINE_LENGTH long. */
+const toLines = <E, R>(bytes: Stream.Stream<Uint8Array, E, R>) =>
+  bytes.pipe(
+    Stream.decodeText(),
+    Stream.mapAccum(
+      () => 0,
+      (sinceBreak: number, text: string) => {
+        let pieces = "";
+        let from = 0;
+        let run = sinceBreak;
+        for (let index = 0; index < text.length; index++) {
+          const code = text.charCodeAt(index);
+          if (code === 10 || code === 13) {
+            run = 0;
+          } else if (++run > MAX_LINE_LENGTH) {
+            pieces += `${text.slice(from, index)}\n`;
+            from = index;
+            run = 1;
+          }
+        }
+        return [run, [pieces + text.slice(from)]] as const;
+      },
+    ),
+    Stream.splitLines,
+  );
+
 export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const platform = yield* HostProcessPlatform;
@@ -64,10 +94,24 @@ export const make = Effect.gen(function* () {
     Stream.unwrap(
       Effect.gen(function* () {
         const handle = yield* spawner.spawn(commandFor(input));
+        // The spawner stops the process group only when the command is still running or failed;
+        // what a command that exited cleanly left running goes with the watch too.
+        if (platform !== "win32") {
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              try {
+                process.kill(-handle.pid, "SIGTERM");
+              } catch {
+                // The group is gone already.
+              }
+            }),
+          );
+        }
+        const exited = Effect.exit(handle.exitCode).pipe(
+          Effect.andThen(Effect.sleep(DRAIN_AFTER_EXIT)),
+        );
         const stderr: Array<string> = [];
-        const stderrFiber = yield* handle.stderr.pipe(
-          Stream.decodeText(),
-          Stream.splitLines,
+        const stderrFiber = yield* toLines(handle.stderr).pipe(
           Stream.runForEach((line) =>
             Effect.sync(() => {
               stderr.push(line);
@@ -79,7 +123,7 @@ export const make = Effect.gen(function* () {
         );
         const exit = Effect.gen(function* () {
           const code = yield* Effect.exit(handle.exitCode);
-          yield* Fiber.join(stderrFiber);
+          yield* Fiber.join(stderrFiber).pipe(Effect.raceFirst(exited));
           return Exit.isSuccess(code)
             ? { type: "exit" as const, code: Number(code.value), reason: null, stderr }
             : {
@@ -90,9 +134,8 @@ export const make = Effect.gen(function* () {
               };
         });
         return Stream.concat(
-          handle.stdout.pipe(
-            Stream.decodeText(),
-            Stream.splitLines,
+          toLines(handle.stdout).pipe(
+            Stream.interruptWhen(exited),
             Stream.map((text): CommandWatchOutput => ({ type: "line", text })),
             Stream.catch(() => Stream.empty),
           ),
