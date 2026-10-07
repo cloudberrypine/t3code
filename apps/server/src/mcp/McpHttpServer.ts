@@ -49,6 +49,8 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
+import { CommandWatchesToolkitHandlersLive } from "./toolkits/commandWatches/handlers.ts";
+import { CommandWatchesToolkit } from "./toolkits/commandWatches/tools.ts";
 import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
@@ -691,6 +693,11 @@ const AttachmentRegistrationLive = McpServer.toolkit(AttachmentToolkit).pipe(
   Layer.provide(AttachmentHandlersLive),
 );
 
+// Fork: command watches.
+const CommandWatchesToolkitRegistrationLive = McpServer.toolkit(CommandWatchesToolkit).pipe(
+  Layer.provide(CommandWatchesToolkitHandlersLive),
+);
+
 export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
@@ -725,5 +732,6 @@ export const layer = Layer.mergeAll(
   PreviewControlsRegistrationLive,
   WorktreeToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
+  CommandWatchesToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

@@ -26,6 +26,7 @@ import type { ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { PlayWebBuildControl } from "./PlayWebBuildControl";
+import { ThreadCommandWatchesPanel } from "./ThreadCommandWatchesPanel";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
@@ -228,6 +229,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {/* Fork: command watches */}
+          {density === "full" && !props.draftId ? (
+            <ThreadCommandWatchesPanel
+              environmentId={props.environmentId}
+              threadId={props.threadId}
+            />
           ) : null}
 
           {density === "full" && !props.draftId ? (

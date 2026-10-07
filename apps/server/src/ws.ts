@@ -119,6 +119,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as CommandWatches from "./commandWatch/CommandWatchService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -1216,6 +1217,7 @@ const makeWsRpcLayer = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const commandWatches = yield* CommandWatches.CommandWatchService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -2079,6 +2081,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.scheduledTasksRunNow, scheduledTasks.runNow(input), {
             "rpc.aggregate": "scheduledTasks",
             "scheduled_task.id": input.id,
+          }),
+        [WS_METHODS.commandWatchesSubscribe]: (_input) =>
+          observeRpcStream(WS_METHODS.commandWatchesSubscribe, commandWatches.subscribe(), {
+            "rpc.aggregate": "commandWatches",
+          }),
+        [WS_METHODS.commandWatchesStop]: (input) =>
+          observeRpcEffect(WS_METHODS.commandWatchesStop, commandWatches.unwatch(input), {
+            "rpc.aggregate": "commandWatches",
           }),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {

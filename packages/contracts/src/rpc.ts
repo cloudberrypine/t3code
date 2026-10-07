@@ -318,6 +318,13 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import {
+  CommandWatchError,
+  CommandWatchListInput,
+  CommandWatchListResult,
+  CommandWatchStopInput,
+  CommandWatchStopResult,
+} from "./commandWatch.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -477,6 +484,10 @@ export const WS_METHODS = {
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
   scheduledTasksDelete: "scheduledTasks.delete",
   scheduledTasksRunNow: "scheduledTasks.runNow",
+
+  // Fork: command watches
+  commandWatchesSubscribe: "commandWatches.subscribe",
+  commandWatchesStop: "commandWatches.stop",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1678,6 +1689,20 @@ const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNow, {
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
+/** Fork: streams every command watch: one snapshot on subscribe, then the list after every change. */
+const WsCommandWatchesSubscribeRpc = Rpc.make(WS_METHODS.commandWatchesSubscribe, {
+  payload: CommandWatchListInput,
+  success: CommandWatchListResult,
+  error: Schema.Union([CommandWatchError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsCommandWatchesStopRpc = Rpc.make(WS_METHODS.commandWatchesStop, {
+  payload: CommandWatchStopInput,
+  success: CommandWatchStopResult,
+  error: Schema.Union([CommandWatchError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1763,6 +1788,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksSetEnabledRpc,
   WsScheduledTasksDeleteRpc,
   WsScheduledTasksRunNowRpc,
+  WsCommandWatchesSubscribeRpc,
+  WsCommandWatchesStopRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

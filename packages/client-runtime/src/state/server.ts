@@ -1081,6 +1081,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
+    /** Fork: live command watches, snapshot on subscribe and after every change. */
+    commandWatchesLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:command-watches:live",
+      tag: WS_METHODS.commandWatchesSubscribe,
+    }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan.
     usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -1284,6 +1289,10 @@ export function createServerEnvironmentAtoms<R, E>(
     runScheduledTaskNow: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:run-now",
       tag: WS_METHODS.scheduledTasksRunNow,
+    }),
+    stopCommandWatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:command-watch:stop",
+      tag: WS_METHODS.commandWatchesStop,
     }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-usage-rates",

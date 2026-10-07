@@ -26,6 +26,11 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
   });
 
+  it("points long-lived watches at watch_command instead of harness monitors", () => {
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`watch_command`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "time-limited monitors");
+  });
+
   it("injects prompt fallback only for an MCP-enabled first run", () => {
     const prompt = "Inspect the repository.";
     const injected = t3OrchestrationPromptForFirstRun({

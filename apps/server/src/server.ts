@@ -5,6 +5,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
+import * as CommandWatchService from "./commandWatch/CommandWatchService.ts";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -531,6 +532,13 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     Layer.provide(PullRequestWatchReactor.layer),
     Layer.provide(PullRequestServiceLive),
     Layer.provide(ProjectionStoreV2.layer),
+  ),
+  // Fork: restores command watches once the server is active.
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* CommandWatchService.CommandWatchService;
+      yield* ServerActivation.forkParked(service.start());
+    }),
   ),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.

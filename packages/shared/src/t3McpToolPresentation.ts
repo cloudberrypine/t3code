@@ -57,6 +57,9 @@ export type T3McpToolSummaryAction =
   | "list-prs"
   | "watch-pr"
   | "unwatch-pr"
+  | "watch-command"
+  | "unwatch-command"
+  | "list-command-watches"
   | "browser"
   | "device";
 
@@ -104,6 +107,16 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Stop watching", "Stopping watching", "Stopped watching", "a pull request"],
     "unwatch-pr",
     "pull-request",
+  ),
+  // Fork: command watches.
+  watch_command: tool(["Watch", "Watching", "Watching", "a command"], "watch-command"),
+  unwatch_command: tool(
+    ["Stop watching", "Stopping watching", "Stopped watching", "a command"],
+    "unwatch-command",
+  ),
+  list_command_watches: tool(
+    ["List", "Listing", "Listed", "command watches"],
+    "list-command-watches",
   ),
   orchestrator_capabilities: tool(
     ["Get", "Getting", "Got", "orchestration capabilities"],

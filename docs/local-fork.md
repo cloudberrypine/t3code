@@ -136,6 +136,26 @@ poll build state. To keep the thread title on an iPhone, the
 compact thread header drops upstream's terminal button (`useThreadGitRightHeaderItems`); split
 view and Android keep theirs.
 
+## Command watches
+
+`watch_command` (MCP) has the server run a thread's long-lived watch command, such as Polyzonia's
+`scripts/orchestrator_watch.sh`, so agents need no harness monitor with a time limit. The code is
+`apps/server/src/commandWatch/`; the tools are `apps/server/src/mcp/toolkits/commandWatches/`.
+
+- Watches live in `userdata/command-watches.json`, not in the thread projection, so upstream's
+  orchestrator and migration ids stay untouched (a fork migration id would collide with upstream's
+  next one). `migrate-dev-db` copies only the database, so a dev server never runs them.
+- The command runs in `$SHELL -lc` in its own process group; stopping it kills the group. Each
+  stdout line wakes the thread as `[watch <label>] <line>`, lines within 1.5 s as one message, sent
+  like `t3_thread_send` mode `auto` (steers an active run, else starts a turn). More than 60 lines in
+  a minute stops it; an exit reports the code and last stderr lines and is not restarted.
+- A settled thread's watches pause (the command stops) and resume, with one line, when the thread is
+  active again (unsettled or pinned). A watch never wakes, and so never un-settles, a settled thread.
+  Archive and delete remove them. On server start each watch restarts and its thread hears once.
+- Callers must be full-access/default. The desktop and web thread details panel lists a thread's
+  watches (`ThreadCommandWatchesPanel`) with a stop button, through the `commandWatches.subscribe`
+  and `commandWatches.stop` RPCs. Mobile shows nothing yet.
+
 ## Verification
 
 - Focused behavioral tests, scoped lint, and typechecks for affected packages. No repository-wide
