@@ -54,7 +54,9 @@ content with `parsePolyzoniaMesh` like the file preview, which **Open** shows at
 Polyzonia's `new-species` skill relies on this form. Web marks such a paragraph in
 `ChatMarkdownMesh.tsx` (the viewer is block content, so the paragraph becomes a `div`) and leaves
 a `.json` image inside a sentence on the image path. Mobile treats every image as a block
-(`ThreadMarkdownMesh.tsx`). Inline on web, the wheel scrolls the chat and the viewer's zoom
+(`ThreadMarkdownMesh.tsx`), and a drag that starts on the viewer's canvas poses or pans the mesh
+instead of scrolling the chat (a gesture-handler pan that claims the touch on contact); the chat
+scrolls from anywhere outside the canvas. Inline on web, the wheel scrolls the chat and the viewer's zoom
 buttons zoom.
 
 Large diffs show one file at a time: more than 20 files, more than 2,000 changed lines, or a diff

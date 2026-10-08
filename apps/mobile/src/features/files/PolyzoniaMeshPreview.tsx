@@ -2,8 +2,9 @@ import { useMeshAnimation } from "./useMeshAnimation";
 import { MeshAnimationControls } from "./MeshAnimationControls";
 // Mesh indices are stable identities: posing never inserts or reorders geometry.
 /* oxlint-disable react/no-array-index-key */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Svg, { Circle, G, Line, Polygon, Rect } from "react-native-svg";
 import {
   dragMeshJoint,
@@ -60,6 +61,70 @@ export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
     x: (p.x - view.x) / view.scale,
     y: (p.y - view.y) / view.scale,
   });
+  const grab = (point: MeshPoint) => {
+    let index: number | null = null,
+      distance = 24;
+    if (showJoints && mesh.canSkin && !animation.clip)
+      pose.forEach((joint, i) => {
+        const p = screen(joint.position);
+        const d = Math.hypot(p.x - point.x, p.y - point.y);
+        if (d < distance) {
+          index = i;
+          distance = d;
+        }
+      });
+    setSelected(index);
+    const p = world(point),
+      joint = index === null ? null : pose[index];
+    drag.current = {
+      mesh,
+      index,
+      joints: pose,
+      start: point,
+      pan,
+      offset: joint ? { x: joint.position.x - p.x, y: joint.position.y - p.y } : { x: 0, y: 0 },
+    };
+  };
+  const move = (point: MeshPoint) => {
+    const current = drag.current;
+    if (!current || current.mesh !== mesh || (current.index !== null && animation.clip)) return;
+    if (current.index === null)
+      setPan({
+        x: current.pan.x + point.x - current.start.x,
+        y: current.pan.y + point.y - current.start.y,
+      });
+    else {
+      const p = world(point);
+      setPose({
+        mesh,
+        joints: dragMeshJoint(
+          current.joints,
+          current.index,
+          { x: p.x + current.offset.x, y: p.y + current.offset.y },
+          ikEnabled ? mesh.ikHandles : [],
+        ),
+      });
+    }
+  };
+  const latest = useRef({ grab, move });
+  useEffect(() => {
+    latest.current = { grab, move };
+  });
+  // Activating on touch-down makes every drag on the mesh its own: inside the chat
+  // feed, the list's scroll recognizer otherwise takes over a joint or pan drag.
+  const gesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .minDistance(0)
+        .shouldCancelWhenOutside(false)
+        .runOnJS(true)
+        .onBegin((event) => latest.current.grab({ x: event.x, y: event.y }))
+        .onUpdate((event) => latest.current.move({ x: event.x, y: event.y }))
+        .onFinalize(() => {
+          drag.current = null;
+        }),
+    [],
+  );
   const controls = [
     { label: "Vertices", selected: showVertices, run: () => setShowVertices(!showVertices) },
     {
@@ -189,70 +254,13 @@ export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
               );
             })}
         </Svg>
-        <View
-          style={{ position: "absolute", inset: 0 }}
-          accessibilityLabel="Mesh preview. Drag joints to pose or the background to pan."
-          onStartShouldSetResponder={() => true}
-          onResponderGrant={(event) => {
-            const point = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
-            let index: number | null = null,
-              distance = 24;
-            if (showJoints && mesh.canSkin && !animation.clip)
-              pose.forEach((joint, i) => {
-                const p = screen(joint.position);
-                const d = Math.hypot(p.x - point.x, p.y - point.y);
-                if (d < distance) {
-                  index = i;
-                  distance = d;
-                }
-              });
-            setSelected(index);
-            const p = world(point),
-              joint = index === null ? null : pose[index];
-            drag.current = {
-              mesh,
-              index,
-              joints: pose,
-              start: point,
-              pan,
-              offset: joint
-                ? { x: joint.position.x - p.x, y: joint.position.y - p.y }
-                : { x: 0, y: 0 },
-            };
-          }}
-          onResponderMove={(event) => {
-            const current = drag.current;
-            if (!current || current.mesh !== mesh || (current.index !== null && animation.clip))
-              return;
-            const point = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
-            if (current.index === null)
-              setPan({
-                x: current.pan.x + point.x - current.start.x,
-                y: current.pan.y + point.y - current.start.y,
-              });
-            else {
-              const p = world(point);
-              setPose({
-                mesh,
-                joints: dragMeshJoint(
-                  current.joints,
-                  current.index,
-                  {
-                    x: p.x + current.offset.x,
-                    y: p.y + current.offset.y,
-                  },
-                  ikEnabled ? mesh.ikHandles : [],
-                ),
-              });
-            }
-          }}
-          onResponderRelease={() => {
-            drag.current = null;
-          }}
-          onResponderTerminate={() => {
-            drag.current = null;
-          }}
-        />
+        <GestureDetector gesture={gesture}>
+          <View
+            collapsable={false}
+            style={{ position: "absolute", inset: 0 }}
+            accessibilityLabel="Mesh preview. Drag joints to pose or the background to pan."
+          />
+        </GestureDetector>
       </View>
       <Text className="px-3 py-2 text-xs text-foreground-muted">
         {selected !== null && pose[selected]
