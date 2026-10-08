@@ -6,9 +6,12 @@ import {
   type CodeViewDiffItem,
   type FileDiffMetadata,
 } from "@pierre/diffs";
+import { act, useEffect } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { useCodeViewFileReveal } from "./useCodeViewFileReveal";
 
-// Exercises the anchor capture our @pierre/diffs patch backports from 1.5.2 (`reconcileItems`).
+// Jumps to a diff file while the lazily loaded files around it are still arriving.
 
 const VIEWPORT_HEIGHT = 200;
 
@@ -56,7 +59,7 @@ function mountViewer() {
   return { viewer, root };
 }
 
-describe("CodeView item insertion", () => {
+describe("diff file jump", () => {
   // Newer CodeView versions wait for the shared highlighter before their first render.
   beforeAll(() => preloadHighlighter({ themes: ["pierre-dark", "pierre-light"], langs: [] }));
   beforeEach(() => {
@@ -75,13 +78,15 @@ describe("CodeView item insertion", () => {
       },
     );
   });
+  beforeEach(() => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
   afterEach(() => {
     document.body.textContent = "";
     vi.unstubAllGlobals();
   });
 
-  // A diff-tree jump lands before the files above the target load. They arrive later and are
-  // inserted above it; the target must stay where the jump put it.
+  // Exercises the anchor capture our @pierre/diffs patch backports from 1.5.2 (`reconcileItems`).
   it("keeps a jumped-to file at the top when files load above it", () => {
     const { viewer } = mountViewer();
     const loaded = ["a", "b"].map(diffItem);
@@ -102,6 +107,51 @@ describe("CodeView item insertion", () => {
 
     expect(viewer.getTopForItem("t")).toBeGreaterThan(jumpedTop);
     expect(viewer.getScrollTop()).toBe(viewer.getTopForItem("t"));
+    viewer.cleanUp();
+  });
+
+  // A tree click on an unloaded file appends it after the few loaded files, where a short file
+  // cannot reach the top. Files then load above and after it, until the reader scrolls.
+  it("lands on a clicked file that loads after the files around it", () => {
+    const { viewer, root } = mountViewer();
+    const handle = { getInstance: () => viewer, scrollTo: viewer.scrollTo.bind(viewer) };
+    const scope = {};
+    let reveal: (fileKey: string) => void = () => {};
+    function Harness({ fileKeys }: { fileKeys: ReadonlyArray<string> }) {
+      const request = useCodeViewFileReveal(handle, scope, fileKeys);
+      useEffect(() => {
+        reveal = request;
+      }, [request]);
+      return null;
+    }
+    const container = document.createElement("div");
+    const reactRoot = createRoot(container);
+    const show = (items: CodeViewDiffItem[]) => {
+      viewer.setItems(items);
+      act(() => reactRoot.render(<Harness fileKeys={items.map((item) => item.id)} />));
+      flushFrames();
+    };
+    const loaded = Array.from({ length: 12 }, (_, index) => diffItem(`a${index}`));
+    const above = Array.from({ length: 8 }, (_, index) => diffItem(`m${index}`));
+    const after = Array.from({ length: 8 }, (_, index) => diffItem(`z${index}`));
+    const target = diffItem("t");
+
+    show(loaded);
+    act(() => reveal("t"));
+    show([...loaded, target]);
+    expect(viewer.getScrollTop()).toBeGreaterThan(0);
+    show([...loaded, ...above, target]);
+    show([...loaded, ...above, target, ...after]);
+    expect(viewer.getScrollTop()).toBe(viewer.getTopForItem("t"));
+
+    // Once the reader scrolls, later loads leave the view to them.
+    root.dispatchEvent(new Event("wheel", { bubbles: true }));
+    viewer.scrollTo({ type: "position", position: 0 });
+    flushFrames();
+    show([...loaded, ...above, target, ...after, diffItem("zz")]);
+    expect(viewer.getScrollTop()).toBe(0);
+
+    act(() => reactRoot.unmount());
     viewer.cleanUp();
   });
 });
