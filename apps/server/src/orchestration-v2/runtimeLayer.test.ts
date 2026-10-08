@@ -4791,3 +4791,92 @@ it.layer(TestLayer)("usage-limit recovery", (it) => {
     }),
   );
 });
+
+it.layer(TestLayer)("sidebar groups", (it) => {
+  it.effect("children follow their parent's settle and snooze, and come back with it", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const projectId = ProjectId.make("runtime-layer-group-project");
+      yield* seedProject({
+        projectId,
+        title: "Group project",
+        workspaceRoot: "/workspace/group",
+        defaultModelSelection: null,
+        createdAt: "2026-10-08T00:00:00.000Z",
+      });
+      const create = (name: string) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`runtime-layer-group-${name}-create`),
+          threadId: ThreadId.make(`runtime-layer-group-${name}`),
+          projectId,
+          title: name,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        });
+      const parentId = ThreadId.make("runtime-layer-group-parent");
+      const owlId = ThreadId.make("runtime-layer-group-owl");
+      const beetleId = ThreadId.make("runtime-layer-group-beetle");
+      yield* create("parent");
+      for (const childId of [owlId, beetleId]) {
+        yield* create(childId.slice("runtime-layer-group-".length));
+        yield* orchestrator.dispatch({
+          type: "thread.sidebar-parent.set",
+          commandId: CommandId.make(`${childId}-nest`),
+          threadId: childId,
+          sidebarParentThreadId: parentId,
+        });
+      }
+      const thread = (threadId: ThreadId) =>
+        orchestrator.getThreadProjection(threadId).pipe(Effect.map((p) => p.thread));
+      const lifecycle = (
+        threadId: ThreadId,
+        name: string,
+        command:
+          | { readonly type: "thread.settle" }
+          | { readonly type: "thread.unsettle"; readonly reason: "user" }
+          | { readonly type: "thread.snooze"; readonly snoozedUntil: string }
+          | { readonly type: "thread.unsnooze"; readonly reason: "user" },
+      ) =>
+        orchestrator
+          .dispatch({ ...command, commandId: CommandId.make(`${threadId}-${name}`), threadId })
+          .pipe(Effect.andThen(worker.drain()));
+
+      // The beetle was settled on its own, before its parent.
+      yield* lifecycle(beetleId, "own-settle", { type: "thread.settle" });
+      const beetleSettledAt = (yield* thread(beetleId)).settledAt;
+      yield* TestClock.adjust("1 minute");
+
+      yield* lifecycle(parentId, "settle", { type: "thread.settle" });
+      const parent = yield* thread(parentId);
+      const owl = yield* thread(owlId);
+      assert.equal(owl.settledOverride, "settled");
+      assert.isTrue(DateTime.Equivalence(owl.settledAt!, parent.settledAt!));
+      assert.isTrue(DateTime.Equivalence((yield* thread(beetleId)).settledAt!, beetleSettledAt!));
+
+      // Un-settling the parent brings back only the child that went with it.
+      yield* lifecycle(parentId, "unsettle", { type: "thread.unsettle", reason: "user" });
+      assert.equal((yield* thread(owlId)).settledOverride, "active");
+      assert.equal((yield* thread(beetleId)).settledOverride, "settled");
+
+      yield* TestClock.adjust("1 minute");
+      const snoozedUntil = "2099-07-25T09:00:00.000Z";
+      yield* lifecycle(parentId, "snooze", { type: "thread.snooze", snoozedUntil });
+      const snoozedParent = yield* thread(parentId);
+      const snoozedOwl = yield* thread(owlId);
+      assert.equal(DateTime.formatIso(snoozedOwl.snoozedUntil!), snoozedUntil);
+      assert.isTrue(DateTime.Equivalence(snoozedOwl.snoozedAt!, snoozedParent.snoozedAt!));
+      // A thread parked on its own keeps its own state.
+      assert.isNull((yield* thread(beetleId)).snoozedUntil ?? null);
+
+      yield* lifecycle(parentId, "unsnooze", { type: "thread.unsnooze", reason: "user" });
+      assert.isNull((yield* thread(owlId)).snoozedUntil ?? null);
+    }),
+  );
+});

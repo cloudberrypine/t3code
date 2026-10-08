@@ -96,6 +96,24 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     attachmentIds: Schema.Array(Schema.String),
   }),
   Schema.Struct({
+    // Threads nested under this one in the sidebar follow its settle or
+    // snooze, and come back with it (see contracts' threadNesting.ts). Each
+    // child gets its own command, under its own thread lock.
+    type: Schema.Literal("thread-group.follow"),
+    action: Schema.Literals(["settle", "unsettle", "snooze", "unsnooze"]),
+    childThreadIds: Schema.Array(ThreadId),
+    /** The parent's park stamps before the action (ISO). */
+    parentBefore: Schema.Struct({
+      settledAt: Schema.NullOr(Schema.String),
+      snoozedUntil: Schema.NullOr(Schema.String),
+      snoozedAt: Schema.NullOr(Schema.String),
+    }),
+    /** The stamps following children take: the parent's after the action (ISO). */
+    settledAt: Schema.optional(Schema.String),
+    snoozedUntil: Schema.optional(Schema.String),
+    snoozedAt: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread-title.generate"),
     kind: Schema.Union([
       Schema.Struct({ type: Schema.Literal("initial"), messageId: MessageId }),
@@ -113,6 +131,8 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "terminal.cleanup",
   "attachment.cleanup",
   "thread-title.generate",
+  // Child commands carry ids derived from the effect, so a replay dedupes.
+  "thread-group.follow",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const PROCESS_BOUND_EFFECT_TYPES = [

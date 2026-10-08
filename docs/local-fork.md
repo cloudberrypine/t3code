@@ -66,8 +66,13 @@ The phone's review screen is a separate native view and still scrolls through ev
 
 Threads can be shown under another thread in the sidebar (`sidebarParentThreadId`, set by
 `thread.sidebar-parent.set`, `t3_thread_organize` nest/unnest, or `sidebarParentThreadId` on
-`t3_thread_launch`). It is display only, deliberately separate from subagent lineage, which hides
-threads and carries delegation, wake, and notification behavior. The grouping rule is
+`t3_thread_launch`). It is deliberately separate from subagent lineage, which hides threads and
+carries delegation, wake, and notification behavior. Its one behavior: a parent's settle and snooze
+(and their way back) reach its children through the `thread-group.follow` outbox effect
+(`SidebarGroupFollow.ts`), one command per child under that child's own lock, never nested inside
+the parent's. A child that follows takes the parent's settle or snooze stamp, which is how the way
+back tells it from a child parked on its own (`packages/contracts/src/threadNesting.ts`). Clients
+preview the followers in `threadLifecycle.ts`. The grouping rule is
 `packages/client-runtime/src/state/threadNesting.ts`, shared by the web sidebar
 (`Sidebar.nesting.tsx`) and the mobile list (`threadListV2.ts`). On web, children render inside
 their parent's row element rather than as sortable items, so the pinned and active orders stay

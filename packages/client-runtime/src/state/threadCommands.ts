@@ -415,52 +415,66 @@ export function createThreadEnvironmentAtoms<R, E>(
   return {
     ...commands,
     snapshotAtom: optimistic.snapshotAtom,
-    settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
-      !accepted &&
-      (thread.pendingRuntimeRequest !== null ||
-        ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
-        ? thread
-        : {
-            ...thread,
-            pendingRuntimeRequest: null,
-            settledOverride: "settled",
-            settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
-            unsettledAt: null,
-            activeOrderKey: null,
-            pinnedAt: null,
-            pinOrderKey: null,
-            snoozedAt: null,
-            snoozedUntil: null,
-          },
-    ),
-    unsettle: optimistic.wrap(commands.unsettle, (thread, input, now) => ({
-      ...thread,
-      settledOverride: input.reason === "user" ? "active" : null,
-      settledAt: null,
-      unsettledAt: thread.settledOverride === "active" ? (thread.unsettledAt ?? null) : now,
-    })),
-    snooze: optimistic.wrap(commands.snooze, (thread, input, now, accepted) =>
-      (!accepted &&
+    settle: optimistic.wrap(
+      commands.settle,
+      (thread, _input, now, accepted) =>
+        !accepted &&
         (thread.pendingRuntimeRequest !== null ||
-          ["preparing", "queued", "starting"].includes(thread.status))) ||
-      !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))
-        ? thread
-        : {
-            ...thread,
-            pendingRuntimeRequest: null,
-            snoozedUntil: DateTime.makeUnsafe(input.snoozedUntil),
-            snoozedAt:
-              thread.snoozedUntil != null &&
-              DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil
-                ? (thread.snoozedAt ?? now)
-                : now,
-          },
+          ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
+          ? thread
+          : {
+              ...thread,
+              pendingRuntimeRequest: null,
+              settledOverride: "settled",
+              settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
+              unsettledAt: null,
+              activeOrderKey: null,
+              pinnedAt: null,
+              pinOrderKey: null,
+              snoozedAt: null,
+              snoozedUntil: null,
+            },
+      "settle",
     ),
-    unsnooze: optimistic.wrap(commands.unsnooze, (thread) => ({
-      ...thread,
-      snoozedUntil: null,
-      snoozedAt: null,
-    })),
+    unsettle: optimistic.wrap(
+      commands.unsettle,
+      (thread, input, now) => ({
+        ...thread,
+        settledOverride: input.reason === "user" ? "active" : null,
+        settledAt: null,
+        unsettledAt: thread.settledOverride === "active" ? (thread.unsettledAt ?? null) : now,
+      }),
+      "unsettle",
+    ),
+    snooze: optimistic.wrap(
+      commands.snooze,
+      (thread, input, now, accepted) =>
+        (!accepted &&
+          (thread.pendingRuntimeRequest !== null ||
+            ["preparing", "queued", "starting"].includes(thread.status))) ||
+        !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))
+          ? thread
+          : {
+              ...thread,
+              pendingRuntimeRequest: null,
+              snoozedUntil: DateTime.makeUnsafe(input.snoozedUntil),
+              snoozedAt:
+                thread.snoozedUntil != null &&
+                DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil
+                  ? (thread.snoozedAt ?? now)
+                  : now,
+            },
+      "snooze",
+    ),
+    unsnooze: optimistic.wrap(
+      commands.unsnooze,
+      (thread) => ({
+        ...thread,
+        snoozedUntil: null,
+        snoozedAt: null,
+      }),
+      "unsnooze",
+    ),
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
       autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),

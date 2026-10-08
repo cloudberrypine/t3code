@@ -28,6 +28,7 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
+import { followSidebarParent } from "./SidebarGroupFollow.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -433,6 +434,22 @@ export const executorLayer: Layer.Layer<
             );
           case "attachment.cleanup":
             return resourceCleanup.cleanupAttachments(effect.request.attachmentIds).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
+          case "thread-group.follow":
+            return followSidebarParent({
+              commandId: effect.commandId,
+              threadId: effect.threadId,
+              request: effect.request,
+            }).pipe(
+              Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
               Effect.mapError(
                 (cause) =>
                   new OrchestrationEffectExecutionError({

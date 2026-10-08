@@ -123,10 +123,12 @@ colored by the one that most needs you. Each device remembers which groups you c
 Agents can nest the threads they launch, or move existing ones. Mobile shows the same
 groups and can collapse them.
 
-Grouping only changes where threads appear. Each thread keeps its own state: settling,
-snoozing, or archiving a parent does not change its children. A settled or snoozed thread
-shows in its own shelf, and the threads under a settled, snoozed, or archived parent show
-in the active list on their own until the parent returns. Groups are one level deep.
+Settling or snoozing a parent settles or snoozes the threads under it too, from any device
+or by an agent. **Un-settle** or **Wake** on the parent brings them back with it. A thread
+you settled or snoozed on its own keeps its own state, and a thread still working, or
+waiting on an approval or answer, stays active. Those, and the threads under an archived
+parent, show in the active list on their own until the parent returns. Archiving and
+pinning a parent do not change its children. Groups are one level deep.
 
 ### Fold working threads (beta)
 

@@ -375,3 +375,83 @@ describe("remote thread lifecycle commands", () => {
       }),
   );
 });
+
+describe("nested threads following their parent", () => {
+  const CHILD_ID = ThreadId.make("child");
+  const ALONE_ID = ThreadId.make("settled-alone");
+  const parent = SNAPSHOT.threads[0]!;
+  const grouped: OrchestrationV2ShellSnapshot = {
+    ...SNAPSHOT,
+    threads: [
+      parent,
+      { ...parent, id: CHILD_ID, sidebarParentThreadId: THREAD_ID },
+      {
+        ...parent,
+        id: ALONE_ID,
+        sidebarParentThreadId: THREAD_ID,
+        settledOverride: "settled",
+        settledAt: NOW,
+      },
+    ],
+  };
+  const visibleThread = (h: Effect.Success<ReturnType<typeof makeHarness>>, threadId: ThreadId) =>
+    h.registry.get(h.visibleAtom)?.threads.find((thread) => thread.id === threadId);
+
+  it.effect("moves live children with the parent until their own update arrives", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const source = h.snapshotAtom(ENVIRONMENT_ID);
+      h.registry.set(source, grouped);
+      const result = h.commands.settle.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      expect(visibleThread(h, CHILD_ID)?.settledOverride).toBe("settled");
+      // Settled on its own before: keeps its own settle time.
+      expect(visibleThread(h, ALONE_ID)?.settledAt).toBe(NOW);
+
+      const request = yield* Queue.take(h.requests);
+      yield* Deferred.succeed(request.reply, { sequence: 2 });
+      yield* Effect.promise(() => result);
+      // The parent's update lands first; the child's follows separately.
+      const parentSettled = {
+        ...grouped,
+        snapshotSequence: 2,
+        threads: grouped.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? { ...thread, settledOverride: "settled" as const, settledAt: NOW }
+            : thread,
+        ),
+      };
+      h.registry.set(source, parentSettled);
+      expect(visibleThread(h, CHILD_ID)?.settledOverride).toBe("settled");
+      const childSettled = {
+        ...parentSettled,
+        snapshotSequence: 3,
+        threads: parentSettled.threads.map((thread) =>
+          thread.id === CHILD_ID
+            ? { ...thread, settledOverride: "settled" as const, settledAt: NOW }
+            : thread,
+        ),
+      };
+      h.registry.set(source, childSettled);
+      expect(h.registry.get(h.visibleAtom)).toBe(childSettled);
+    }),
+  );
+
+  it.effect("puts the children back when the parent's action is rejected", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), grouped);
+      const result = h.commands.snooze.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID, snoozedUntil: "2099-01-01T00:00:00.000Z" },
+      });
+      expect(visibleThread(h, CHILD_ID)?.snoozedUntil).toEqual(FUTURE);
+      const request = yield* Queue.take(h.requests);
+      yield* Deferred.fail(request.reply, new Error("Snooze rejected"));
+      yield* Effect.promise(() => result);
+      expect(h.registry.get(h.visibleAtom)).toBe(grouped);
+    }),
+  );
+});

@@ -2555,6 +2555,9 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     snoozedUntil: IsoDateTime,
+    // When the snooze started. Threads nested in the sidebar take their
+    // parent's, so waking the parent can find the ones that went with it.
+    snoozedAt: Schema.optional(IsoDateTime),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsnooze"),

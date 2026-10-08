@@ -16,6 +16,8 @@ import {
   type ChatAttachment,
   CommandId,
   isProviderNativeSubagentThread,
+  followsSidebarParent,
+  type SidebarGroupAction,
   MessageId,
   type ModelSelection,
   OrchestrationV2Command,
@@ -2721,11 +2723,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             snoozedUntil !== null &&
             DateTime.toEpochMillis(thread.snoozedUntil) === DateTime.toEpochMillis(snoozedUntil);
           const existingSnoozedAt = sameWakeTime ? (thread.snoozedAt ?? null) : null;
+          const requestedSnoozedAt =
+            command.snoozedAt === undefined
+              ? null
+              : Option.getOrNull(DateTime.make(command.snoozedAt));
           return {
             ...thread,
             snoozedUntil,
             limitRecovery: thread.limitRecovery ? { ...thread.limitRecovery, snooze: false } : null,
-            snoozedAt: existingSnoozedAt ?? now,
+            snoozedAt: existingSnoozedAt ?? requestedSnoozedAt ?? now,
             updatedAt: existingSnoozedAt === null ? now : thread.updatedAt,
           };
         }
@@ -3145,6 +3151,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: updatedThread,
     });
+
+    if (
+      command.type === "thread.settle" ||
+      command.type === "thread.unsettle" ||
+      command.type === "thread.snooze" ||
+      command.type === "thread.unsnooze"
+    ) {
+      const action = command.type.slice("thread.".length) as SidebarGroupAction;
+      const children = yield* projectionStore
+        .getSidebarChildThreads(command.threadId)
+        .pipe(mapDispatchError(command));
+      const childThreadIds = children
+        .filter(
+          (child) =>
+            child.projectId === thread.projectId &&
+            followsSidebarParent(child, thread, action, now),
+        )
+        .map((child) => child.id);
+      if (childThreadIds.length > 0) {
+        const iso = (value: DateTime.Utc | null | undefined) =>
+          value == null ? null : DateTime.formatIso(value);
+        const pendingEffect = {
+          id: `effect:${command.commandId}:thread-group.follow`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: {
+            type: "thread-group.follow",
+            action,
+            childThreadIds,
+            parentBefore: {
+              settledAt: thread.settledOverride === "settled" ? iso(thread.settledAt) : null,
+              snoozedUntil: iso(thread.snoozedUntil),
+              snoozedAt: iso(thread.snoozedAt),
+            },
+            ...(action === "settle" ? { settledAt: iso(updatedThread.settledAt)! } : {}),
+            ...(action === "snooze"
+              ? {
+                  snoozedUntil: iso(updatedThread.snoozedUntil)!,
+                  snoozedAt: iso(updatedThread.snoozedAt)!,
+                }
+              : {}),
+          },
+        } satisfies PendingOrchestrationEffectV2;
+        yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);
+      }
+    }
 
     if (command.type === "thread.metadata.update" && command.regenerateTitle === true) {
       yield* Ref.update(effects, (existing) => [

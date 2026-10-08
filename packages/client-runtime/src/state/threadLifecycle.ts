@@ -1,8 +1,10 @@
-import type {
-  EnvironmentId,
-  OrchestrationV2ShellSnapshot,
-  OrchestrationV2ThreadShell,
-  ThreadId,
+import {
+  followsSidebarParent,
+  type EnvironmentId,
+  type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadShell,
+  type SidebarGroupAction,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/unstable/reactivity";
@@ -14,6 +16,16 @@ interface PendingThreadUpdate {
   readonly apply: (thread: OrchestrationV2ThreadShell) => OrchestrationV2ThreadShell;
   sequence?: number;
 }
+
+// The server moves nested threads after their parent, one command each, so
+// a follower's preview holds until its own shell catches up. A child the
+// server refused (say, it started a turn meanwhile) drops after this long.
+const FOLLOWER_PREVIEW_TIMEOUT_MS = 10_000;
+
+const parkState = (thread: OrchestrationV2ThreadShell) =>
+  `${thread.settledOverride === "settled"}:${
+    thread.snoozedUntil == null ? null : DateTime.toEpochMillis(thread.snoozedUntil)
+  }`;
 
 export function createOptimisticThreadLifecycle(
   sourceSnapshotAtom: (
@@ -60,6 +72,8 @@ export function createOptimisticThreadLifecycle(
       now: DateTime.Utc,
       accepted: boolean,
     ) => OrchestrationV2ThreadShell,
+    /** Threads nested under this one in the sidebar follow it (see threadNesting.ts). */
+    follow?: SidebarGroupAction,
   ): typeof command {
     return {
       label: command.label,
@@ -71,9 +85,47 @@ export function createOptimisticThreadLifecycle(
           threadId: target.input.threadId,
           apply: (thread) => apply(thread, target.input, now, update.sequence !== undefined),
         };
+        const followers =
+          follow === undefined
+            ? []
+            : previewFollowers(
+                registry.get(snapshotAtom(target.environmentId)),
+                target.input.threadId,
+                follow,
+                (child) => apply(child, { ...target.input, threadId: child.id }, now, false),
+              );
+        const removeFollower = (follower: PendingThreadUpdate) =>
+          registry.update(pending, (current) => current.filter((item) => item !== follower));
+        if (followers.length > 0) {
+          const waiting = new Set(followers);
+          let stopWatching = () => {};
+          const watch = (snapshot: OrchestrationV2ShellSnapshot | null) => {
+            for (const follower of waiting) {
+              const canonical = snapshot?.threads.find((thread) => thread.id === follower.threadId);
+              if (canonical !== undefined && parkState(canonical) === follower.expected) {
+                waiting.delete(follower);
+                removeFollower(follower.update);
+              }
+            }
+            if (waiting.size === 0) stopWatching();
+          };
+          const unsubscribeFollowers = registry.subscribe(source, watch);
+          // @effect-diagnostics-next-line globalTimers:off - preview timing inside an atom command.
+          const timeout = setTimeout(() => stopWatching(), FOLLOWER_PREVIEW_TIMEOUT_MS);
+          stopWatching = () => {
+            clearTimeout(timeout);
+            unsubscribeFollowers();
+            for (const follower of followers) removeFollower(follower.update);
+          };
+          followerCleanup.set(update, stopWatching);
+        }
         const remove = () =>
           registry.update(pending, (current) => current.filter((item) => item !== update));
-        registry.update(pending, (current) => [...current, update]);
+        registry.update(pending, (current) => [
+          ...current,
+          update,
+          ...followers.map((follower) => follower.update),
+        ]);
         let confirmed = false;
         try {
           const result = await command.run(registry, target);
@@ -92,10 +144,44 @@ export function createOptimisticThreadLifecycle(
           }
           return result;
         } finally {
-          if (!confirmed) remove();
+          if (!confirmed) {
+            remove();
+            followerCleanup.get(update)?.();
+          }
+          followerCleanup.delete(update);
         }
       },
     };
+  }
+
+  const followerCleanup = new WeakMap<PendingThreadUpdate, () => void>();
+
+  /** Preview the parent's action on the nested threads the server will move with it. */
+  function previewFollowers(
+    snapshot: OrchestrationV2ShellSnapshot | null,
+    parentThreadId: ThreadId,
+    action: SidebarGroupAction,
+    applyToChild: (child: OrchestrationV2ThreadShell) => OrchestrationV2ThreadShell,
+  ) {
+    const parent = snapshot?.threads.find((thread) => thread.id === parentThreadId);
+    if (snapshot == null || parent === undefined) return [];
+    const now = DateTime.nowUnsafe();
+    return snapshot.threads.flatMap((child) => {
+      if (
+        child.sidebarParentThreadId !== parentThreadId ||
+        child.archivedAt !== null ||
+        child.projectId !== parent.projectId ||
+        !followsSidebarParent(child, parent, action, now)
+      ) {
+        return [];
+      }
+      // The same preview the thread gets on its own, so a child with work
+      // that blocks the action stays where it is.
+      const predicted = applyToChild(child);
+      if (predicted === child) return [];
+      const update: PendingThreadUpdate = { threadId: child.id, apply: applyToChild };
+      return [{ threadId: child.id, update, expected: parkState(predicted) }];
+    });
   }
 
   return { snapshotAtom, wrap };
