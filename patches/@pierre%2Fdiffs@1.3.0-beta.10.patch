@@ -1,16 +1,3 @@
-diff --git a/dist/components/CodeView.js b/dist/components/CodeView.js
-index dfabd49..3381f3f 100644
---- a/dist/components/CodeView.js
-+++ b/dist/components/CodeView.js
-@@ -1150,6 +1150,8 @@
- 			nextIdToItem.set(input.id, item);
- 			nextInstanceToItem.set(item.instance, item);
- 		}
-+		if (firstDirtyIndex == null && removedItems.size === 0) return;
-+		this.capturePendingLayoutAnchor();
- 		for (let index = 0; index < previousItems.length; index++) {
- 			const removedItem = previousItems[index];
- 			if (removedItem == null || !removedItems.has(removedItem)) continue;
 diff --git a/dist/components/VirtualizedFile.d.ts b/dist/components/VirtualizedFile.d.ts
 --- a/dist/components/VirtualizedFile.d.ts
 +++ b/dist/components/VirtualizedFile.d.ts

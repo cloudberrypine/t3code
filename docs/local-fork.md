@@ -34,10 +34,6 @@ Polyzonia's AGENTS.md and skills. An orchestrator thread merges finished branche
   commits and recoverable Git backups. Merge the verified nightly tag while retaining local
   history, resolve conflicts, remove superseded local implementations, then verify the affected
   features.
-- Our `patches/@pierre%2Fdiffs@1.3.0-beta.10.patch` adds one local hunk to `CodeView.js`: it keeps
-  a diff jump target in place while lazily loaded files are inserted above it. Upstream's
-  `@pierre/diffs` 1.5.2 already does this, so when a nightly upgrades to it, accept the deletion
-  of the old patch file. `diffFileJump.test.tsx` should still pass afterwards.
 - We adopted upstream V2's worktree retention: settled threads keep their worktrees. Do not restore
   our old automatic deletion and restoration.
 

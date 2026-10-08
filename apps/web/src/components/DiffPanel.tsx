@@ -590,11 +590,11 @@ export default function DiffPanel({
     () => ({ collapseScopeKey, diffSelection }),
     [collapseScopeKey, diffSelection],
   );
-  const codeViewFileKeys = useMemo(
-    () => codeViewFiles.map((file) => file.fileKey),
-    [codeViewFiles],
+  const requestTreeReveal = useCodeViewFileReveal(
+    codeView,
+    treeRevealScope,
+    codeViewFiles.map((file) => file.fileKey),
   );
-  const requestTreeReveal = useCodeViewFileReveal(codeView, treeRevealScope, codeViewFileKeys);
   const revealDiffFile = useCallback(
     (filePath: string) => {
       const index = renderableFileEntries.findIndex(
@@ -610,8 +610,7 @@ export default function DiffPanel({
         return { scopeKey: collapseScopeKey, fileKeys: next };
       });
       if (lazySource && index >= settledFileCount) {
-        // The files after the target give a short target room to reach the top.
-        for (let next = index; next < index + 4; next++) requestFile(next);
+        requestFile(index);
       }
       requestTreeReveal(file.fileKey);
     },
