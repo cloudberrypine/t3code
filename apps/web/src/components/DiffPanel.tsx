@@ -60,6 +60,7 @@ import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./Dif
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
 import { DiffFileTree } from "./diffs/DiffFileTree";
+import { useSingleFileDiff } from "./diffs/singleFileDiff";
 import { diffFileTreeEntries } from "./diffs/diffFileTree.logic";
 import { Button } from "./ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -511,6 +512,12 @@ export default function DiffPanel({
     collapsedDiffFiles.scopeKey === collapseScopeKey
       ? collapsedDiffFiles.fileKeys
       : defaultCollapsedDiffFileKeys;
+  const { shownPath: shownDiffFilePath, pick: pickDiffFile } = useSingleFileDiff({
+    files: renderableFiles,
+    loadsPerFile: lazySource !== null,
+    selectedFilePath,
+    selectedFileRevealRequestId,
+  });
   const renderLoadingBoundary = useCallback(
     () =>
       settledFileCount < renderableFiles.length ? (
@@ -525,6 +532,10 @@ export default function DiffPanel({
     () =>
       renderableFileEntries
         .filter(({ fileDiff }) => !lazySource || readyFilePaths.has(resolveFileDiffPath(fileDiff)))
+        .filter(
+          ({ fileDiff }) =>
+            shownDiffFilePath === null || resolveFileDiffPath(fileDiff) === shownDiffFilePath,
+        )
         .map(({ fileDiff, fileKey, fileVersion }) => {
           return {
             fileDiff,
@@ -537,7 +548,7 @@ export default function DiffPanel({
               fileDiff.cacheKey?.endsWith(":pending") === true,
           };
         }),
-    [collapsedDiffFileKeys, renderableFileEntries, lazySource, readyFilePaths],
+    [collapsedDiffFileKeys, renderableFileEntries, lazySource, readyFilePaths, shownDiffFilePath],
   );
   const diffFileKeys = useMemo(
     () => renderableFileEntries.map((file) => file.fileKey),
@@ -569,6 +580,8 @@ export default function DiffPanel({
     [selectedGitSource, renderableFiles, diffStatIgnorePatterns],
   );
   const [activeDiffFilePath, setActiveDiffFilePath] = useState<string | null>(null);
+  // A large diff moves between files through the tree, so it stays open.
+  const fileTreeShown = fileTreeOpen || shownDiffFilePath !== null;
   const fileTreeEntries = useMemo(() => diffFileTreeEntries(renderableFiles), [renderableFiles]);
   const selectedDiffFileKey = selectedFilePath
     ? (codeViewFiles.find((candidate) => candidate.filePath === selectedFilePath)?.fileKey ?? null)
@@ -602,6 +615,7 @@ export default function DiffPanel({
       );
       const file = renderableFileEntries[index];
       if (!file) return;
+      pickDiffFile(filePath);
       setCollapsedDiffFiles((current) => {
         const next = new Set(
           current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys,
@@ -622,6 +636,7 @@ export default function DiffPanel({
       lazySource,
       settledFileCount,
       requestFile,
+      pickDiffFile,
     ],
   );
 
@@ -1032,10 +1047,11 @@ export default function DiffPanel({
             <TooltipTrigger
               render={
                 <Toggle
-                  aria-label={fileTreeOpen ? "Hide file tree" : "Show file tree"}
+                  aria-label={fileTreeShown ? "Hide file tree" : "Show file tree"}
                   variant="ghost"
                   size="sm"
-                  pressed={fileTreeOpen}
+                  pressed={fileTreeShown}
+                  disabled={shownDiffFilePath !== null}
                   onPressedChange={(pressed) => setFileTreeOpen(Boolean(pressed))}
                 />
               }
@@ -1043,7 +1059,11 @@ export default function DiffPanel({
               <FolderTreeIcon className="size-3.5" />
             </TooltipTrigger>
             <TooltipPopup side="top">
-              {fileTreeOpen ? "Hide file tree" : "Show file tree"}
+              {shownDiffFilePath !== null
+                ? "Large diffs show one file at a time from the file tree"
+                : fileTreeOpen
+                  ? "Hide file tree"
+                  : "Show file tree"}
             </TooltipPopup>
           </Tooltip>
         )}
@@ -1177,7 +1197,9 @@ export default function DiffPanel({
                     codeViewKey={`${codeViewMountKey}:${lazySource ? filePatchScope : "preview"}`}
                     className="h-full min-h-0 overflow-auto"
                     files={codeViewFiles}
-                    renderCodeViewFooter={renderLoadingBoundary}
+                    {...(shownDiffFilePath === null
+                      ? { renderCodeViewFooter: renderLoadingBoundary }
+                      : {})}
                     sectionId={reviewSectionId}
                     sectionTitle={reviewSectionTitle}
                     composerDraftTarget={composerDraftTarget}
@@ -1255,12 +1277,12 @@ export default function DiffPanel({
                     }}
                   />
                 </div>
-                {fileTreeOpen ? (
+                {fileTreeShown ? (
                   <FileBrowserPane besidePreview>
                     <DiffFileTree
                       ariaLabel={`${reviewSectionTitle} files`}
                       entries={fileTreeEntries}
-                      selectedPath={activeDiffFilePath ?? selectedFilePath}
+                      selectedPath={shownDiffFilePath ?? activeDiffFilePath ?? selectedFilePath}
                       revealRequestId={selectedFileRevealRequestId}
                       onSelectFile={revealDiffFile}
                     />

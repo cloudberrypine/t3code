@@ -48,6 +48,13 @@ rendering; and Cmd+1–9 / session traversal while a terminal has focus, without
 chords to the shell. The diff reset we fixed originated upstream in #15005. The Polyzonia `/play`
 proxy is described below.
 
+Large diffs show one file at a time: more than 20 files, more than 2,000 changed lines, or a diff
+the server sends file by file because its patch is over 120 KB. The file tree stays open and picks
+the file. Smaller diffs keep upstream's long view. Clicking a file in upstream's long view of a
+lazily loaded diff lands on the wrong file, because files load in above it. The whole difference
+lives in `apps/web/src/components/diffs/singleFileDiff.ts` plus a few lines in `DiffPanel.tsx`.
+The phone's review screen is a separate native view and still scrolls through every file.
+
 ## Mobile code navigation, line comments and citations
 
 Mobile reuses desktop's logic rather than its own copies: code is coloured with desktop's Pierre
