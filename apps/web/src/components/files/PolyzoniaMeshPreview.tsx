@@ -11,10 +11,18 @@ import {
   type MeshPoint,
   type PolyzoniaMesh,
 } from "@t3tools/client-runtime/polyzonia-mesh";
+import { MinusIcon, PlusIcon } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Toggle } from "~/components/ui/toggle";
 
-export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
+/** `wheelZoom` off leaves the wheel to the page around an inline preview; the zoom buttons remain. */
+export function PolyzoniaMeshPreview({
+  mesh,
+  wheelZoom = true,
+}: {
+  mesh: PolyzoniaMesh;
+  wheelZoom?: boolean;
+}) {
   const animation = useMeshAnimation(mesh);
   const [showVertices, setShowVertices] = useState(false);
   const [showJoints, setShowJoints] = useState(true);
@@ -202,6 +210,22 @@ export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
         >
           Fit
         </Button>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Zoom out"
+          onClick={() => setZoom((value) => Math.max(0.1, value / 1.25))}
+        >
+          <MinusIcon />
+        </Button>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Zoom in"
+          onClick={() => setZoom((value) => Math.min(20, value * 1.25))}
+        >
+          <PlusIcon />
+        </Button>
         <span className="ml-auto text-2xs text-muted-foreground">
           {mesh.vertices.length} vertices · {colors.length} triangles
         </span>
@@ -286,7 +310,7 @@ export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
             drag.current = null;
           }}
           onWheel={(event) => {
-            if (!drag.current)
+            if (wheelZoom && !drag.current)
               setZoom((value) =>
                 Math.max(0.1, Math.min(20, value * Math.exp(-event.deltaY * 0.001))),
               );
@@ -335,7 +359,7 @@ export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
             ? "No skinning weights · "
             : ""}
         {ikEndJoints.size > 0 ? "Drag square IK handles to bend limbs · " : ""}
-        Drag background to pan · Scroll to zoom · Preview only
+        Drag background to pan · {wheelZoom ? "Scroll to zoom · " : ""}Preview only
       </div>
     </div>
   );

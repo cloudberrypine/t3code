@@ -281,3 +281,31 @@ it("scrubs and plays animation geometry, stops at the end, and does no backgroun
   expect(callbacks.size).toBe(0);
   expect(select("Mesh animation").props.value).toBe("");
 });
+
+it("leaves the wheel to the page when embedded and zooms with its buttons", async () => {
+  const { context, canvas } = canvasFixture();
+  const mesh = parsePolyzoniaMesh(
+    "mesh.json",
+    JSON.stringify({
+      vertices: [
+        { x: 0, y: 0 },
+        { x: 20, y: 0 },
+        { x: 0, y: 20 },
+      ],
+      layers: [{ triangles: [{ indices: [0, 1, 2], color: { x: 1, y: 0, z: 0, w: 1 } }] }],
+    }),
+  )!;
+  await act(() => {
+    renderer = create(<PolyzoniaMeshPreview mesh={mesh} wheelZoom={false} />, {
+      createNodeMock: (element) => (element.type === "canvas" ? canvas : {}),
+    });
+  });
+  expect(context.moveTo).toHaveBeenLastCalledWith(32, 32);
+  await act(() => renderer!.root.findByType("canvas").props.onWheel({ deltaY: -500 }));
+  expect(context.moveTo).toHaveBeenLastCalledWith(32, 32);
+  const zoomIn = renderer!.root
+    .findAllByType("button")
+    .find((node) => node.props["aria-label"] === "Zoom in")!;
+  await act(() => zoomIn.props.onClick());
+  expect(context.moveTo).not.toHaveBeenLastCalledWith(32, 32);
+});

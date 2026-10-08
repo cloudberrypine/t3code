@@ -103,6 +103,7 @@ import {
   type ExpandedImagePreview,
 } from "./chat/ExpandedImagePreview";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
+import { ChatMarkdownMesh, markMeshEmbeds } from "./chat/ChatMarkdownMesh";
 import { markdownImageGallery, markdownImageItems } from "./chat/markdownImageGallery";
 import { MediaVideoPlayer } from "./media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "./media/MediaActions";
@@ -467,6 +468,8 @@ function rehypePreserveImageSourceMeta() {
 
     visit(tree);
     markStandaloneImages(tree);
+    // Fork: Polyzonia mesh JSON embeds.
+    markMeshEmbeds(tree);
   };
 }
 
@@ -484,6 +487,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
       "dataLocalSrc",
       "dataMarkdownTitle",
       "dataStandalone",
+      "dataMeshEmbed",
     ],
   },
   protocols: {
@@ -3407,6 +3411,22 @@ const CHAT_MARKDOWN_COMPONENTS = {
           actionsSource={actionsSource}
           originalUrl={originalUrl}
           onImageExpand={imageExpand}
+        />
+      );
+    }
+    if (
+      imageSource._tag === "WorkspaceFile" &&
+      threadRef &&
+      cwd &&
+      node?.properties?.dataMeshEmbed === true
+    ) {
+      return (
+        <ChatMarkdownMesh
+          threadRef={threadRef}
+          cwd={cwd}
+          path={imageSource.path}
+          alt={altText}
+          copyMarkdown={copyMarkdown}
         />
       );
     }

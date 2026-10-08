@@ -217,6 +217,7 @@ import {
   ThreadMarkdownImageUnavailable,
   ThreadMarkdownImageView,
 } from "./ThreadMarkdownImage";
+import { isMarkdownMeshEmbedPath, ThreadMarkdownMesh } from "./ThreadMarkdownMesh";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   // Native iOS blockquotes and adjacent selectable text are separate layout
@@ -2402,6 +2403,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       if (imageSource._tag === "Blocked") {
         return <ThreadMarkdownImageUnavailable alt={image.alt} />;
       }
+      // Fork: a Polyzonia mesh JSON shows the mesh viewer.
+      if (props.workspaceRoot && isMarkdownMeshEmbedPath(imageSource.path)) {
+        return (
+          <ThreadMarkdownMesh
+            key={imageSource.path}
+            environmentId={props.environmentId}
+            cwd={props.workspaceRoot}
+            path={imageSource.path}
+            alt={image.alt}
+            onOpen={() => onMarkdownLinkPress(image.href)}
+          />
+        );
+      }
       return (
         <ThreadMarkdownImage
           environmentId={props.environmentId}
@@ -2417,7 +2431,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         />
       );
     },
-    [props.environmentId, props.threadId, props.workspaceRoot],
+    [props.environmentId, props.threadId, props.workspaceRoot, onMarkdownLinkPress],
   );
   const renderViewedImage = useCallback<MarkdownImageRenderer>(
     (image) => {

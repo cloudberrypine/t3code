@@ -48,6 +48,15 @@ rendering; and Cmd+1–9 / session traversal while a terminal has focus, without
 chords to the shell. The diff reset we fixed originated upstream in #15005. The Polyzonia `/play`
 proxy is described below.
 
+Chat shows a mesh inline when an agent embeds its JSON as an image on its own line,
+`![Caption](/abs/path/Name.json)`: any `.json` the environment can read (4 MB cap), decoded by
+content with `parsePolyzoniaMesh` like the file preview, which **Open** shows at full size.
+Polyzonia's `new-species` skill relies on this form. Web marks such a paragraph in
+`ChatMarkdownMesh.tsx` (the viewer is block content, so the paragraph becomes a `div`) and leaves
+a `.json` image inside a sentence on the image path. Mobile treats every image as a block
+(`ThreadMarkdownMesh.tsx`). Inline on web, the wheel scrolls the chat and the viewer's zoom
+buttons zoom.
+
 Large diffs show one file at a time: more than 20 files, more than 2,000 changed lines, or a diff
 the server sends file by file because its patch is over 120 KB. The file tree stays open and picks
 the file. Smaller diffs keep upstream's long view. Clicking a file in upstream's long view of a

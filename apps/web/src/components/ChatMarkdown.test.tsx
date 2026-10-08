@@ -60,6 +60,17 @@ vi.mock("~/lib/openPullRequestLink", () => ({
   useOpenChangeRequestLink: () => vi.fn(),
 }));
 
+vi.mock("../assets/assetUrls", () => ({
+  useAssetUrlState: () => ({ _tag: "Loading" }),
+  useAssetUrlRefresh: () => async () => null,
+}));
+vi.mock("./chat/ChatMarkdownMesh", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat/ChatMarkdownMesh")>()),
+  ChatMarkdownMesh: (props: { path: string; alt: string }) => (
+    <figure data-mesh-path={props.path}>{props.alt}</figure>
+  ),
+}));
+
 import ChatMarkdown, {
   canUseMarkdownFileShellActions,
   hasMarkdownFilePrimaryAction,
@@ -1003,5 +1014,52 @@ describe("ChatMarkdown Windows file links", () => {
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("d:alert");
     expect(html).not.toContain("chat-markdown-file-link");
+  });
+});
+
+describe("ChatMarkdown mesh embeds", () => {
+  const threadRef = {
+    environmentId: EnvironmentId.make("environment-1"),
+    threadId: ThreadId.make("thread-1"),
+  };
+  const meshPaths = async (text: string, lineBreaks = false) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <ChatMarkdown cwd="/repo" threadRef={threadRef} text={text} lineBreaks={lineBreaks} />,
+        );
+      });
+      return {
+        meshes: renderer!.root.findAllByType("figure").map((node) => node.props["data-mesh-path"]),
+        paragraphs: renderer!.root.findAllByType("p").length,
+      };
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+      vi.unstubAllGlobals();
+    }
+  };
+
+  it("embeds JSON images on their own lines as mesh viewers outside a paragraph", async () => {
+    const text =
+      "Two candidates:\n\n![Jaguar](/tmp/scratch/Jaguar.json)\n![Owl](assets/meshes/Owl.json)";
+    for (const lineBreaks of [false, true]) {
+      expect(await meshPaths(text, lineBreaks)).toEqual({
+        meshes: ["/tmp/scratch/Jaguar.json", "/repo/assets/meshes/Owl.json"],
+        paragraphs: 1,
+      });
+    }
+  });
+
+  it("leaves JSON images inside a sentence and other images on the image path", async () => {
+    expect(
+      await meshPaths("See ![Jaguar](/tmp/Jaguar.json) here.\n\n![Shot](/tmp/shot.png)"),
+    ).toEqual({
+      meshes: [],
+      paragraphs: 2,
+    });
   });
 });
