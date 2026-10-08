@@ -661,6 +661,7 @@ export function applyToProjection(
     case "thread.unpinned":
     case "thread.pin-reordered":
     case "thread.active-reordered":
+    case "thread.sidebar-parent-set":
     case "thread.metadata-updated":
     case "thread.pull-request-synced":
     case "thread.runtime-mode-updated":
@@ -1369,6 +1370,9 @@ export function threadShellFromProjection(
     ...(projection.thread.activeOrderKey === undefined
       ? {}
       : { activeOrderKey: projection.thread.activeOrderKey }),
+    ...(projection.thread.sidebarParentThreadId === undefined
+      ? {}
+      : { sidebarParentThreadId: projection.thread.sidebarParentThreadId }),
     lineage: projection.thread.lineage,
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
@@ -1605,6 +1609,9 @@ function shellFromState(input: {
     ...(input.state.thread.activeOrderKey === undefined
       ? {}
       : { activeOrderKey: input.state.thread.activeOrderKey }),
+    ...(input.state.thread.sidebarParentThreadId === undefined
+      ? {}
+      : { sidebarParentThreadId: input.state.thread.sidebarParentThreadId }),
     lineage: input.state.thread.lineage,
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,
@@ -1692,6 +1699,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           case "thread.unpinned":
           case "thread.pin-reordered":
           case "thread.active-reordered":
+          case "thread.sidebar-parent-set":
           case "thread.visited":
           case "thread.marked-unread":
           case "thread.metadata-updated":
@@ -2523,6 +2531,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.pinned" &&
           event.type !== "thread.unpinned" &&
           event.type !== "thread.pin-reordered" &&
+          event.type !== "thread.sidebar-parent-set" &&
           event.type !== "thread.visited" &&
           event.type !== "thread.marked-unread" &&
           event.type !== "thread.metadata-updated" &&

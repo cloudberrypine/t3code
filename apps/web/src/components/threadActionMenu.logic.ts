@@ -20,6 +20,9 @@ export type ThreadActionMenuId =
   | "snooze"
   | `snooze:${string}`
   | "unsnooze"
+  | "nest"
+  | `nest:${string}`
+  | "unnest"
   | "rename"
   | "regenerate-title"
   | "mark-unread"
@@ -98,6 +101,14 @@ export interface ThreadActionMenuState {
     readonly titleRegeneration: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
+  /**
+   * Showing the thread under another one in the sidebar. Absent where the
+   * server cannot store it. Candidates dispatch as `nest:<threadId>`.
+   */
+  readonly nesting?: {
+    readonly isNested: boolean;
+    readonly candidates: ReadonlyArray<{ readonly id: string; readonly title: string }>;
+  } | null;
 }
 
 /**
@@ -152,6 +163,22 @@ export function buildThreadActionMenuItems(
                   { id: "snooze:custom" as const, label: "Custom…", separatorBefore: true },
                 ],
               },
+        ]
+      : []),
+    ...(state.nesting?.isNested
+      ? [{ id: "unnest" as const, label: "Remove from group", icon: "corner-up-left" }]
+      : []),
+    ...(state.nesting && state.nesting.candidates.length > 0
+      ? [
+          {
+            id: "nest" as const,
+            label: state.nesting.isNested ? "Move under" : "Show under",
+            icon: "corner-down-right",
+            children: state.nesting.candidates.map((candidate) => ({
+              id: `nest:${candidate.id}` as const,
+              label: candidate.title,
+            })),
+          },
         ]
       : []),
     { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },

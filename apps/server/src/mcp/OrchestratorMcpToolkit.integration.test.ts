@@ -2335,6 +2335,34 @@ describe("orchestrator MCP toolkit", () => {
             });
             expect((yield* orchestrator.getThreadShell(foreignThreadId))?.pinnedAt).toBeNull();
 
+            // Sidebar nesting resolves the parent in the calling project too.
+            const nestWithoutParent = yield* invoke("t3_thread_organize", {
+              threadId: activeThread.threadId,
+              action: "nest",
+            });
+            expect(nestWithoutParent.structuredContent).toMatchObject({ code: "invalid_request" });
+            const foreignNestCall = yield* invoke("t3_thread_organize", {
+              threadId: activeThread.threadId,
+              action: "nest",
+              parentThreadId: foreignThreadId,
+            });
+            expect(foreignNestCall.structuredContent).toMatchObject({ code: "thread_not_found" });
+            yield* invoke("t3_thread_organize", {
+              threadId: activeThread.threadId,
+              action: "nest",
+              parentThreadId,
+            });
+            expect(
+              (yield* orchestrator.getThreadShell(activeThread.threadId))?.sidebarParentThreadId,
+            ).toBe(parentThreadId);
+            yield* invoke("t3_thread_organize", {
+              threadId: activeThread.threadId,
+              action: "unnest",
+            });
+            expect(
+              (yield* orchestrator.getThreadShell(activeThread.threadId))?.sidebarParentThreadId,
+            ).toBeNull();
+
             const foreignReadCall = yield* invoke("t3_thread_read", {
               threadId: foreignThreadId,
             });

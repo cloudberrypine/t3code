@@ -407,6 +407,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Fractional-index slot in the user-arranged active order. */
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /**
+   * Thread this one is shown under in thread lists. Display only: no
+   * lifecycle, wake, or notification behavior reads it.
+   */
+  sidebarParentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1550,6 +1555,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.unpinned",
       "thread.pin-reordered",
       "thread.active-reordered",
+      "thread.sidebar-parent-set",
       "thread.visited",
       "thread.marked-unread",
       "thread.metadata-updated",
@@ -1789,6 +1795,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Slot in the user-arranged active order; omitted by pre-reorder servers. */
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /** Thread this one is shown under in thread lists; omitted by older servers. */
+  sidebarParentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   /**
    * Omitted by servers that predate server-side visited tracking; clients fall
    * back to their local visited state when the field is absent.
@@ -2351,6 +2359,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.unpinned",
       "thread.pin-reordered",
       "thread.active-reordered",
+      "thread.sidebar-parent-set",
       "thread.visited",
       "thread.marked-unread",
       "thread.pull-request-synced",
@@ -2588,6 +2597,14 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.sidebar-parent.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    // Show the thread under this one in thread lists; null shows it at the
+    // top level again. Display only, like the order keys.
+    sidebarParentThreadId: Schema.NullOr(ThreadId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.visit"),

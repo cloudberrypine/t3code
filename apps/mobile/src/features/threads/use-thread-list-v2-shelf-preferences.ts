@@ -1,6 +1,6 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 
@@ -24,6 +24,13 @@ export function useThreadListV2ShelfPreferences() {
   const snoozedShelfExpandedRef = useRef(snoozedShelfExpanded);
   const settledShelfExpandedRef = useRef(settledShelfExpanded);
   const workingShelfExpandedRef = useRef(workingShelfExpanded);
+  const collapsedThreadGroups = loaded ? preferencesResult.value.collapsedThreadGroups : undefined;
+  const collapsedThreadGroupKeys = useMemo(
+    () => new Set(collapsedThreadGroups ?? []),
+    [collapsedThreadGroups],
+  );
+  const collapsedThreadGroupKeysRef = useRef(collapsedThreadGroupKeys);
+  collapsedThreadGroupKeysRef.current = collapsedThreadGroupKeys;
   snoozedShelfExpandedRef.current = snoozedShelfExpanded;
   settledShelfExpandedRef.current = settledShelfExpanded;
   workingShelfExpandedRef.current = workingShelfExpanded;
@@ -46,6 +53,18 @@ export function useThreadListV2ShelfPreferences() {
     workingShelfExpandedRef.current = expanded;
     savePreferences({ threadListWorkingShelfExpanded: expanded });
   }, [loaded, savePreferences]);
+  // Nested threads under a parent row (see threadNesting.ts); keyed by
+  // `environmentId:threadId`, expanded unless listed.
+  const toggleThreadGroup = useCallback(
+    (parentKey: string) => {
+      if (!loaded) return;
+      const keys = new Set(collapsedThreadGroupKeysRef.current);
+      if (!keys.delete(parentKey)) keys.add(parentKey);
+      collapsedThreadGroupKeysRef.current = keys;
+      savePreferences({ collapsedThreadGroups: [...keys] });
+    },
+    [loaded, savePreferences],
+  );
 
   return {
     loaded,
@@ -56,5 +75,7 @@ export function useThreadListV2ShelfPreferences() {
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    collapsedThreadGroupKeys,
+    toggleThreadGroup,
   } as const;
 }

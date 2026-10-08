@@ -128,6 +128,12 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
       }),
     ),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
+    sidebarParentThreadId: Schema.optional(
+      ThreadId.annotate({
+        description:
+          "Show the new thread indented under this thread in the sidebar (display only, no lifecycle link). Pass your own thread id when launching one thread per item of your work. Must be in the same project. Omit for a top-level thread.",
+      }),
+    ),
   }),
   success: Schema.Struct({
     threadId: ThreadId,

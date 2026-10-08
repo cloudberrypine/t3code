@@ -6,7 +6,13 @@ import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
-import { newCommandId, readCaller, readMutationCaller, unavailable } from "../../threadAccess.ts";
+import {
+  newCommandId,
+  readCaller,
+  readMutationCaller,
+  readThread,
+  unavailable,
+} from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
 
 function projectFailure(error: Project.ProjectServiceError) {
@@ -40,7 +46,7 @@ const mutation = Effect.gen(function* () {
 export const ProjectHandlersLive = ProjectToolkit.toLayer({
   t3_thread_launch: (input) =>
     Effect.gen(function* () {
-      const { caller, scope } = yield* readMutationCaller();
+      const { caller, scope, threads } = yield* readMutationCaller();
       if (caller.runtimeMode !== "full-access" || caller.interactionMode !== "default")
         return yield* new OrchestratorMcpFailure({
           code: "capability_denied",
@@ -77,6 +83,15 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
               ),
             )).projectId
           : (input.projectId ?? caller.projectId);
+      if (input.sidebarParentThreadId !== undefined) {
+        if (projectId !== caller.projectId)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "sidebarParentThreadId must be a thread in the launched thread's project.",
+          });
+        // Fails with thread_not_found before anything is launched.
+        yield* readThread(input.sidebarParentThreadId);
+      }
       const result = yield* ThreadMessageIntake.launchThread({
         commandId,
         threadId,
@@ -106,6 +121,16 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
         ),
       );
       const thread = result.projection.thread;
+      if (input.sidebarParentThreadId !== undefined) {
+        yield* threads
+          .dispatch({
+            type: "thread.sidebar-parent.set",
+            commandId: yield* newCommandId(),
+            threadId: thread.id,
+            sidebarParentThreadId: input.sidebarParentThreadId,
+          })
+          .pipe(Effect.mapError(unavailable));
+      }
       const run = result.projection.runs.find((run) => run.userMessageId === messageId);
       return {
         threadId: thread.id,

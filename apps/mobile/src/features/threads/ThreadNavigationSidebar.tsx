@@ -298,7 +298,13 @@ function ThreadNavigationSidebarPane(
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    collapsedThreadGroupKeys,
+    toggleThreadGroup,
   } = useThreadListV2ShelfPreferences();
+  const toggleThreadGroupOf = useCallback(
+    (thread: EnvironmentThreadShell) => toggleThreadGroup(`${thread.environmentId}:${thread.id}`),
+    [toggleThreadGroup],
+  );
   // The queued-start and snooze helpers need a clock while the pane stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -385,8 +391,10 @@ function ThreadNavigationSidebarPane(
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: props.selectedThreadKey ?? null,
+      collapsedThreadGroupKeys,
     });
   }, [
+    collapsedThreadGroupKeys,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
@@ -716,6 +724,9 @@ function ThreadNavigationSidebarPane(
                 }),
               )}
               searchQuery={props.searchQuery}
+              nested={item.item.nested}
+              group={item.item.group}
+              onToggleGroup={toggleThreadGroupOf}
               pane="sidebar"
               selected={
                 scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
@@ -830,6 +841,7 @@ function ThreadNavigationSidebarPane(
       snoozeThread,
       toggleSettledShelf,
       toggleSnoozedShelf,
+      toggleThreadGroupOf,
       toggleWorkingShelf,
       unpinThread,
       unsettleThread,

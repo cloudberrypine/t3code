@@ -47,6 +47,7 @@ import {
   resolveThreadListV2Status,
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
+  type ThreadListV2Group,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
@@ -70,6 +71,14 @@ const STATUS_LABEL_BY_STATUS: Partial<
   working: { label: "Working", className: "text-adaptive-sky-600-400" },
   failed: { label: "Failed", className: "text-danger-foreground" },
   limited: { label: "Limited", className: "text-warning-foreground" },
+};
+
+// A collapsed parent's child count takes the hue of its most urgent child.
+const GROUP_STATUS_CLASS_NAME: Record<NonNullable<ThreadListV2Group["status"]>, string> = {
+  attention: "text-warning-foreground",
+  failed: "text-danger-foreground",
+  working: "text-adaptive-sky-600-400",
+  done: "text-adaptive-emerald-700-300",
 };
 
 // Menus keep lifecycle and title regeneration together. Archive keeps its
@@ -538,6 +547,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
+  /** Indented under its parent thread (see threadNesting.ts). */
+  readonly nested?: boolean;
+  /** Parent rows: the disclosure for the threads nested under this one. */
+  readonly group?: ThreadListV2Group;
+  readonly onToggleGroup?: (thread: EnvironmentThreadShell) => void;
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const {
@@ -919,9 +933,40 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : `Opens the thread. Swipe left for ${primaryAction.label.toLowerCase()} and snooze actions.`;
 
   // Sidebar rows use navigation foregrounds on their active and idle surfaces.
+  const group = props.group;
   const cardContent = (
     <>
       <View className="flex-row items-center gap-1.5">
+        {group && props.onToggleGroup ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${group.count} nested ${group.count === 1 ? "thread" : "threads"}`}
+            accessibilityState={{ expanded: !group.collapsed }}
+            hitSlop={10}
+            className="flex-row items-center gap-0.5"
+            onPress={() => props.onToggleGroup?.(thread)}
+          >
+            <SymbolView
+              name="chevron.right"
+              size={10}
+              tintColorClassName={rowAppearance.mutedIconTintClassName}
+              type="monochrome"
+              style={{ transform: [{ rotate: group.collapsed ? "0deg" : "90deg" }] }}
+            />
+            {group.collapsed ? (
+              <Text
+                className={cn(
+                  "text-xs tabular-nums",
+                  group.status === null
+                    ? rowAppearance.mutedForegroundClassName
+                    : GROUP_STATUS_CLASS_NAME[group.status],
+                )}
+              >
+                {group.count}
+              </Text>
+            ) : null}
+          </Pressable>
+        ) : null}
         {props.project ? (
           <ProjectFavicon
             environmentId={thread.environmentId}
@@ -1221,7 +1266,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     );
 
   return (
-    <View collapsable={false}>
+    <View collapsable={false} className={props.nested ? "pl-4" : undefined}>
       {customSnoozeOpen && (
         <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}

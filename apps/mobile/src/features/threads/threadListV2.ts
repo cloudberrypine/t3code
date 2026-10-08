@@ -23,6 +23,11 @@ import {
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  mostUrgentThreadGroupStatus,
+  nestThreads,
+  type ThreadGroupStatus,
+} from "@t3tools/client-runtime/state/thread-nesting";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
@@ -274,6 +279,25 @@ export interface ThreadListV2Item {
   /** Pinned-block row: renders the pin glyph and offers Unpin. */
   readonly pinned: boolean;
   readonly isLast: boolean;
+  /** Shown indented under its parent thread (see threadNesting.ts). */
+  readonly nested?: boolean;
+  /** Present on a parent row: its nested threads and their disclosure state. */
+  readonly group?: ThreadListV2Group;
+}
+
+export interface ThreadListV2Group {
+  readonly count: number;
+  readonly collapsed: boolean;
+  /** The most urgent child state, shown on the parent while collapsed. */
+  readonly status: ThreadGroupStatus | null;
+}
+
+function threadListV2GroupStatus(thread: EnvironmentThreadShell): ThreadGroupStatus | null {
+  const status = resolveThreadListV2Status(thread);
+  if (status === "approval" || status === "input") return "attention";
+  if (status === "failed" || status === "limited") return "failed";
+  if (status === "working" || status === "waiting") return "working";
+  return threadHasUnseenCompletion(thread) ? "done" : null;
 }
 
 export interface ThreadListV2Layout {
@@ -411,6 +435,10 @@ export function threadListV2ListItemsAreEqual(
         previous.item.variant === item.item.variant &&
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
+        previous.item.nested === item.item.nested &&
+        previous.item.group?.count === item.item.group?.count &&
+        previous.item.group?.collapsed === item.item.group?.collapsed &&
+        previous.item.group?.status === item.item.group?.status &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -526,8 +554,9 @@ export function buildThreadListV2ListItems(input: {
       canSnooze(item.thread, { now: input.snoozeLabelNow })
         ? input.snoozeLabelNow
         : undefined;
+    // Nested rows follow their parent: Move up/down arranges top-level rows.
     const move =
-      item.variant === "card"
+      item.variant === "card" && item.nested !== true
         ? input.moveAvailability?.get(`${item.thread.environmentId}:${item.thread.id}`)
         : undefined;
     return {
@@ -650,6 +679,8 @@ export function buildThreadListV2Items(input: {
       outbox. Such a thread has work the user is waiting on, so it stays in
       the active block even when the server has settled it. */
   readonly queuedThreadKeys?: ReadonlySet<string>;
+  /** Parent threads (`environmentId:threadId`) whose nested threads are hidden. */
+  readonly collapsedThreadGroupKeys?: ReadonlySet<string>;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -729,8 +760,14 @@ export function buildThreadListV2Items(input: {
   const orderedActive = workingShelfEnabled
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
     : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
-  // Newest send first; finishing and waking again do not move a row.
-  const orderedWorking = sortWorkingThreadsBySend(working);
+  // Nested threads leave their section and follow their parent's row.
+  const nesting = nestThreads([
+    applyPendingThreadOrder(sortPinnedThreadsByOrderKey(pinned), "pinned", pending),
+    orderedActive,
+    // Newest send first; finishing and waking again do not move a row.
+    sortWorkingThreadsBySend(working),
+  ]);
+  const [topPinned = [], topActive = [], orderedWorking = []] = nesting.sections;
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
@@ -764,38 +801,45 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  for (const thread of applyPendingThreadOrder(
-    sortPinnedThreadsByOrderKey(pinned),
-    "pinned",
-    pending,
-  )) {
+  const pushCard = (thread: EnvironmentThreadShell, pinned: boolean) => {
+    const children = nesting.childrenByParent.get(thread);
+    if (children === undefined) {
+      items.push({ thread, variant: "card", snoozed: false, pinned, isLast: false });
+      return;
+    }
+    const collapsed =
+      input.collapsedThreadGroupKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     items.push({
       thread,
       variant: "card",
       snoozed: false,
-      pinned: true,
+      pinned,
       isLast: false,
+      group: {
+        count: children.length,
+        collapsed,
+        status: collapsed
+          ? mostUrgentThreadGroupStatus(children.map(threadListV2GroupStatus))
+          : null,
+      },
     });
-  }
-  for (const thread of orderedActive) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      isLast: false,
-    });
-  }
+    for (const child of children) {
+      // A collapsed group still shows the selected thread, like the shelves.
+      if (collapsed && `${child.environmentId}:${child.id}` !== selectedThreadKey) continue;
+      items.push({
+        thread: child,
+        variant: "card",
+        snoozed: false,
+        pinned: child.pinnedAt != null,
+        isLast: false,
+        nested: true,
+      });
+    }
+  };
+  for (const thread of topPinned) pushCard(thread, true);
+  for (const thread of topActive) pushCard(thread, false);
   const workingShelfHeaderIndex = orderedWorking.length > 0 ? items.length : null;
-  for (const thread of visibleWorking) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      isLast: false,
-    });
-  }
+  for (const thread of visibleWorking) pushCard(thread, false);
   const snoozedShelfHeaderIndex = orderedSnoozed.length > 0 ? items.length : null;
   for (const thread of visibleSnoozed) {
     items.push({

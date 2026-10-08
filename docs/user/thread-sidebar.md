@@ -112,6 +112,22 @@ rename a thread, regenerate its title, or link and unlink a pull request. These 
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
 
+### Group threads under another thread
+
+To keep related threads together, show them indented under another thread of the same
+project. On web and desktop, drag a thread onto the middle of another thread's row (the
+dragged thread shows **Nest**), or choose **Show under** from its menu and pick the
+thread. **Remove from group** in the menu moves it back. Click the arrow on the parent
+row to collapse or expand its group; a collapsed parent shows how many threads it holds,
+colored by the one that most needs you. Each device remembers which groups you collapsed.
+Agents can nest the threads they launch, or move existing ones. Mobile shows the same
+groups and can collapse them.
+
+Grouping only changes where threads appear. Each thread keeps its own state: settling,
+snoozing, or archiving a parent does not change its children. A settled or snoozed thread
+shows in its own shelf, and the threads under a settled, snoozed, or archived parent show
+in the active list on their own until the parent returns. Groups are one level deep.
+
 ### Fold working threads (beta)
 
 Turn on **Settings → General → Working section (beta)** on web and desktop, or **Settings →

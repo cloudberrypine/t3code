@@ -13,6 +13,8 @@ const stationary = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
 const hidden = { ...stationary, scaleY: 0 };
 type ThreadItem = Extract<SidebarListItem, { kind: "thread" }>;
 type Layout = Parameters<SortingStrategy>[0];
+const isCardSection = (section: SidebarSection) =>
+  section === "pinned" || section === "active" || section === "working";
 const isShelfHeader = (item: SidebarListItem | undefined) =>
   item?.kind === "marker" &&
   (item.marker === "working-header" ||
@@ -144,9 +146,12 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active" || item.section === "working")
-        cardHeight ??= rects[index]?.height;
-      else slimHeight ??= rects[index]?.height;
+      if (item.section === "pinned" || item.section === "active" || item.section === "working") {
+        // The shortest card: a row holding nested threads is taller than one card.
+        const height = rects[index]?.height;
+        if (input.cardHeight === undefined && height)
+          cardHeight = cardHeight === undefined ? height : Math.min(cardHeight, height);
+      } else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
     }
     // Cards are 4.875rem + 0.25rem padding; slim rows/placeholders are h-9.
@@ -212,12 +217,14 @@ export function createSidebarSortingStrategy(input: {
           ? cardHeight
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
+      // A card that stays a card keeps its measured height, nested threads included.
+      const keepsHeight = moved && isCardSection(active.section) && isCardSection(target.section);
       return item.kind === "marker" &&
         (item.marker === "pinned-header" || item.marker === "pinned-divider")
         ? labelHeight
         : item.kind === "marker" && item.marker.endsWith("placeholder")
           ? slimHeight
-          : moved
+          : moved && !keepsHeight
             ? fallback
             : (rect?.height ?? fallback);
     });

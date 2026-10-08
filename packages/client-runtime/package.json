@@ -19,6 +19,10 @@
       "types": "./src/state/polyzoniaPlay.ts",
       "default": "./src/state/polyzoniaPlay.ts"
     },
+    "./state/thread-nesting": {
+      "types": "./src/state/threadNesting.ts",
+      "default": "./src/state/threadNesting.ts"
+    },
     "./cpp-navigation": {
       "types": "./src/cppNavigation.ts",
       "default": "./src/cppNavigation.ts"

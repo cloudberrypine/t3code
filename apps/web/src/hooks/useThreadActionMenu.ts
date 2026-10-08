@@ -12,6 +12,7 @@ import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
 import { resolveSnoozePresets } from "../components/Sidebar.snooze";
+import { parseNestMenuChoice, readThreadNestingMenuState } from "../components/Sidebar.nesting";
 import {
   buildThreadActionMenuItems,
   type ThreadActionMenuId,
@@ -90,6 +91,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadSidebarParent,
     archiveThread,
     deleteThread,
     markThreadUnread,
@@ -153,10 +155,22 @@ export function useThreadActionMenu(input: {
           isRunning: !threadRuntimeCanArchive(thread.runtime),
           supports,
           snoozePresets,
+          nesting: readThreadNestingMenuState(thread),
         });
         const clicked = await settlePromise(() => api.contextMenu.show(items, position));
         if (clicked._tag === "Failure" || clicked.value === null) return;
         const action: ThreadActionMenuId = clicked.value;
+        const nestUnder = parseNestMenuChoice(action);
+        if (nestUnder !== null || action === "unnest") {
+          const result = await setThreadSidebarParent(threadRef, nestUnder);
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            failureToast(
+              nestUnder === null ? "Failed to ungroup thread" : "Failed to group thread",
+              squashAtomCommandFailure(result),
+            );
+          }
+          return;
+        }
         if (action.startsWith("snooze:")) {
           const preset =
             action === "snooze:custom"
@@ -342,6 +356,7 @@ export function useThreadActionMenu(input: {
       projects,
       router,
       setThreadAutoSettle,
+      setThreadSidebarParent,
       settleThread,
       snoozeThread,
       threadRef,

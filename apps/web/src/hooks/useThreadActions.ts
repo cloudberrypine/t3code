@@ -275,6 +275,9 @@ export function useThreadActions() {
   const reorderActiveThreadMutation = useAtomCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
+  const setThreadSidebarParentMutation = useAtomCommand(threadEnvironment.setSidebarParent, {
+    reportFailure: false,
+  });
   const snoozeThreadMutation = useAtomCommand(threadEnvironment.snooze, {
     reportFailure: false,
   });
@@ -859,6 +862,16 @@ export function useThreadActions() {
     [reorderActiveThreadMutation],
   );
 
+  /** Show `target` under another thread of its project, or at the top level with null. */
+  const setThreadSidebarParent = useCallback(
+    (target: ScopedThreadRef, sidebarParentThreadId: ThreadId | null) =>
+      setThreadSidebarParentMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, sidebarParentThreadId },
+      }),
+    [setThreadSidebarParentMutation],
+  );
+
   const unsnoozeThread = useCallback(
     async (target: ScopedThreadRef) => {
       if (!readEnvironmentSupportsSnooze(target.environmentId)) {
@@ -972,6 +985,7 @@ export function useThreadActions() {
       confirmAndUnpinThread,
       reorderPinnedThread,
       reorderActiveThread,
+      setThreadSidebarParent,
       markThreadUnread,
       setThreadAutoSettle,
     }),
@@ -985,6 +999,7 @@ export function useThreadActions() {
       reorderPinnedThread,
       reorderActiveThread,
       setThreadAutoSettle,
+      setThreadSidebarParent,
       settleThread,
       snoozeThread,
       unarchiveThread,

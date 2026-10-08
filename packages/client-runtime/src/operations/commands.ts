@@ -105,6 +105,11 @@ export interface ReorderActiveThreadInput extends ThreadCommandInput {
   readonly orderKey: string;
 }
 
+export interface SetThreadSidebarParentInput extends ThreadCommandInput {
+  /** Thread to show this one under; null moves it back to the top level. */
+  readonly sidebarParentThreadId: ThreadId | null;
+}
+
 export interface SnoozeThreadInput extends ThreadCommandInput {
   readonly snoozedUntil: string;
 }
@@ -495,6 +500,17 @@ export const reorderActiveThread = Effect.fn("EnvironmentCommands.reorderActiveT
     orderKey: input.orderKey,
   });
 });
+
+export const setThreadSidebarParent = Effect.fn("EnvironmentCommands.setThreadSidebarParent")(
+  function* (input: SetThreadSidebarParentInput) {
+    return yield* dispatch({
+      type: "thread.sidebar-parent.set",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      sidebarParentThreadId: input.sidebarParentThreadId,
+    });
+  },
+);
 
 export const unpinThread = Effect.fn("EnvironmentCommands.unpinThread")(function* (
   input: UnpinThreadInput,

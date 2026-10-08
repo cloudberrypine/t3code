@@ -893,3 +893,40 @@ describe("lifted card clearance", () => {
     expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
   });
 });
+
+describe("sidebar sorting strategy with nested threads", () => {
+  it("opens a gap the size of a lifted row and its nested threads", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("a", "active"),
+      thread("group", "active"),
+      thread("b", "active"),
+      thread("c", "active"),
+      settledHeader,
+      marker("settled-placeholder"),
+    ];
+    const heights = [0, 0, 82, 200, 82, 82, 32, 0];
+    let top = 100;
+    const rects = heights.map((height) => {
+      const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
+      top += height + 1;
+      return rect;
+    });
+    const strategy = createSidebarSortingStrategy({
+      items,
+      settledOrder: [],
+      settledExpanded: false,
+    });
+    const args = {
+      activeIndex: 3,
+      overIndex: 4,
+      activeNodeRect: rects[3]!,
+      rects,
+      index: 0,
+    } satisfies Parameters<SortingStrategy>[0];
+    // b moves up into the group's place, and c, below the new slot, stays put.
+    expect(strategy({ ...args, index: 4 })?.y).toBe(-201);
+    expect(strategy({ ...args, index: 5 })?.y).toBe(0);
+  });
+});

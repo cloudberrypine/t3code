@@ -294,6 +294,25 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
         case "mark_unread":
           command = { ...common, type: "thread.mark-unread" };
           break;
+        case "nest": {
+          if (input.parentThreadId === undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "nest requires parentThreadId.",
+            });
+          }
+          // Resolves within the calling project, so a parent elsewhere is not found.
+          const parent = yield* readThread(input.parentThreadId);
+          command = {
+            ...common,
+            type: "thread.sidebar-parent.set",
+            sidebarParentThreadId: parent.projection.thread.id,
+          };
+          break;
+        }
+        case "unnest":
+          command = { ...common, type: "thread.sidebar-parent.set", sidebarParentThreadId: null };
+          break;
         default:
           command = { ...common, type: `thread.${input.action}` };
       }

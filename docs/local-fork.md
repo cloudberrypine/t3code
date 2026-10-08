@@ -55,6 +55,16 @@ lazily loaded diff lands on the wrong file, because files load in above it. The 
 lives in `apps/web/src/components/diffs/singleFileDiff.ts` plus a few lines in `DiffPanel.tsx`.
 The phone's review screen is a separate native view and still scrolls through every file.
 
+Threads can be shown under another thread in the sidebar (`sidebarParentThreadId`, set by
+`thread.sidebar-parent.set`, `t3_thread_organize` nest/unnest, or `sidebarParentThreadId` on
+`t3_thread_launch`). It is display only, deliberately separate from subagent lineage, which hides
+threads and carries delegation, wake, and notification behavior. The grouping rule is
+`packages/client-runtime/src/state/threadNesting.ts`, shared by the web sidebar
+(`Sidebar.nesting.tsx`) and the mobile list (`threadListV2.ts`). On web, children render inside
+their parent's row element rather than as sortable items, so the pinned and active orders stay
+top-level lists. The drag preview in `Sidebar.drag.ts` measures card height from the shortest card
+for that reason.
+
 ## Mobile code navigation, line comments and citations
 
 Mobile reuses desktop's logic rather than its own copies: code is coloured with desktop's Pierre

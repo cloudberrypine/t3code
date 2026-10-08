@@ -473,7 +473,13 @@ export function HomeScreen(props: HomeScreenProps) {
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    collapsedThreadGroupKeys,
+    toggleThreadGroup,
   } = useThreadListV2ShelfPreferences();
+  const toggleThreadGroupOf = useCallback(
+    (thread: EnvironmentThreadShell) => toggleThreadGroup(`${thread.environmentId}:${thread.id}`),
+    [toggleThreadGroup],
+  );
   // The queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -564,8 +570,10 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: null,
+      collapsedThreadGroupKeys,
     });
   }, [
+    collapsedThreadGroupKeys,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
@@ -746,6 +754,9 @@ export function HomeScreen(props: HomeScreenProps) {
             }),
           )}
           searchQuery={props.searchQuery}
+          nested={item.item.nested}
+          group={item.item.group}
+          onToggleGroup={toggleThreadGroupOf}
           onSelectThread={props.onSelectThread}
           onDeleteThread={handleDeleteThread}
           onArchiveThread={props.onArchiveThread}
@@ -812,6 +823,7 @@ export function HomeScreen(props: HomeScreenProps) {
       titleRegenerationEnvironmentIds,
       toggleSettledShelf,
       toggleSnoozedShelf,
+      toggleThreadGroupOf,
       toggleWorkingShelf,
       v2ProjectTitleByProjectKey,
       props.searchQuery,

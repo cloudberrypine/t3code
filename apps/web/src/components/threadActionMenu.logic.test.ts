@@ -172,6 +172,23 @@ describe("buildThreadActionMenuItems", () => {
   });
 });
 
+describe("buildThreadActionMenuItems nesting", () => {
+  it("offers parents only where the server stores nesting", () => {
+    expect(allIds(baseState).some((id) => id.startsWith("nest"))).toBe(false);
+    const candidates = [{ id: "c2", title: "Tree Lifecycle (C2)" }];
+    expect(allIds({ ...baseState, nesting: { isNested: false, candidates } })).toEqual(
+      expect.arrayContaining(["nest", "nest:c2"]),
+    );
+    expect(ids({ ...baseState, nesting: { isNested: false, candidates } })).not.toContain("unnest");
+  });
+
+  it("lets a nested thread leave its group even with nowhere else to go", () => {
+    const items = ids({ ...baseState, nesting: { isNested: true, candidates: [] } });
+    expect(items).toContain("unnest");
+    expect(items).not.toContain("nest");
+  });
+});
+
 describe("buildDraftActionMenuItems", () => {
   it("offers only the copy values the draft has", () => {
     const items = buildDraftActionMenuItems({ hasPath: false, hasBranch: true, hasProject: true });

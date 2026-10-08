@@ -387,6 +387,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.unpin":
     case "thread.pin.reorder":
     case "thread.active.reorder":
+    case "thread.sidebar-parent.set":
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
@@ -2324,6 +2325,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.unpin"
           | "thread.pin.reorder"
           | "thread.active.reorder"
+          | "thread.sidebar-parent.set"
           | "thread.mark-unread"
           | "thread.metadata.update"
           | "thread.pull-request.link"
@@ -2417,6 +2419,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.unpin" ||
         command.type === "thread.pin.reorder" ||
         command.type === "thread.active.reorder" ||
+        command.type === "thread.sidebar-parent.set" ||
         command.type === "thread.pull-request.sync") &&
       thread.archivedAt !== null
     ) {
@@ -2444,6 +2447,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} is not active and cannot be reordered.`,
+      });
+    }
+    if (
+      command.type === "thread.sidebar-parent.set" &&
+      command.sidebarParentThreadId === command.threadId
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} cannot be shown under itself.`,
       });
     }
     if (command.type === "thread.pull-request.sync") {
@@ -2786,6 +2799,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         }
+        case "thread.sidebar-parent.set":
+          // Grouping in the thread list is not thread activity either.
+          return { ...thread, sidebarParentThreadId: command.sidebarParentThreadId };
         case "thread.mark-unread":
           return { ...thread, lastVisitedAt: markUnreadVisitedAt };
         case "thread.metadata.update": {
@@ -3093,6 +3109,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.pin-reordered" as const;
         case "thread.active.reorder":
           return "thread.active-reordered" as const;
+        case "thread.sidebar-parent.set":
+          return "thread.sidebar-parent-set" as const;
         case "thread.mark-unread":
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
@@ -9516,6 +9534,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.unpin":
       case "thread.pin.reorder":
       case "thread.active.reorder":
+      case "thread.sidebar-parent.set":
       case "thread.mark-unread":
       case "thread.metadata.update":
       case "thread.pull-request.link":

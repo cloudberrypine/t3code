@@ -1769,6 +1769,41 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         orderKey: "a0",
       });
       assert.equal((yield* orchestrator.getThreadProjection(threadId)).thread.activeOrderKey, "a0");
+      // Sidebar nesting is display only: it reaches the shell without
+      // counting as thread activity, and a thread cannot nest under itself.
+      const beforeNest = yield* orchestrator.getThreadProjection(threadId);
+      const sidebarParentThreadId = ThreadId.make("runtime-layer-lifecycle-parent");
+      yield* orchestrator.dispatch({
+        type: "thread.sidebar-parent.set",
+        commandId: CommandId.make("runtime-layer-lifecycle-nest"),
+        threadId,
+        sidebarParentThreadId,
+      });
+      const nested = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(nested.thread.sidebarParentThreadId, sidebarParentThreadId);
+      assert.isTrue(DateTime.Equivalence(nested.thread.updatedAt, beforeNest.thread.updatedAt));
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.sidebarParentThreadId,
+        sidebarParentThreadId,
+      );
+      const selfNest = yield* orchestrator
+        .dispatch({
+          type: "thread.sidebar-parent.set",
+          commandId: CommandId.make("runtime-layer-lifecycle-nest-self"),
+          threadId,
+          sidebarParentThreadId: threadId,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(selfNest, Orchestrator.OrchestratorDispatchError);
+      yield* orchestrator.dispatch({
+        type: "thread.sidebar-parent.set",
+        commandId: CommandId.make("runtime-layer-lifecycle-unnest"),
+        threadId,
+        sidebarParentThreadId: null,
+      });
+      assert.isNull(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.sidebarParentThreadId,
+      );
 
       // Automatic settlement (#8600): a stale snapshot loses to any change
       // made after it, and a fresh one settles like a user settle would.

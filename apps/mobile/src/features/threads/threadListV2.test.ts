@@ -2302,3 +2302,52 @@ describe("Working section beta", () => {
     ]);
   });
 });
+
+describe("buildThreadListV2Items nesting", () => {
+  const parent = makeThread({ id: ThreadId.make("c2"), title: "Tree Lifecycle (C2)" });
+  const owl = makeThread({
+    id: ThreadId.make("owl"),
+    title: "Pygmy Owl",
+    sidebarParentThreadId: ThreadId.make("c2"),
+    createdAt: "2026-06-01T09:30:00.000Z",
+  });
+  const settledBeetle = makeThread({
+    id: ThreadId.make("beetle"),
+    title: "Titan Beetle",
+    sidebarParentThreadId: ThreadId.make("c2"),
+    settledOverride: "settled",
+  });
+  const rows = (layout: ReturnType<typeof buildThreadListV2Items>) =>
+    layout.items.map((item) => [item.thread.id, item.nested === true, item.group?.count ?? 0]);
+
+  it("lists unsettled children under their parent and settled ones in the tail", () => {
+    const layout = buildThreadListV2Items({
+      threads: [owl, settledBeetle, parent],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    expect(rows(layout)).toEqual([
+      ["c2", false, 1],
+      ["owl", true, 0],
+      ["beetle", false, 0],
+    ]);
+  });
+
+  it("hides a collapsed group's children except the selected thread", () => {
+    const base = {
+      threads: [owl, parent],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      collapsedThreadGroupKeys: new Set([`${environmentId}:c2`]),
+    };
+    expect(rows(buildThreadListV2Items(base))).toEqual([["c2", false, 1]]);
+    expect(
+      rows(buildThreadListV2Items({ ...base, selectedThreadKey: `${environmentId}:owl` })),
+    ).toEqual([
+      ["c2", false, 1],
+      ["owl", true, 0],
+    ]);
+  });
+});

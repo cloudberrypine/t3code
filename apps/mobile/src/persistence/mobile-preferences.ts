@@ -52,6 +52,8 @@ export interface Preferences {
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
+  /** Parent threads (`environmentId:threadId`) whose nested threads are hidden. */
+  readonly collapsedThreadGroups?: readonly string[];
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -115,6 +117,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
+    collapsedThreadGroups?: readonly string[];
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -207,6 +210,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
     preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
+  }
+  if (Array.isArray(parsed.collapsedThreadGroups)) {
+    preferences.collapsedThreadGroups = parsed.collapsedThreadGroups.filter(
+      (key): key is string => typeof key === "string",
+    );
   }
   return preferences;
 }

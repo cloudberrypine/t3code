@@ -263,3 +263,75 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
     expect(named).toEqual(["Pinball Stats"]);
   }),
 );
+
+it.effect("shows a launched thread under the requested sidebar parent", () =>
+  Effect.gen(function* () {
+    const sourceThreadId = ThreadId.make("level-thread");
+    const projectId = ProjectId.make("project");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const modelSelection = { instanceId: providerInstanceId, model: "gpt-5" };
+    const caller = {
+      id: sourceThreadId,
+      projectId,
+      providerInstanceId,
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      activeRunId: "active-run",
+      archivedAt: null,
+      deletedAt: null,
+    } as OrchestrationV2ThreadShell;
+    const dispatched: unknown[] = [];
+    const dependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment"),
+        threadId: sourceThreadId,
+        providerSessionId: "session",
+        providerInstanceId,
+        issuedAt: 0,
+        capabilities: new Set(["orchestration" as const]),
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(caller),
+        getProjectThreadRecords: (input) =>
+          Effect.succeed({ thread: { id: input.threadId, projectId } } as never),
+        dispatch: (command) => {
+          dispatched.push(command);
+          return Effect.succeed({ sequence: 1 } as never);
+        },
+      }),
+      Layer.mock(ThreadLaunch.ThreadLaunchService)({
+        launch: (input) =>
+          Effect.succeed({
+            threadId: input.threadId,
+            projection: {
+              thread: { id: input.threadId, projectId, modelSelection },
+              runs: [],
+            },
+            resumed: false,
+          } as unknown as ThreadLaunch.ThreadLaunchResult),
+      }),
+      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      NodeServices.layer,
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-sidebar-parent-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(ProjectHandlersLive.pipe(Layer.provide(dependencies))),
+    );
+    const result = yield* toolkit
+      .handle("t3_thread_launch", { title: "Species", sidebarParentThreadId: sourceThreadId })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    const threadId = (result.at(-1)?.result as { threadId: ThreadId }).threadId;
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        type: "thread.sidebar-parent.set",
+        threadId,
+        sidebarParentThreadId: sourceThreadId,
+      }),
+    ]);
+  }),
+);

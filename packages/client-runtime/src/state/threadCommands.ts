@@ -41,6 +41,7 @@ import {
   type PinThreadInput,
   type ReorderPinnedThreadInput,
   type ReorderActiveThreadInput,
+  type SetThreadSidebarParentInput,
   type SetThreadAutoSettleInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
@@ -77,6 +78,7 @@ import {
   pinThread,
   reorderPinnedThread,
   reorderActiveThread,
+  setThreadSidebarParent,
   setThreadAutoSettle,
   settleThread,
   snoozeThread,
@@ -121,6 +123,7 @@ export type {
   PinThreadInput,
   ReorderPinnedThreadInput,
   ReorderActiveThreadInput,
+  SetThreadSidebarParentInput,
   SetThreadAutoSettleInput,
   SettleThreadInput,
   SnoozeThreadInput,
@@ -223,6 +226,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:reorder-active",
       execute: (input: ReorderActiveThreadInput) => reorderActiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    setSidebarParent: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-sidebar-parent",
+      execute: (input: SetThreadSidebarParentInput) => setThreadSidebarParent(input),
       scheduler,
       concurrency,
     }),
@@ -482,6 +491,10 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: optimistic.wrap(commands.reorderActive, (thread, input) => ({
       ...thread,
       activeOrderKey: input.orderKey,
+    })),
+    setSidebarParent: optimistic.wrap(commands.setSidebarParent, (thread, input) => ({
+      ...thread,
+      sidebarParentThreadId: input.sidebarParentThreadId,
     })),
   };
 }
