@@ -30,6 +30,12 @@ connection. Pull request diffs and provider settings keep working after the
 previous credential expires. A failed renewal affects that request; it does not
 disconnect an otherwise healthy conversation.
 
+If a mobile file view reports a missing file permission, update the mobile app
+first. For a directly paired connection, create a fresh pairing link with **Read
+files** (and **Edit files** if needed) enabled, then pair again. For a T3 Connect
+connection, sign out of T3 Connect on the phone and sign back in. Existing sessions
+do not gain newly approved permissions automatically.
+
 ## Pair over a LAN or private network
 
 Use direct pairing when the other device can reach the host's network address.

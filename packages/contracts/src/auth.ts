@@ -81,6 +81,8 @@ export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 export const AuthOrchestrationReadScope = "orchestration:read" as const;
 export const AuthOrchestrationOperateScope = "orchestration:operate" as const;
 export const AuthTerminalOperateScope = "terminal:operate" as const;
+export const AuthFilesystemReadScope = "filesystem:read" as const;
+export const AuthFilesystemWriteScope = "filesystem:write" as const;
 export const AuthReviewWriteScope = "review:write" as const;
 export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
@@ -90,6 +92,8 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
   AuthReviewWriteScope,
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -104,6 +108,8 @@ export const AuthStandardClientScopes = [
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
   AuthReviewWriteScope,
   AuthRelayReadScope,
 ] as const;

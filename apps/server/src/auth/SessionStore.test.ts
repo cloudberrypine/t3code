@@ -338,6 +338,8 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
         "orchestration:read",
         "orchestration:operate",
         "terminal:operate",
+        "filesystem:read",
+        "filesystem:write",
         "review:write",
         "relay:read",
       ]);

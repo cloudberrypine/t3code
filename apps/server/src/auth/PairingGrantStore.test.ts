@@ -79,6 +79,8 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
         "orchestration:read",
         "orchestration:operate",
         "terminal:operate",
+        "filesystem:read",
+        "filesystem:write",
         "review:write",
         "relay:read",
       ]);
@@ -150,6 +152,8 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
         "orchestration:read",
         "orchestration:operate",
         "terminal:operate",
+        "filesystem:read",
+        "filesystem:write",
         "review:write",
         "relay:read",
         "access:read",

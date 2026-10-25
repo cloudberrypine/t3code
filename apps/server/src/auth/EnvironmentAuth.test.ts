@@ -1,5 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthAdministrativeScopes } from "@t3tools/contracts";
+import {
+  AuthAdministrativeScopes,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
+  AuthStandardClientScopes,
+} from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -332,10 +337,82 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         "orchestration:read",
         "orchestration:operate",
         "terminal:operate",
+        "filesystem:read",
+        "filesystem:write",
         "review:write",
         "relay:read",
       ]);
       expect(verified.subject).toBe("one-time-token");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("retains approved file access in standard bearer and relay token exchanges", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+
+      for (const proofKeyThumbprint of [undefined, "mobile-relay-proof-key"]) {
+        const pairing = yield* serverAuth.issuePairingCredential({
+          scopes: [
+            "orchestration:read",
+            "orchestration:operate",
+            "terminal:operate",
+            "filesystem:read",
+            "filesystem:write",
+            "review:write",
+            "relay:read",
+          ],
+        });
+        const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+          pairing.credential,
+          AuthStandardClientScopes,
+          { ...requestMetadata, deviceType: "mobile" },
+          proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
+        );
+        const session = yield* sessions.verify(token.access_token);
+
+        expect(token.token_type).toBe(proofKeyThumbprint ? "DPoP" : "Bearer");
+        expect(token.scope.split(" ")).toEqual(
+          expect.arrayContaining(["filesystem:read", "filesystem:write"]),
+        );
+        expect(session.scopes).toEqual(
+          expect.arrayContaining(["filesystem:read", "filesystem:write"]),
+        );
+        expect(session.proofKeyThumbprint).toBe(proofKeyThumbprint);
+      }
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("does not add unapproved file access to a restricted pairing grant", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+
+      for (const missingScope of [AuthFilesystemReadScope, AuthFilesystemWriteScope]) {
+        const approvedScopes = AuthStandardClientScopes.filter((scope) => scope !== missingScope);
+        const pairing = yield* serverAuth.issuePairingCredential({ scopes: approvedScopes });
+        const error = yield* serverAuth
+          .exchangeBootstrapCredentialForAccessToken(
+            pairing.credential,
+            AuthStandardClientScopes,
+            requestMetadata,
+          )
+          .pipe(Effect.flip);
+        expect(error._tag).toBe("ServerAuthScopeNotGrantedError");
+
+        const restrictedPairing = yield* serverAuth.issuePairingCredential({
+          scopes: approvedScopes,
+        });
+        const token = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+          restrictedPairing.credential,
+          undefined,
+          requestMetadata,
+        );
+        const session = yield* sessions.verify(token.access_token);
+        expect(session.scopes).toEqual(approvedScopes);
+        expect(session.scopes).not.toContain(missingScope);
+        expect(token.scope.split(" ")).not.toContain(missingScope);
+      }
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 
@@ -490,6 +567,8 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         "orchestration:read",
         "orchestration:operate",
         "terminal:operate",
+        "filesystem:read",
+        "filesystem:write",
         "review:write",
         "relay:read",
         "access:read",

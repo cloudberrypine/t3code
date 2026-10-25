@@ -24,6 +24,8 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -237,6 +239,16 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthTerminalOperateScope,
     title: "Use terminals",
     description: "Create terminals and send input to running shells.",
+  },
+  {
+    scope: AuthFilesystemReadScope,
+    title: "Read files",
+    description: "Browse and read files in the environment.",
+  },
+  {
+    scope: AuthFilesystemWriteScope,
+    title: "Edit files",
+    description: "Create and edit files in the environment.",
   },
   {
     scope: AuthReviewWriteScope,
