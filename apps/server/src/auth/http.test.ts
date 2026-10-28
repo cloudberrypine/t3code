@@ -1,5 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentHttpApi } from "@t3tools/contracts";
+import {
+  AuthAccessTokenType,
+  AuthAccessTokenResult,
+  AuthEnvironmentBootstrapTokenType,
+  AuthFilesystemReadScope,
+  AuthFilesystemWriteScope,
+  AuthStandardClientScopes,
+  AuthTokenExchangeGrantType,
+  EnvironmentHttpApi,
+  type AuthEnvironmentScope,
+} from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -56,6 +66,7 @@ const routesLayer = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(NodeServices.layer),
 );
 
+const decodeAccessToken = Schema.decodeUnknownSync(AuthAccessTokenResult);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const postJson = (path: string, body: unknown, headers?: Readonly<Record<string, string>>) =>
   new Request(`http://127.0.0.1${path}`, {
@@ -134,3 +145,103 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+const legacyClientScopes = AuthStandardClientScopes.filter(
+  (scope) => scope !== AuthFilesystemReadScope && scope !== AuthFilesystemWriteScope,
+);
+
+it.effect.each([
+  { label: "none", scopes: legacyClientScopes },
+  { label: "read", scopes: [...legacyClientScopes, AuthFilesystemReadScope] },
+  { label: "write", scopes: [...legacyClientScopes, AuthFilesystemWriteScope] },
+  { label: "read and write", scopes: AuthStandardClientScopes },
+])("exchanges pairing tokens with filesystem scopes: $label", ({ scopes }) =>
+  checkPairingExchange(scopes, scopes, 200),
+);
+
+it.effect("rejects unknown token exchange scopes", () =>
+  checkPairingExchange(AuthStandardClientScopes, ["filesystem:unknown"], 400, "invalid_scope"),
+);
+
+it.effect.each([AuthFilesystemReadScope, AuthFilesystemWriteScope])(
+  "refuses %s when the pairing grant does not allow it",
+  (scope) =>
+    checkPairingExchange(
+      legacyClientScopes,
+      [...legacyClientScopes, scope],
+      400,
+      "scope_not_granted",
+    ),
+);
+
+it.effect("inherits the pairing grant when an old client omits scope", () =>
+  checkPairingExchange(legacyClientScopes, undefined, 200),
+);
+
+function checkPairingExchange(
+  grantedScopes: ReadonlyArray<AuthEnvironmentScope>,
+  requestedScopes: ReadonlyArray<string> | undefined,
+  expectedStatus: number,
+  expectedReason?: string,
+) {
+  return Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: () => Effect.void,
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const requestContext = Context.make(Crypto.Crypto, crypto).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
+    );
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(routesLayer, { disableLogger: true })),
+      (environment) =>
+        Effect.tryPromise(async () => {
+          const devResponse = await environment.handler(
+            postJson("/api/auth/browser-session", { credential: DEV_TOKEN }),
+            requestContext,
+          );
+          expect(devResponse.status).toBe(200);
+          const cookie =
+            devResponse.headers
+              .getSetCookie()
+              .find((value) => value.startsWith("t3_dev_session_"))
+              ?.split(";", 1)[0] ?? "";
+          const pairingResponse = await environment.handler(
+            postJson("/api/auth/pairing-token", { scopes: grantedScopes }, { cookie }),
+            requestContext,
+          );
+          expect(pairingResponse.status).toBe(200);
+          const pairing = (await pairingResponse.json()) as { credential: string };
+          const response = await environment.handler(
+            new Request("http://127.0.0.1/oauth/token", {
+              method: "POST",
+              body: new URLSearchParams({
+                grant_type: AuthTokenExchangeGrantType,
+                subject_token: pairing.credential,
+                subject_token_type: AuthEnvironmentBootstrapTokenType,
+                requested_token_type: AuthAccessTokenType,
+                ...(requestedScopes ? { scope: requestedScopes.join(" ") } : {}),
+              }),
+            }),
+            requestContext,
+          );
+          expect(response.status).toBe(expectedStatus);
+          const result = await response.json();
+          if (expectedReason) {
+            expect(result).toMatchObject({ reason: expectedReason });
+          } else {
+            const token = decodeAccessToken(result);
+            expect(token.token_type).toBe("Bearer");
+            expect(token.scope.split(" ").sort()).toEqual(
+              [...(requestedScopes ?? grantedScopes)].sort(),
+            );
+          }
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(NodeServices.layer));
+}
