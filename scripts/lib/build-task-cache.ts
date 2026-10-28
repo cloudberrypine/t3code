@@ -8,6 +8,17 @@ export const buildTaskCacheEnabled = process.env.T3CODE_BUILD_CACHE === "1";
 
 export function buildTaskCache(options: { readonly input?: Array<string | { auto: true }> } = {}) {
   return buildTaskCacheEnabled
-    ? { env: ["APP_VERSION", "NODE_ENV", "T3CODE_*", "VERCEL_*", "VITE_*"], ...options }
+    ? {
+        env: ["APP_VERSION", "NODE_ENV", "T3CODE_*", "VERCEL_*", "VITE_*", "EXPO_PUBLIC_*"],
+        // Config is read while loading Vite configs, before task file tracking starts.
+        // Explicit workspace inputs also catch creation/removal of ignored env files.
+        input: [
+          ...(options.input ?? [{ auto: true }]),
+          { base: "workspace" as const, pattern: ".env" },
+          { base: "workspace" as const, pattern: ".env.local" },
+          { base: "workspace" as const, pattern: ".env.example" },
+          { base: "workspace" as const, pattern: "scripts/lib/public-config.ts" },
+        ],
+      }
     : false;
 }

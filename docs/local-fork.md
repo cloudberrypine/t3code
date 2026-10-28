@@ -218,7 +218,11 @@ which takes about 30 seconds longer.
 
 `T3CODE_BUILD_CACHE=1` turns on our opt-in `vp run` cache for the web and server bundles (see
 `scripts/lib/build-task-cache.ts`; upstream leaves them uncached). Unchanged bundles are restored
-from `node_modules/.vite/task-cache` of that checkout. The build version and embedded commit are
+from `node_modules/.vite/task-cache` of that checkout. Connect's four public build values default
+to the committed `.env.example`, so worktrees need no `.env` for T3 Connect. Nonempty process
+environment, `.env.local`, and `.env` values override those defaults, in that order (legacy aliases
+also work). Both cached builds explicitly fingerprint the root env files and public config loader,
+as well as environment overrides, so changing configuration invalidates the cache. The build version and embedded commit are
 written after the cached steps, so every build gets its own. vp keeps one entry per task, so going
 back to older sources rebuilds; `vp cache clean` clears it. Measured on 5 October 2026: about 34
 seconds after a web change, 14 after a server-only change and 12 with no change, against 63 for

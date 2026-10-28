@@ -32,7 +32,18 @@ export function loadRepoEnv({
 } = {}): Record<string, string | undefined> {
   const rootEnv = readEnvFile(NodePath.join(repoRoot, ".env"));
   const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
-  const config = resolvePublicConfig(baseEnv, localEnv, rootEnv);
+  // Only Connect's committed public defaults belong here, not example dev settings
+  // or telemetry credentials. Worktrees normally have no untracked .env file.
+  const exampleEnv = readEnvFile(NodePath.join(repoRoot, ".env.example"));
+  const connectDefaults = Object.fromEntries(
+    [
+      "T3CODE_CLERK_PUBLISHABLE_KEY",
+      "T3CODE_CLERK_JWT_TEMPLATE",
+      "T3CODE_CLERK_CLI_OAUTH_CLIENT_ID",
+      "T3CODE_RELAY_URL",
+    ].map((name) => [name, exampleEnv[name]]),
+  );
+  const config = resolvePublicConfig(baseEnv, localEnv, rootEnv, connectDefaults);
 
   return {
     ...rootEnv,
