@@ -674,6 +674,14 @@ describe("RemoteEnvironmentAuthorization", () => {
             url: `${ENDPOINT.httpBaseUrl}/oauth/token`,
           },
         ]);
+        const tokenRequest = harness.fetch.calls.find(([url]) =>
+          String(url).endsWith("/oauth/token"),
+        );
+        const tokenBody = tokenRequest?.[1].body;
+        const tokenParams = new URLSearchParams(
+          tokenBody instanceof Uint8Array ? new TextDecoder().decode(tokenBody) : String(tokenBody),
+        );
+        expect(tokenParams.has("scope")).toBe(false);
       }),
   );
 

@@ -150,13 +150,18 @@ const legacyClientScopes = AuthStandardClientScopes.filter(
   (scope) => scope !== AuthFilesystemReadScope && scope !== AuthFilesystemWriteScope,
 );
 
-it.effect.each([
+const fileScopeCases = [
   { label: "none", scopes: legacyClientScopes },
   { label: "read", scopes: [...legacyClientScopes, AuthFilesystemReadScope] },
   { label: "write", scopes: [...legacyClientScopes, AuthFilesystemWriteScope] },
   { label: "read and write", scopes: AuthStandardClientScopes },
-])("exchanges pairing tokens with filesystem scopes: $label", ({ scopes }) =>
-  checkPairingExchange(scopes, scopes, 200),
+];
+it.effect.each(fileScopeCases)(
+  "exchanges pairing tokens with filesystem scopes: $label",
+  ({ scopes }) => checkPairingExchange(scopes, scopes, 200),
+);
+it.effect.each(fileScopeCases)("inherits approved filesystem scopes: $label", ({ scopes }) =>
+  checkPairingExchange(scopes, undefined, 200),
 );
 
 it.effect("rejects unknown token exchange scopes", () =>
