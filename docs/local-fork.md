@@ -232,6 +232,43 @@ the old uncached ZIP build.
 Use a unique `+local` version. Local builds disable automatic updates so custom features stay.
 As of 6 October 2026 the installed build is `0.0.46+local.20261006.playweb.1`.
 
+## Windows x64 build and install (Win1)
+
+Use a short clone path, `C:\pz\t3code`, on branch `polyzonia`. Install Vite+ 1.0.0
+(`$env:VP_VERSION = '1.0.0'` before running the official `https://vite.plus/ps1` installer).
+Use its managed Node 24.13.1 and the repo's pnpm 11.10.0. Install stable Rust through
+rustup with host and target `x86_64-pc-windows-msvc`, Python 3, and Visual Studio C++
+with a Windows SDK and `Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`.
+Do not reboot automatically if an installer requests one.
+
+```powershell
+git clone --branch polyzonia git@github.com:cloudberrypine/t3code.git C:\pz\t3code
+Set-Location C:\pz\t3code
+git config core.longpaths true
+vp env default 24.13.1
+vp env install
+vp install --frozen-lockfile
+vp run dist:desktop:win:x64 --build-version 0.0.46+local.20261029.polycode.win1 --output-dir release/win1
+```
+
+Before building, securely copy M5's root `.env` into the clone, without committing it.
+The build is unsigned by default. The optional `--wsl-runtime` Linux CLI archive used
+by release CI is omitted for this native Windows build. WSL backend provisioning is
+therefore not included. The app keeps `com.t3tools.t3code` and the `t3code-v2` profile.
+
+For a per-user silent NSIS install without launching the app, run the generated installer
+with `/S /currentuser` and wait for its exit code. Silent mode skips the app launch
+unless `--force-run` is supplied. Verify the installed
+executable and Start menu shortcut before reporting success. Do not run this while an
+existing PolyCode instance is active.
+
+From M5, always use `ssh -n anton@win1`. PowerShell 5.1 drops empty native arguments,
+and native stderr can appear as `NativeCommandError` even on success, so check exit codes.
+On Win1, children started directly from SSH can die when SSH disconnects. Run long steps
+through a temporary scheduled task as the logged-in user, with `cmd.exe` redirecting stdout
+and stderr to a log, then poll the log and task result over SSH. Remove the tasks afterward.
+Keep Win1's clone build-only. Commit documentation and push from M5.
+
 ## Installing while T3 Code is running
 
 Installing quits T3 Code, which would kill every agent run inside it, including the one doing the
