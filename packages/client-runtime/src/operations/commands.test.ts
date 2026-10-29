@@ -39,6 +39,7 @@ import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFix
 import {
   archiveThread,
   cancelQueuedRun,
+  clearThreadAttention,
   createProject,
   dismissThreadUserInput,
   editQueuedRun,
@@ -830,6 +831,24 @@ describe("V2 environment commands", () => {
         }
         expect(projectionRequests).toEqual([v2ThreadId]);
       }
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches clearing attention for the selected thread", () =>
+    Effect.gen(function* () {
+      const dispatched: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands: dispatched, projects: [] });
+      yield* clearThreadAttention({
+        commandId: CommandId.make("clear-flag-command"),
+        threadId: ThreadId.make("flagged-thread"),
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(dispatched).toEqual([
+        {
+          type: "thread.attention.clear",
+          commandId: "clear-flag-command",
+          threadId: "flagged-thread",
+        },
+      ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 

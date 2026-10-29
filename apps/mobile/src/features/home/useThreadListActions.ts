@@ -241,6 +241,7 @@ export function useThreadListActions(): {
   readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
   readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly clearThreadFlag: (thread: EnvironmentThreadShell) => Promise<void>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   /** Sets per-thread automatic settlement on or off. */
@@ -258,6 +259,19 @@ export function useThreadListActions(): {
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
+  const clearAttentionMutation = useAtomCommand(
+    threadEnvironment.clearAttention,
+    "clear thread flag",
+  );
+  const clearThreadFlag = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      await clearAttentionMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id },
+      });
+    },
+    [clearAttentionMutation],
+  );
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
   const setAutoSettleMutation = useAtomCommand(threadEnvironment.setAutoSettle, {
@@ -738,6 +752,7 @@ export function useThreadListActions(): {
     snoozeThread,
     unsnoozeThread,
     unsettleThread,
+    clearThreadFlag,
     pinThread,
     unpinThread,
     setThreadAutoSettle,

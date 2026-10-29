@@ -171,6 +171,7 @@ function ThreadHeader(
         options={native.options}
         optionsVersion={[
           props.gitControls.projectScripts,
+          props.gitControls.attention,
           playWebBuildOptionsVersion(props.gitControls.playWebBuild),
         ]}
         trailing={
@@ -356,6 +357,10 @@ function ThreadRouteContent(
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
+  const clearThreadAttention = useAtomCommand(
+    threadEnvironment.clearAttention,
+    "clear thread flag",
+  );
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const restartTerminal = useAtomCommand(terminalEnvironment.restart, "terminal restart");
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
@@ -853,6 +858,14 @@ function ThreadRouteContent(
       mergeBackTargetThreadId !== null && mergeBackRun !== null
         ? () => void handleMergeBack()
         : undefined,
+    attention: selectedThread?.attention,
+    onClearThreadFlag: () => {
+      if (selectedThread)
+        void clearThreadAttention({
+          environmentId: selectedThread.environmentId,
+          input: { threadId: selectedThread.id },
+        });
+    },
     currentBranch: selectedThread?.branch ?? null,
     gitStatus: gitStatus.data,
     gitOperationLabel: gitState.gitOperationLabel,

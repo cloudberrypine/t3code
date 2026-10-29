@@ -101,6 +101,7 @@ interface HomeScreenProps {
   ) => Promise<boolean>;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
+  readonly onClearThreadFlag: (thread: EnvironmentThreadShell) => Promise<void>;
   readonly onPinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSetThreadAutoSettle: (
@@ -412,6 +413,12 @@ export function HomeScreen(props: HomeScreenProps) {
       void props.onUnsnoozeThread(thread);
     },
     [props.onUnsnoozeThread],
+  );
+  const handleClearThreadFlag = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      void props.onClearThreadFlag(thread);
+    },
+    [props.onClearThreadFlag],
   );
   const handlePinThread = useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -779,6 +786,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onSnoozeThread={handleSnoozeThread}
           onUnsnoozeThread={handleUnsnoozeThread}
           onUnsettleThread={handleUnsettleThread}
+          onClearThreadFlag={handleClearThreadFlag}
           onPinThread={handlePinThread}
           onUnpinThread={handleUnpinThread}
           onSetThreadAutoSettle={handleSetThreadAutoSettle}
@@ -793,6 +801,7 @@ export function HomeScreen(props: HomeScreenProps) {
       handleDeleteThread,
       activeReorderEnvironmentIds,
       handleMoveThread,
+      handleClearThreadFlag,
       handlePinThread,
       handleRegenerateThreadTitle,
       handleRenameThread,

@@ -1,3 +1,4 @@
+import { buildThreadAttentionHeaderItems } from "./thread-attention-menu";
 import { createNativeHeaderMenu } from "../../components/nativeHeaderMenu.ios";
 import type { ScreenHeaderMenu } from "../../components/ScreenHeader.types";
 import {
@@ -78,6 +79,8 @@ type QuickActionIcon =
 
 /** The subset of git-control wiring the standalone git menu needs. */
 export type ThreadGitMenuProps = {
+  readonly attention?: { readonly reason: string } | null;
+  readonly onClearThreadFlag?: () => void;
   readonly environmentId: EnvironmentId | string;
   readonly threadId: ThreadId | string;
   readonly currentBranch: string | null;
@@ -295,6 +298,15 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         label: "Git",
         menu: {
           items: [
+            ...buildThreadAttentionHeaderItems(props.attention, () =>
+              props.onClearThreadFlag?.(),
+            ).map((item) => ({
+              label: item.title,
+              disabled: item.disabled,
+              ...(item.icon ? { icon: { name: item.icon, type: "sfSymbol" as const } } : {}),
+              onPress: item.onPress,
+              type: "action" as const,
+            })),
             {
               description: compactMenuStatus(props.gitStatus),
               disabled: true,
@@ -361,6 +373,8 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       model.runQuickAction,
       props.canOpenFiles,
       props.canOpenTerminal,
+      props.attention,
+      props.onClearThreadFlag,
       props.gitStatus,
       props.onMergeBack,
       props.onOpenNewTerminal,
@@ -540,6 +554,7 @@ function threadGitMenuDefinition(
     icon: "point.topleft.down.curvedto.point.bottomright.up",
     separateBackground: false,
     items: [
+      ...buildThreadAttentionHeaderItems(props.attention, () => props.onClearThreadFlag?.()),
       {
         id: "git-status",
         title: compactMenuBranchLabel(model.currentBranchLabel),

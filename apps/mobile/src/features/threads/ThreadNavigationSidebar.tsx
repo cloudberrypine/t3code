@@ -151,6 +151,7 @@ function ThreadNavigationSidebarPane(
     snoozeThread,
     unsnoozeThread,
     unsettleThread,
+    clearThreadFlag,
     pinThread,
     unpinThread,
     setThreadAutoSettle,
@@ -754,6 +755,7 @@ function ThreadNavigationSidebarPane(
               onSnoozeThread={snoozeThread}
               onUnsnoozeThread={unsnoozeThread}
               onUnsettleThread={unsettleThread}
+              onClearThreadFlag={clearThreadFlag}
               onPinThread={pinThread}
               onUnpinThread={unpinThread}
               onSetThreadAutoSettle={setThreadAutoSettle}
@@ -816,6 +818,7 @@ function ThreadNavigationSidebarPane(
       moveThread,
       openPendingTask,
       pinReorderEnvironmentIds,
+      clearThreadFlag,
       pinThread,
       pinningEnvironmentIds,
       autoSettleOptOutEnvironmentIds,
