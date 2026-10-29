@@ -170,7 +170,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @theme inline {
-  --color-usage-codex: light-dark(#4f86bd, #79a5d2);
+  --color-usage-codex: var(--color-foreground);
   --color-usage-claude: light-dark(#b85e40, #d97757);
   /* Two steps below Tailwind's text-xs (12px) for dense UI: metadata rows,
      badges, counters, keyboard hints and diagnostics tables. 2xs is 11px,

@@ -31,9 +31,9 @@ it("enlarges Poly around the original baseline without changing the row height",
   }
 });
 
-it("uses coral orange for Claude and retains the blue Codex theme colours", () => {
+it("uses coral orange for Claude and the foreground colour for Codex", () => {
   const css = NodeFS.readFileSync("src/index.css", "utf8");
   expect(css).toContain("--color-usage-claude: light-dark(#b85e40, #d97757)");
-  expect(css).toContain("--color-usage-codex: light-dark(#4f86bd, #79a5d2)");
+  expect(css).toContain("--color-usage-codex: var(--color-foreground)");
   expect(css).not.toContain("--color-poly-wordmark");
 });
