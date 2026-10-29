@@ -112,6 +112,18 @@ rename a thread, regenerate its title, or link and unlink a pull request. These 
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
 
+### Computers and Needs you
+
+With multiple computers connected, web and desktop group active threads by computer.
+Each computer keeps its own pinned threads at the top. Fold a computer's section to
+see its thread count and most urgent state; the fold is remembered on this device.
+Settled and snoozed threads stay in the global shelves with a computer tag.
+With one computer connected, the usual layout stays unchanged.
+
+**Needs you** appears above the list when a thread is waiting for approval or an answer,
+or its latest work failed or was interrupted. Each entry identifies its computer.
+Open it to respond or resume work; ordinary completed turns do not appear here.
+
 ### Group threads under another thread
 
 To keep related threads together, show them indented under another thread of the same

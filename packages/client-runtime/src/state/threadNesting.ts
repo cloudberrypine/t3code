@@ -154,3 +154,55 @@ export function threadDescendants<T>(parent: T, children: ReadonlyMap<T, readonl
   visit(parent);
   return result;
 }
+
+export interface AttentionThread {
+  readonly hasPendingApprovals: boolean;
+  readonly hasPendingUserInput: boolean;
+  readonly runtime: { readonly status: string } | null;
+}
+
+/** Current shell signals only: an ordinary completed turn is never attention. */
+export function threadNeedsYou(thread: AttentionThread): boolean {
+  return (
+    thread.hasPendingApprovals ||
+    thread.hasPendingUserInput ||
+    thread.runtime?.status === "failed" ||
+    thread.runtime?.status === "interrupted"
+  );
+}
+
+export function threadAttentionStatus(thread: AttentionThread): ThreadGroupStatus | null {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
+  if (thread.runtime?.status === "failed" || thread.runtime?.status === "interrupted")
+    return "failed";
+  if (
+    thread.runtime &&
+    ["preparing", "queued", "starting", "running", "waiting", "idle"].includes(
+      thread.runtime.status,
+    )
+  )
+    return "working";
+  return null;
+}
+
+/** Preserve each section's existing order, with pins first within each computer. */
+export function sidebarEnvironmentSections<T extends { readonly environmentId: string }>(
+  environmentIds: readonly string[],
+  sections: readonly (readonly T[])[],
+): ReadonlyArray<{
+  readonly environmentId: string;
+  readonly sections: readonly (readonly T[])[];
+}> | null {
+  if (environmentIds.length < 2) return null;
+  // Keep cached rows from temporarily disconnected computers reachable too.
+  const ids = new Set([
+    ...environmentIds,
+    ...sections.flat().map((thread) => thread.environmentId),
+  ]);
+  return [...ids].map((environmentId) => ({
+    environmentId,
+    sections: sections.map((section) =>
+      section.filter((thread) => thread.environmentId === environmentId),
+    ),
+  }));
+}

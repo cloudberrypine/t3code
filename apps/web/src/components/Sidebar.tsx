@@ -1,3 +1,9 @@
+import {
+  sidebarEnvironmentSections,
+  threadNeedsYou,
+  threadAttentionStatus,
+  mostUrgentThreadGroupStatus,
+} from "@t3tools/client-runtime/state/thread-nesting";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
 import { setThreadChangeRequestSnapshot } from "./ThreadStatusIndicators";
@@ -622,6 +628,8 @@ function SnoozeMenuButton(props: {
 // constraint keeps plain clicks working, and we skip dnd-kit's aria
 // attributes since there is no keyboard sensor and the row body already
 // carries its own button semantics.
+const CollapsedEnvironmentIds = Schema.Array(Schema.String);
+
 type SortableThreadRowBag = Pick<
   ReturnType<typeof useSortable>,
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
@@ -1670,6 +1678,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         isRegeneratingTitle && "opacity-55",
       )}
     >
+      {variant === "slim" && props.environmentLabel ? (
+        <span className="mr-1 rounded bg-muted px-1 text-2xs text-muted-foreground">
+          {props.environmentLabel}
+        </span>
+      ) : null}
       {thread.title}
     </span>
   );
@@ -2459,6 +2472,12 @@ export default function Sidebar() {
   );
   const environments = useEnvironmentIdentities();
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const [collapsedEnvironmentIds, setCollapsedEnvironmentIds] = useLocalStorage(
+    "polycode:sidebar:collapsed-environments",
+    [] as readonly string[],
+    CollapsedEnvironmentIds,
+  );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -2876,6 +2895,27 @@ export default function Sidebar() {
     routeThreadKey,
   });
 
+  const computerSections = useMemo(
+    () =>
+      sidebarEnvironmentSections(connectedEnvironmentIds, [
+        pinnedThreads,
+        activeThreads,
+        workingThreads,
+      ]),
+    [connectedEnvironmentIds, pinnedThreads, activeThreads, workingThreads],
+  );
+  const needsYouThreads = useMemo(
+    () =>
+      threads.filter(
+        (thread) =>
+          thread.archivedAt === null &&
+          thread.lineage.relationshipToParent !== "subagent" &&
+          (scopedProjectKeys === null ||
+            scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
+          threadNeedsYou(thread),
+      ),
+    [threads, scopedProjectKeys],
+  );
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
@@ -3855,6 +3895,26 @@ export default function Sidebar() {
       return [];
     }
     const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-header" }];
+    if (computerSections !== null) {
+      for (const computer of computerSections) {
+        if (collapsedEnvironmentIds.includes(computer.environmentId)) continue;
+        computer.sections.forEach((section, index) =>
+          items.push(...rowsOf(section, (["pinned", "active", "working"] as const)[index]!)),
+        );
+      }
+      if (snoozedThreads.length > 0)
+        items.push(
+          { kind: "marker", marker: "snoozed-header" },
+          ...rowsOf(visibleSnoozedThreads, "snoozed"),
+        );
+      items.push(
+        { kind: "marker", marker: "settled-header" },
+        ...rowsOf(renderedSettledThreads, "settled"),
+        { kind: "marker", marker: "settled-placeholder" },
+      );
+      return items;
+    }
+
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
@@ -3875,6 +3935,8 @@ export default function Sidebar() {
     items.push(...settledRows);
     return items;
   }, [
+    computerSections,
+    collapsedEnvironmentIds,
     activeThreads,
     pinnedThreads,
     renderedSettledThreads,
@@ -3885,13 +3947,10 @@ export default function Sidebar() {
     workingThreads.length,
   ]);
   useEffect(() => {
-    if (
-      dragState !== null &&
-      !sidebarListItems.some((item) => item.kind === "thread" && item.key === dragState.activeKey)
-    ) {
+    if (dragState !== null && !sectionByThreadKey.has(dragState.activeKey)) {
       cancelThreadDrag();
     }
-  }, [cancelThreadDrag, dragState, sidebarListItems]);
+  }, [cancelThreadDrag, dragState, sectionByThreadKey]);
   const listMotionPaused = dragState !== null;
   // Every shell event rebuilds sidebarListItems, but rows only move when the
   // rendered order or a row's section changes. Keying the motion pass on that
@@ -5411,6 +5470,42 @@ export default function Sidebar() {
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
                       const items: ReactNode[] = [
+                        needsYouThreads.length > 0 ? (
+                          <li key="needs-you" className="mb-2 list-none">
+                            <div className="px-2 py-1 text-xs font-medium text-warning">
+                              Needs you ({needsYouThreads.length})
+                            </div>
+                            <ul>
+                              {needsYouThreads.map((thread) => (
+                                <li key={`${thread.environmentId}:${thread.id}`}>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      navigateToThread(
+                                        scopeThreadRef(thread.environmentId, thread.id),
+                                      )
+                                    }
+                                    className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-row-hover"
+                                  >
+                                    <span
+                                      className={cn(
+                                        "size-1.5 shrink-0 rounded-full",
+                                        threadAttentionStatus(thread) === "attention"
+                                          ? "bg-warning"
+                                          : "bg-destructive",
+                                      )}
+                                    />
+                                    <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+                                    <span className="max-w-20 truncate rounded bg-muted px-1 text-2xs text-muted-foreground">
+                                      {environmentLabelById.get(thread.environmentId) ??
+                                        thread.environmentId}
+                                    </span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </li>
+                        ) : null,
                         <SidebarDraftBlock
                           key="draft-sessions"
                           projectByKey={projectByKey}
@@ -5421,7 +5516,99 @@ export default function Sidebar() {
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
                       ];
+                      if (computerSections !== null) {
+                        for (const computer of computerSections) {
+                          const descendants = [
+                            ...pinnedSectionThreads,
+                            ...activeSectionThreads,
+                            ...workingSectionThreads,
+                          ].filter((thread) => thread.environmentId === computer.environmentId);
+                          const count = descendants.length;
+                          const collapsed = collapsedEnvironmentIds.includes(
+                            computer.environmentId,
+                          );
+                          const status = mostUrgentThreadGroupStatus(
+                            descendants.map(threadAttentionStatus),
+                          );
+                          items.push(
+                            <li key={`computer:${computer.environmentId}`} className="list-none">
+                              <button
+                                type="button"
+                                aria-expanded={!collapsed}
+                                onClick={() =>
+                                  setCollapsedEnvironmentIds((current) =>
+                                    current.includes(computer.environmentId)
+                                      ? current.filter((id) => id !== computer.environmentId)
+                                      : [...current, computer.environmentId],
+                                  )
+                                }
+                                className="flex w-full cursor-pointer items-center gap-1.5 px-2 py-2 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+                              >
+                                <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
+                                <span className="min-w-0 flex-1 truncate">
+                                  {environments.find(
+                                    (environment) =>
+                                      environment.environmentId === computer.environmentId,
+                                  )?.label ?? computer.environmentId}
+                                </span>
+                                {collapsed ? (
+                                  <>
+                                    <span>{count}</span>
+                                    {status ? (
+                                      <span
+                                        aria-label={status}
+                                        className={cn(
+                                          "size-1.5 rounded-full",
+                                          status === "attention"
+                                            ? "bg-warning"
+                                            : status === "failed"
+                                              ? "bg-destructive"
+                                              : "bg-info",
+                                        )}
+                                      />
+                                    ) : null}
+                                  </>
+                                ) : null}
+                              </button>
+                              {collapsed ? null : (
+                                <ul className="flex flex-col gap-px">
+                                  {computer.sections.flatMap((section, index) =>
+                                    section.length === 0
+                                      ? []
+                                      : [
+                                          <li
+                                            key={`label:${["pinned", "active", "working"][index]}`}
+                                            className="list-none px-2 pt-1 text-2xs text-muted-foreground"
+                                          >
+                                            {["Pinned", "Active", "Working"][index]}
+                                          </li>,
+                                          ...section.map((thread) =>
+                                            renderThreadRow(
+                                              thread,
+                                              (["pinned", "active", "working"] as const)[index]!,
+                                            ),
+                                          ),
+                                        ],
+                                  )}
+                                </ul>
+                              )}
+                            </li>,
+                          );
+                        }
+                      }
                       for (const item of sidebarListItems) {
+                        if (
+                          computerSections !== null &&
+                          (item.kind === "thread"
+                            ? ["pinned", "active", "working"].includes(item.section)
+                            : [
+                                "pinned-header",
+                                "pinned-divider",
+                                "active-placeholder",
+                                "working-header",
+                              ].includes(item.marker))
+                        )
+                          continue;
                         if (item.kind === "thread") {
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;

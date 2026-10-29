@@ -5,6 +5,9 @@ import {
   mostUrgentThreadGroupStatus,
   nestThreads,
   threadDescendants,
+  sidebarEnvironmentSections,
+  threadNeedsYou,
+  threadAttentionStatus,
 } from "./threadNesting.ts";
 
 const thread = (
@@ -114,5 +117,44 @@ describe("mostUrgentThreadGroupStatus", () => {
     expect(mostUrgentThreadGroupStatus([null, "done", "working"])).toBe("working");
     expect(mostUrgentThreadGroupStatus(["working", "attention", "failed"])).toBe("attention");
     expect(mostUrgentThreadGroupStatus([null, null])).toBeNull();
+  });
+});
+
+describe("computer sections and Needs you", () => {
+  it("keeps pins ahead of active rows inside each computer, preserving local order", () => {
+    const m1Pin = thread("lead1", { environmentId: "M1" });
+    const m5Pin = thread("lead5", { environmentId: "M5" });
+    const m1Active = thread("active1", { environmentId: "M1" });
+    const m5Active = thread("active5", { environmentId: "M5" });
+    const sections = sidebarEnvironmentSections(
+      ["M1", "M5"],
+      [
+        [m5Pin, m1Pin],
+        [m1Active, m5Active],
+      ],
+    );
+    expect(
+      sections?.map((computer) => [computer.environmentId, computer.sections.map(ids)]),
+    ).toEqual([
+      ["M1", [["lead1"], ["active1"]]],
+      ["M5", [["lead5"], ["active5"]]],
+    ]);
+  });
+  it("leaves the existing layout alone for one connected computer", () => {
+    expect(sidebarEnvironmentSections(["M5"], [[thread("lead")]])).toBeNull();
+    expect(sidebarEnvironmentSections([], [])).toBeNull();
+  });
+  it("uses pending questions and failed/interrupted runs, excluding ordinary completions", () => {
+    const state = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
+    expect(threadNeedsYou(state)).toBe(false);
+    expect(threadNeedsYou({ ...state, hasPendingApprovals: true })).toBe(true);
+    expect(threadNeedsYou({ ...state, hasPendingUserInput: true })).toBe(true);
+    for (const status of ["failed", "interrupted"])
+      expect(threadNeedsYou({ ...state, runtime: { status } })).toBe(true);
+    for (const status of ["completed", "running", "waiting", "cancelled"])
+      expect(threadNeedsYou({ ...state, runtime: { status } })).toBe(false);
+    expect(
+      threadAttentionStatus({ ...state, hasPendingUserInput: true, runtime: { status: "failed" } }),
+    ).toBe("attention");
   });
 });
