@@ -7,12 +7,7 @@ import { usePrimarySettings } from "../../hooks/useSettings";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { environmentPresentations } from "../../state/presentation";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
-import {
-  selectSidebarLimit,
-  sidebarLimitLabel,
-  sidebarWindowName,
-  sidebarNoDataReason,
-} from "./sidebarUsageLimits";
+import { selectSidebarLimit, sidebarLimitLabel, sidebarNoDataReason } from "./sidebarUsageLimits";
 
 export function SidebarUsageRings() {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
@@ -41,6 +36,7 @@ export function SidebarUsageRings() {
             }}
           >
             <TooltipTrigger
+              delay={0}
               render={
                 <span
                   role="img"
@@ -81,14 +77,13 @@ export function SidebarUsageRings() {
             </TooltipTrigger>
             <TooltipPopup side="top">
               <div className="flex w-72 max-w-[calc(100vw-3rem)] min-w-0 flex-col gap-2 wrap-anywhere text-left">
-                <span className="font-medium">
-                  {driver === "codex" ? "Codex" : "Claude"} ·{" "}
-                  {window
-                    ? `ring shows ${sidebarWindowName(window)} limit left`
-                    : "no usage limit data yet"}
-                </span>
                 {!window ? (
-                  <span>{sidebarNoDataReason(presentations, driver, primaryEnvironmentId)}</span>
+                  <>
+                    <span className="font-medium">
+                      {driver === "codex" ? "Codex" : "Claude"} · no usage limit data yet
+                    </span>
+                    <span>{sidebarNoDataReason(presentations, driver, primaryEnvironmentId)}</span>
+                  </>
                 ) : null}
                 <UsageLimitsSection
                   selectedEnvironmentIds={null}
