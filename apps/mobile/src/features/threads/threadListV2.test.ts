@@ -2335,7 +2335,11 @@ describe("buildThreadListV2Items nesting", () => {
   });
 
   it("renders deep branches, counts descendants and preserves selected paths", () => {
-    const leaf = makeThread({ id: ThreadId.make("leaf"), sidebarParentThreadId: owl.id });
+    const leaf = makeThread({
+      id: ThreadId.make("leaf"),
+      title: "Leaf",
+      sidebarParentThreadId: owl.id,
+    });
     const base = { threads: [leaf, owl, parent], environmentId: null, searchQuery: "", now: NOW };
     const open = buildThreadListV2Items(base);
     expect(open.items.map((item) => [item.thread.id, item.depth, item.group?.count])).toEqual([

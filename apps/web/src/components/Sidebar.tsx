@@ -3871,7 +3871,7 @@ export default function Sidebar() {
             })
           : [];
     },
-    [sectionByThreadKey, serverConfigs, threadGroups],
+    [sectionByThreadKey, serverConfigs],
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
@@ -5528,7 +5528,19 @@ export default function Sidebar() {
                             computer.environmentId,
                           );
                           const status = mostUrgentThreadGroupStatus(
-                            descendants.map(threadAttentionStatus),
+                            descendants.map(
+                              (thread) =>
+                                threadAttentionStatus(thread) ??
+                                (hasUnseenCompletion({
+                                  ...thread,
+                                  lastVisitedAt: resolveThreadLastVisitedAt(
+                                    thread.lastVisitedAt,
+                                    undefined,
+                                  ),
+                                })
+                                  ? "done"
+                                  : null),
+                            ),
                           );
                           items.push(
                             <li key={`computer:${computer.environmentId}`} className="list-none">
