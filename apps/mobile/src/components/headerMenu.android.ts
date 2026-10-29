@@ -12,6 +12,7 @@ export function androidHeaderMenuActions(items: ReadonlyArray<ScreenHeaderMenuIt
               title: item.title ?? "",
               image: item.icon,
               subactions: androidHeaderMenuActions(item.items),
+              displayInline: item.inline,
             },
           ]
       : [

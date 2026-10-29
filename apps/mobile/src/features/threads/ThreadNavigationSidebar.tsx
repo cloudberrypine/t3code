@@ -1,3 +1,4 @@
+import { useComputerSections, ComputerSectionHeader } from "./use-computer-sections";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { computeThreadMoveAvailability } from "./threadOrder";
@@ -160,6 +161,7 @@ function ThreadNavigationSidebarPane(
     regenerateThreadTitle,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
+  const computers = useComputerSections();
   const queuedThreadKeys = useQueuedThreadKeys();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -387,7 +389,7 @@ function ThreadNavigationSidebarPane(
       settledLimit: settledVisibleCount,
       now: new Date().toISOString(),
       workingShelfEnabled,
-      workingShelfExpanded,
+      workingShelfExpanded: computers.environments.length > 1 || workingShelfExpanded,
       inboxReturnAt: threadListInboxReturns.returnedAt,
       snoozedShelfExpanded,
       settledShelfExpanded,
@@ -413,6 +415,7 @@ function ThreadNavigationSidebarPane(
     snoozeEnvironmentIds,
     threads,
     selectedProjectScope,
+    computers.environments.length,
   ]);
   // Re-partition the moment the earliest snooze expires (clamped to the
   // signed-32-bit setTimeout range; far-future wakes re-arm at the clamp).
@@ -447,6 +450,7 @@ function ThreadNavigationSidebarPane(
           pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
     );
     const items: SidebarListItem[] = buildThreadListV2ListItems({
+      computers,
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
       workingCount: threadListV2Layout.workingCount,
@@ -486,6 +490,7 @@ function ThreadNavigationSidebarPane(
     snoozeEnvironmentIds,
     threadListV2Layout,
     workingShelfExpanded,
+    computers,
   ]);
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -663,6 +668,8 @@ function ThreadNavigationSidebarPane(
   const renderListItem = useCallback(
     ({ item }: { readonly item: SidebarListItem }) => {
       switch (item.type) {
+        case "v2-computer":
+          return <ComputerSectionHeader item={item} controls={computers} />;
         case "v2-pending": {
           const pendingScopeKey = scopedProjectKey(
             item.pendingTask.environmentId,
@@ -846,6 +853,7 @@ function ThreadNavigationSidebarPane(
       toggleSettledShelf,
       toggleSnoozedShelf,
       toggleThreadGroupOf,
+      computers,
       toggleWorkingShelf,
       unpinThread,
       unsettleThread,

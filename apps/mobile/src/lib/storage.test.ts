@@ -177,6 +177,17 @@ describe("mobile connection storage", () => {
     await expect(loadPreferences()).resolves.toEqual({ baseFontSize: 17 });
   });
 
+  it("persists computer order and independent fold state across loads", async () => {
+    const state = { collapsedComputerSections: ["M5"], computerSectionOrder: ["M5", "M1"] };
+    await savePreferencesPatch(state);
+    await expect(loadPreferences()).resolves.toEqual(state);
+    await savePreferencesPatch({ collapsedComputerSections: ["M1"] });
+    await expect(loadPreferences()).resolves.toEqual({
+      ...state,
+      collapsedComputerSections: ["M1"],
+    });
+  });
+
   it("persists independent light and dark theme choices", async () => {
     mocks.setPreferencesJson(
       JSON.stringify({

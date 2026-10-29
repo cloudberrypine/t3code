@@ -6,8 +6,12 @@ type ThreadAttention = { readonly reason: string } | null | undefined;
 export function buildThreadAttentionMenuItems(attention: ThreadAttention): MenuAction[] {
   if (!attention) return [];
   return [
-    { id: "thread-flag-reason", title: `⚑ ${attention.reason}`, attributes: { disabled: true } },
-    { id: "clear-thread-flag", title: "Clear flag", image: "flag.slash" },
+    {
+      id: "thread-flag-reason",
+      title: attention.reason,
+      displayInline: true,
+      subactions: [{ id: "clear-thread-flag", title: "Clear flag", image: "flag.slash" }],
+    },
   ];
 }
 
@@ -21,14 +25,16 @@ export function handleThreadAttentionMenuAction(event: string, onClear: () => vo
 export function buildThreadAttentionHeaderItems(
   attention: ThreadAttention,
   onClear: () => void,
-): Extract<ScreenHeaderMenuItem, { readonly onPress: () => void }>[] {
-  return buildThreadAttentionMenuItems(attention).map((item) => ({
-    id: item.id!,
-    title: item.title,
-    icon: item.image,
-    disabled: item.attributes?.disabled,
-    onPress: () => {
-      handleThreadAttentionMenuAction(item.id!, onClear);
+): ScreenHeaderMenuItem[] {
+  if (!attention) return [];
+  return [
+    {
+      id: "thread-flag-reason",
+      title: attention.reason,
+      inline: true,
+      items: [
+        { id: "clear-thread-flag", title: "Clear flag", icon: "flag.slash", onPress: onClear },
+      ],
     },
-  }));
+  ];
 }

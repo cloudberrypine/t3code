@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Box,
   Column,
@@ -55,6 +56,75 @@ export function MaterialMenuPopup(props: MaterialMenuPopupProps) {
   const muted = colors["--color-foreground-muted"];
   // A fixed native item height clips wrapped labels; a minimum lets each row grow.
   const itemModifiers = [width(props.menuWidth), defaultMinSize({ minHeight: menuItemHeight })];
+  const renderAction = (
+    action: MaterialMenuPopupProps["actions"][number],
+    index: number,
+  ): ReactNode => {
+    if (action.displayInline && action.subactions) {
+      return (
+        <Column key={action.id ?? index}>
+          {action.title ? (
+            <Text
+              color={muted}
+              style={{ typography: "bodySmall", ...caption }}
+              modifiers={[padding(16 * scale, 8 * scale, 16 * scale, 8 * scale)]}
+            >
+              {action.title}
+            </Text>
+          ) : null}
+          {action.subactions.filter((child) => !child.attributes?.hidden).map(renderAction)}
+        </Column>
+      );
+    }
+    return (
+      <DropdownMenuItem
+        key={action.id ?? `${index}-${action.title}`}
+        enabled={!action.attributes?.disabled}
+        modifiers={itemModifiers}
+        onClick={() => props.onPress(action)}
+      >
+        {action.image && isAppSymbolName(action.image) ? (
+          <DropdownMenuItem.LeadingIcon>
+            <MenuIcon
+              name={action.image}
+              destructive={action.attributes?.destructive}
+              disabled={action.attributes?.disabled}
+            />
+          </DropdownMenuItem.LeadingIcon>
+        ) : null}
+        <DropdownMenuItem.Text>
+          <Column>
+            <Text
+              style={{ typography: "bodyLarge", ...body }}
+              color={
+                action.attributes?.disabled
+                  ? muted
+                  : action.attributes?.destructive
+                    ? colors["--color-danger-foreground"]
+                    : foreground
+              }
+            >
+              {action.title}
+            </Text>
+            {action.subtitle ? (
+              <Text color={muted} style={{ typography: "bodySmall", ...caption }}>
+                {action.subtitle}
+              </Text>
+            ) : null}
+          </Column>
+        </DropdownMenuItem.Text>
+        {(action.subactions?.length ?? 0) > 0 ? (
+          <DropdownMenuItem.TrailingIcon>
+            <MenuIcon name="chevron.right" disabled={action.attributes?.disabled} />
+          </DropdownMenuItem.TrailingIcon>
+        ) : action.state === "on" ? (
+          <DropdownMenuItem.TrailingIcon>
+            <MenuIcon name="checkmark" disabled={action.attributes?.disabled} />
+          </DropdownMenuItem.TrailingIcon>
+        ) : null}
+      </DropdownMenuItem>
+    );
+  };
   const items = (
     <>
       {props.parent ? (
@@ -77,54 +147,7 @@ export function MaterialMenuPopup(props: MaterialMenuPopupProps) {
           {props.title}
         </Text>
       ) : null}
-      {props.actions.map((action, index) => (
-        <DropdownMenuItem
-          key={action.id ?? `${index}-${action.title}`}
-          enabled={!action.attributes?.disabled}
-          modifiers={itemModifiers}
-          onClick={() => props.onPress(action)}
-        >
-          {action.image && isAppSymbolName(action.image) ? (
-            <DropdownMenuItem.LeadingIcon>
-              <MenuIcon
-                name={action.image}
-                destructive={action.attributes?.destructive}
-                disabled={action.attributes?.disabled}
-              />
-            </DropdownMenuItem.LeadingIcon>
-          ) : null}
-          <DropdownMenuItem.Text>
-            <Column>
-              <Text
-                style={{ typography: "bodyLarge", ...body }}
-                color={
-                  action.attributes?.disabled
-                    ? muted
-                    : action.attributes?.destructive
-                      ? colors["--color-danger-foreground"]
-                      : foreground
-                }
-              >
-                {action.title}
-              </Text>
-              {action.subtitle ? (
-                <Text color={muted} style={{ typography: "bodySmall", ...caption }}>
-                  {action.subtitle}
-                </Text>
-              ) : null}
-            </Column>
-          </DropdownMenuItem.Text>
-          {(action.subactions?.length ?? 0) > 0 ? (
-            <DropdownMenuItem.TrailingIcon>
-              <MenuIcon name="chevron.right" disabled={action.attributes?.disabled} />
-            </DropdownMenuItem.TrailingIcon>
-          ) : action.state === "on" ? (
-            <DropdownMenuItem.TrailingIcon>
-              <MenuIcon name="checkmark" disabled={action.attributes?.disabled} />
-            </DropdownMenuItem.TrailingIcon>
-          ) : null}
-        </DropdownMenuItem>
-      ))}
+      {props.actions.map(renderAction)}
     </>
   );
   if (props.inline) {

@@ -1029,7 +1029,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         numberOfLines={2}
       >
         {thread.attention ? (
-          <Text className="text-warning" accessibilityLabel={`Flag: ${thread.attention.reason}`}>
+          <Text
+            className="text-base text-warning-foreground opacity-100"
+            accessibilityLabel={`Flag: ${thread.attention.reason}`}
+          >
             ⚑{" "}
           </Text>
         ) : null}
@@ -1259,7 +1262,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             >
               {thread.attention ? (
                 <Text
-                  className="text-warning"
+                  className="text-base text-warning-foreground opacity-100"
                   accessibilityLabel={`Flag: ${thread.attention.reason}`}
                 >
                   ⚑{" "}

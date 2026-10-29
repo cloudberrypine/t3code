@@ -11,14 +11,14 @@ describe("thread attention menus", () => {
     expect(buildThreadAttentionHeaderItems(undefined, vi.fn())).toEqual([]);
   });
 
-  it("starts with the disabled reason and clear action", () => {
+  it("shows the reason as an inline section with an enabled clear action", () => {
     expect(buildThreadAttentionMenuItems({ reason: "Choose a nest location" })).toEqual([
       {
         id: "thread-flag-reason",
-        title: "⚑ Choose a nest location",
-        attributes: { disabled: true },
+        title: "Choose a nest location",
+        displayInline: true,
+        subactions: [{ id: "clear-thread-flag", title: "Clear flag", image: "flag.slash" }],
       },
-      { id: "clear-thread-flag", title: "Clear flag", image: "flag.slash" },
     ]);
   });
 
@@ -34,9 +34,11 @@ describe("thread attention menus", () => {
   it("offers the same reason and clear behavior in the header", () => {
     const clear = vi.fn();
     const items = buildThreadAttentionHeaderItems({ reason: "Needs a decision" }, clear);
-    expect(items[0]).toMatchObject({ title: "⚑ Needs a decision", disabled: true });
-    for (const item of items) {
-      if ("onPress" in item) item.onPress();
+    expect(items[0]).toMatchObject({ title: "Needs a decision", inline: true });
+    const section = items[0];
+    if (section && "items" in section) {
+      const clearItem = section.items[0];
+      if (clearItem && "onPress" in clearItem) clearItem.onPress();
     }
     expect(clear).toHaveBeenCalledOnce();
   });

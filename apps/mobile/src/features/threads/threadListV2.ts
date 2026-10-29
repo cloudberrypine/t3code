@@ -1,3 +1,4 @@
+import { groupMobileComputerSections } from "./computer-sections";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   canSnooze,
@@ -397,7 +398,18 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
+export interface ThreadListV2ComputerItem {
+  readonly type: "v2-computer";
+  readonly key: string;
+  readonly environmentId: string;
+  readonly label: string;
+  readonly expanded: boolean;
+  readonly disabled: boolean;
+  readonly canMoveUp: boolean;
+  readonly canMoveDown: boolean;
+}
 export type ThreadListV2ListItem =
+  | ThreadListV2ComputerItem
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
@@ -410,6 +422,7 @@ export function isThreadListV2ListItem(value: {
   readonly type: string;
 }): value is ThreadListV2ListItem {
   return (
+    value.type === "v2-computer" ||
     value.type === "v2-thread" ||
     value.type === "v2-pending" ||
     value.type === "v2-working-shelf" ||
@@ -430,6 +443,16 @@ export function threadListV2ListItemsAreEqual(
   item: ThreadListV2ListItem,
 ): boolean {
   switch (item.type) {
+    case "v2-computer":
+      return (
+        previous.type === "v2-computer" &&
+        previous.key === item.key &&
+        previous.label === item.label &&
+        previous.expanded === item.expanded &&
+        previous.disabled === item.disabled &&
+        previous.canMoveUp === item.canMoveUp &&
+        previous.canMoveDown === item.canMoveDown
+      );
     case "v2-thread":
       return (
         previous.type === "v2-thread" &&
@@ -512,6 +535,7 @@ function resolveThreadListV2ItemTimeLabel(
  * inbox or settled history.
  */
 export function buildThreadListV2ListItems(input: {
+  readonly computers?: Omit<Parameters<typeof groupMobileComputerSections>[0], "items">;
   readonly items: ReadonlyArray<ThreadListV2Item>;
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly workingCount?: number;
@@ -627,9 +651,12 @@ export function buildThreadListV2ListItems(input: {
   }
   // Hairlines depend on the final neighbour, so they are stamped after the
   // splice: a recycled cell only re-renders when its divider actually flips.
-  return result.map((entry, index) => {
+  const grouped = input.computers
+    ? groupMobileComputerSections({ ...input.computers, items: result })
+    : result;
+  return grouped.map((entry, index) => {
     if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
-    const next = result[index + 1];
+    const next = grouped[index + 1];
     const showTrailingDivider =
       next?.type === "v2-thread" || (next?.type === "v2-pending" && !next.showPendingDivider);
     return showTrailingDivider === entry.showTrailingDivider

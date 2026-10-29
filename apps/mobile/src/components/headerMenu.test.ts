@@ -20,7 +20,7 @@ const items: ReadonlyArray<ScreenHeaderMenuItem> = [
 ];
 
 describe("header menus", () => {
-  it("keeps named sections as Android submenus", () => {
+  it("keeps named inline sections as small Android section headings", () => {
     const actions = androidHeaderMenuActions([
       {
         id: "text-size",
@@ -30,6 +30,7 @@ describe("header menus", () => {
       },
     ]);
     expect(actions[0]?.title).toBe("Text size");
+    expect(actions[0]?.displayInline).toBe(true);
     expect(actions[0]?.subactions?.[0]?.id).toBe("font-increase");
   });
 

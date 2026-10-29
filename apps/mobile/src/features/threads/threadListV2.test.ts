@@ -2391,3 +2391,88 @@ describe("buildThreadListV2Items nesting", () => {
     ]);
   });
 });
+
+describe("mobile computer sections", () => {
+  const m5 = EnvironmentId.make("M5");
+  const parent = makeThread({ id: ThreadId.make("parent"), title: "Parent", pinnedAt: NOW });
+  const child = makeThread({
+    id: ThreadId.make("child"),
+    title: "Child",
+    sidebarParentThreadId: parent.id,
+  });
+  const remote = makeThread({ id: ThreadId.make("remote"), title: "Remote", environmentId: m5 });
+  const remotePin = makeThread({
+    id: ThreadId.make("remote-pin"),
+    title: "Remote pin",
+    environmentId: m5,
+    pinnedAt: NOW,
+  });
+  const settled = makeThread({
+    id: ThreadId.make("settled"),
+    title: "Settled",
+    settledOverride: "settled",
+  });
+  const environments = [
+    { environmentId, environmentLabel: "M1" },
+    { environmentId: m5, environmentLabel: "M5" },
+  ];
+  const build = (collapsed: readonly string[] = [], connected = environments) => {
+    const layout = buildThreadListV2Items({
+      threads: [remote, child, parent, remotePin, settled],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      settledShelfExpanded: true,
+    });
+    return buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      settledCount: layout.settledCount,
+      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+      computers: { environments: connected, primary: m5, order: [], collapsed, disabled: false },
+    });
+  };
+  const labels = (items: ThreadListV2ListItem[]) =>
+    items.map((entry) =>
+      entry.type === "v2-thread"
+        ? entry.item.thread.id
+        : entry.type === "v2-computer"
+          ? entry.label
+          : entry.type,
+    );
+  it("uses primary-first computer sections with pins and nested descendants inside", () => {
+    expect(labels(build())).toEqual([
+      "M5",
+      "remote-pin",
+      "remote",
+      "M1",
+      "parent",
+      "child",
+      "v2-settled-shelf",
+      "settled",
+    ]);
+  });
+  it("folds each computer independently without hiding the global settled shelf", () => {
+    expect(labels(build([m5]))).toEqual([
+      "M5",
+      "M1",
+      "parent",
+      "child",
+      "v2-settled-shelf",
+      "settled",
+    ]);
+    expect(labels(build([environmentId]))).toEqual([
+      "M5",
+      "remote-pin",
+      "remote",
+      "M1",
+      "v2-settled-shelf",
+      "settled",
+    ]);
+  });
+  it("leaves the list unchanged with one computer", () => {
+    expect(build([], environments.slice(0, 1)).some((item) => item.type === "v2-computer")).toBe(
+      false,
+    );
+  });
+});

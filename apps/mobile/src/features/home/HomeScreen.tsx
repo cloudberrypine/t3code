@@ -1,3 +1,4 @@
+import { useComputerSections, ComputerSectionHeader } from "../threads/use-computer-sections";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import { computeThreadMoveAvailability } from "../threads/threadOrder";
@@ -555,6 +556,7 @@ export function HomeScreen(props: HomeScreenProps) {
     nowMinute,
     snoozeWakeTick,
   ]);
+  const computers = useComputerSections();
   const threadListV2Layout = useMemo(() => {
     threadListInboxReturns.observe(workingShelfEnabled ? props.threads : null);
     // Settled threads are live shells; archived threads keep their original
@@ -572,7 +574,7 @@ export function HomeScreen(props: HomeScreenProps) {
       settledLimit: settledVisibleCount,
       now: new Date().toISOString(),
       workingShelfEnabled,
-      workingShelfExpanded,
+      workingShelfExpanded: computers.environments.length > 1 || workingShelfExpanded,
       inboxReturnAt: threadListInboxReturns.returnedAt,
       snoozedShelfExpanded,
       settledShelfExpanded,
@@ -597,6 +599,7 @@ export function HomeScreen(props: HomeScreenProps) {
     props.threads,
     matchedThreadKeys,
     v2ScopedProjectGroup,
+    computers.environments.length,
   ]);
   // Re-partition the moment the earliest snooze expires (clamped to the
   // signed-32-bit setTimeout range; far-future wakes re-arm at the clamp).
@@ -635,6 +638,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Items = useMemo(
     () =>
       buildThreadListV2ListItems({
+        computers,
         items: threadListV2Layout.items,
         pendingTasks: v2PendingTasks,
         workingCount: threadListV2Layout.workingCount,
@@ -663,6 +667,7 @@ export function HomeScreen(props: HomeScreenProps) {
       threadListV2Layout,
       v2PendingTasks,
       workingShelfExpanded,
+      computers,
     ],
   );
 
@@ -673,6 +678,8 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const renderV2Item = useCallback(
     ({ item }: { readonly item: ThreadListV2ListItem }) => {
+      if (item.type === "v2-computer")
+        return <ComputerSectionHeader item={item} controls={computers} />;
       if (item.type === "v2-pending") {
         const pendingScopeKey = scopedProjectKey(
           item.pendingTask.environmentId,
@@ -834,6 +841,7 @@ export function HomeScreen(props: HomeScreenProps) {
       toggleSettledShelf,
       toggleSnoozedShelf,
       toggleThreadGroupOf,
+      computers,
       toggleWorkingShelf,
       v2ProjectTitleByProjectKey,
       props.searchQuery,

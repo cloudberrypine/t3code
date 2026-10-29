@@ -298,15 +298,23 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         label: "Git",
         menu: {
           items: [
-            ...buildThreadAttentionHeaderItems(props.attention, () =>
-              props.onClearThreadFlag?.(),
-            ).map((item) => ({
-              label: item.title,
-              disabled: item.disabled,
-              ...(item.icon ? { icon: { name: item.icon, type: "sfSymbol" as const } } : {}),
-              onPress: item.onPress,
-              type: "action" as const,
-            })),
+            ...(props.attention
+              ? [
+                  {
+                    type: "submenu" as const,
+                    label: props.attention.reason,
+                    inline: true,
+                    items: [
+                      {
+                        type: "action" as const,
+                        label: "Clear flag",
+                        icon: { name: "flag.slash", type: "sfSymbol" as const },
+                        onPress: () => props.onClearThreadFlag?.(),
+                      },
+                    ],
+                  },
+                ]
+              : []),
             {
               description: compactMenuStatus(props.gitStatus),
               disabled: true,
