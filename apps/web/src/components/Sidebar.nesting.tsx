@@ -43,6 +43,7 @@ export interface SidebarThreadGroup {
 }
 
 function childGroupStatus(child: EnvironmentThreadShell): ThreadGroupStatus | null {
+  if (child.attention) return "attention";
   const status = resolveSidebarThreadStatus(child);
   if (status === "approval" || status === "input") return "attention";
   if (status === "failed" || status === "limited") return "failed";

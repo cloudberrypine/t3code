@@ -275,6 +275,17 @@ export function useThreadActions() {
   const reorderActiveThreadMutation = useAtomCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
+  const clearAttentionMutation = useAtomCommand(threadEnvironment.clearAttention, {
+    reportFailure: true,
+  });
+  const clearThreadFlag = useCallback(
+    (target: ScopedThreadRef) =>
+      clearAttentionMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    [clearAttentionMutation],
+  );
   const setThreadSidebarParentMutation = useAtomCommand(threadEnvironment.setSidebarParent, {
     reportFailure: false,
   });
@@ -986,6 +997,7 @@ export function useThreadActions() {
       reorderPinnedThread,
       reorderActiveThread,
       setThreadSidebarParent,
+      clearThreadFlag,
       markThreadUnread,
       setThreadAutoSettle,
     }),
@@ -1000,6 +1012,7 @@ export function useThreadActions() {
       reorderActiveThread,
       setThreadAutoSettle,
       setThreadSidebarParent,
+      clearThreadFlag,
       settleThread,
       snoozeThread,
       unarchiveThread,

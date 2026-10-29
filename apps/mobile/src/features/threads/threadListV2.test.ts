@@ -2334,6 +2334,18 @@ describe("buildThreadListV2Items nesting", () => {
     ]);
   });
 
+  it("rolls flagged descendants up as attention", () => {
+    const flagged = { ...owl, attention: { reason: "Please test", raisedAt: NOW } };
+    const layout = buildThreadListV2Items({
+      threads: [flagged, parent],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      collapsedThreadGroupKeys: new Set([`${environmentId}:c2`]),
+    });
+    expect(layout.items[0]?.group?.status).toBe("attention");
+  });
+
   it("renders deep branches, counts descendants and preserves selected paths", () => {
     const leaf = makeThread({
       id: ThreadId.make("leaf"),

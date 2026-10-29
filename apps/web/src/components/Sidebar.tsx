@@ -1,6 +1,7 @@
 import {
   sidebarEnvironmentSections,
-  threadNeedsYou,
+  orderSidebarEnvironments,
+  moveSidebarEnvironment,
   threadAttentionStatus,
   mostUrgentThreadGroupStatus,
 } from "@t3tools/client-runtime/state/thread-nesting";
@@ -69,6 +70,7 @@ import {
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
   CheckIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -1629,7 +1631,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     ) : null;
 
   const accessibility = resolveSidebarRowAccessibility({
-    title: thread.title,
+    title: thread.attention ? `${thread.title}, Flag: ${thread.attention.reason}` : thread.title,
     statusLabel: topStatus?.label ?? null,
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
@@ -1772,11 +1774,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         <TooltipPopup>Unpin thread</TooltipPopup>
       </Tooltip>
     ) : (
-      <PinIcon
-        aria-label="Pinned"
-        role="img"
-        className="size-3 shrink-0 text-muted-foreground/65"
-      />
+      <PinIcon aria-label="" role="img" className="size-3 shrink-0 text-muted-foreground/65" />
     )
   ) : null;
 
@@ -1823,6 +1821,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             >
               {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
             </span>
+            {thread.attention ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      role="img"
+                      aria-label={`Flag: ${thread.attention.reason}`}
+                      className="shrink-0 text-warning"
+                    />
+                  }
+                >
+                  ⚑
+                </TooltipTrigger>
+                <TooltipPopup side="top">{thread.attention.reason}</TooltipPopup>
+              </Tooltip>
+            ) : null}
             {draftIndicator}
             {title}
             {pinIndicator}
@@ -1984,6 +1998,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   group={props.group}
                   onToggle={() => props.onToggleGroup?.(threadKey)}
                 />
+              ) : null}
+              {thread.attention ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        role="img"
+                        aria-label={`Flag: ${thread.attention.reason}`}
+                        className="shrink-0 text-warning"
+                      />
+                    }
+                  >
+                    ⚑
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{thread.attention.reason}</TooltipPopup>
+                </Tooltip>
               ) : null}
               {draftIndicator}
               {props.project ? (
@@ -2403,6 +2433,7 @@ export default function Sidebar() {
     reorderPinnedThread,
     reorderActiveThread,
     setThreadSidebarParent,
+    clearThreadFlag,
     markThreadUnread,
     archiveThread,
     deleteThread,
@@ -2479,6 +2510,11 @@ export default function Sidebar() {
     CollapsedEnvironmentIds,
   );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const [environmentOrder, setEnvironmentOrder] = useLocalStorage(
+    "polycode:sidebar:environment-order",
+    [] as readonly string[],
+    CollapsedEnvironmentIds,
+  );
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -2897,24 +2933,18 @@ export default function Sidebar() {
 
   const computerSections = useMemo(
     () =>
-      sidebarEnvironmentSections(connectedEnvironmentIds, [
-        pinnedThreads,
-        activeThreads,
-        workingThreads,
-      ]),
-    [connectedEnvironmentIds, pinnedThreads, activeThreads, workingThreads],
-  );
-  const needsYouThreads = useMemo(
-    () =>
-      threads.filter(
-        (thread) =>
-          thread.archivedAt === null &&
-          thread.lineage.relationshipToParent !== "subagent" &&
-          (scopedProjectKeys === null ||
-            scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
-          threadNeedsYou(thread),
+      sidebarEnvironmentSections(
+        orderSidebarEnvironments(connectedEnvironmentIds, environmentOrder, primaryEnvironmentId),
+        [pinnedThreads, activeThreads, workingThreads],
       ),
-    [threads, scopedProjectKeys],
+    [
+      connectedEnvironmentIds,
+      environmentOrder,
+      primaryEnvironmentId,
+      pinnedThreads,
+      activeThreads,
+      workingThreads,
+    ],
   );
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -4671,35 +4701,42 @@ export default function Sidebar() {
           ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              branch: thread.branch ?? null,
-              projectFilter: threadProjectGroup
-                ? {
-                    label: threadProjectGroup.displayName,
-                    isActive: projectScopeKey === threadProjectGroup.projectKey,
-                  }
-                : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning: !threadRuntimeCanArchive(thread.runtime),
-              supports: {
-                settlement: supportsSettlement,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: supportsSnooze,
-                pinning: supportsPinning,
-                titleRegeneration: supportsTitleRegeneration,
-              },
-              snoozePresets,
-              nesting: readThreadNestingMenuState(thread),
-            }),
+            [
+              ...(thread.attention ? [{ id: "clear-flag", label: "Clear flag" }] : []),
+              ...buildThreadActionMenuItems({
+                branch: thread.branch ?? null,
+                projectFilter: threadProjectGroup
+                  ? {
+                      label: threadProjectGroup.displayName,
+                      isActive: projectScopeKey === threadProjectGroup.projectKey,
+                    }
+                  : null,
+                isPinned,
+                isSettled,
+                autoSettleEnabled: thread.autoSettleDisabledAt == null,
+                isSnoozed,
+                canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+                isRegeneratingTitle,
+                isRunning: !threadRuntimeCanArchive(thread.runtime),
+                supports: {
+                  settlement: supportsSettlement,
+                  autoSettleOptOut: supportsAutoSettleOptOut,
+                  snooze: supportsSnooze,
+                  pinning: supportsPinning,
+                  titleRegeneration: supportsTitleRegeneration,
+                },
+                snoozePresets,
+                nesting: readThreadNestingMenuState(thread),
+              }),
+            ],
             position,
           ),
         );
         if (clicked._tag === "Failure") return;
+        if (clicked.value === "clear-flag") {
+          await clearThreadFlag(threadRef);
+          return;
+        }
         const nestUnder = clicked.value ? parseNestMenuChoice(clicked.value) : null;
         if (nestUnder !== null) {
           attemptSetSidebarParent(threadRef, nestUnder);
@@ -4896,6 +4933,7 @@ export default function Sidebar() {
       archiveThread,
       attemptPin,
       attemptSetSidebarParent,
+      clearThreadFlag,
       attemptSettle,
       attemptSnooze,
       attemptUnpin,
@@ -5470,42 +5508,6 @@ export default function Sidebar() {
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
                       const items: ReactNode[] = [
-                        needsYouThreads.length > 0 ? (
-                          <li key="needs-you" className="mb-2 list-none">
-                            <div className="px-2 py-1 text-xs font-medium text-warning">
-                              Needs you ({needsYouThreads.length})
-                            </div>
-                            <ul>
-                              {needsYouThreads.map((thread) => (
-                                <li key={`${thread.environmentId}:${thread.id}`}>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      navigateToThread(
-                                        scopeThreadRef(thread.environmentId, thread.id),
-                                      )
-                                    }
-                                    className="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-row-hover"
-                                  >
-                                    <span
-                                      className={cn(
-                                        "size-1.5 shrink-0 rounded-full",
-                                        threadAttentionStatus(thread) === "attention"
-                                          ? "bg-warning"
-                                          : "bg-destructive",
-                                      )}
-                                    />
-                                    <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-                                    <span className="max-w-20 truncate rounded bg-muted px-1 text-2xs text-muted-foreground">
-                                      {environmentLabelById.get(thread.environmentId) ??
-                                        thread.environmentId}
-                                    </span>
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          </li>
-                        ) : null,
                         <SidebarDraftBlock
                           key="draft-sessions"
                           projectByKey={projectByKey}
@@ -5546,6 +5548,40 @@ export default function Sidebar() {
                             <li key={`computer:${computer.environmentId}`} className="list-none">
                               <button
                                 type="button"
+                                onContextMenu={(event) => {
+                                  event.preventDefault();
+                                  const api = readLocalApi();
+                                  if (!api) return;
+                                  const ids = computerSections.map(
+                                    (section) => section.environmentId,
+                                  );
+                                  void api.contextMenu
+                                    .show(
+                                      [
+                                        {
+                                          id: "up",
+                                          label: "Move up",
+                                          disabled: ids[0] === computer.environmentId,
+                                        },
+                                        {
+                                          id: "down",
+                                          label: "Move down",
+                                          disabled: ids.at(-1) === computer.environmentId,
+                                        },
+                                      ],
+                                      { x: event.clientX, y: event.clientY },
+                                    )
+                                    .then((choice) => {
+                                      if (choice === "up" || choice === "down")
+                                        setEnvironmentOrder(
+                                          moveSidebarEnvironment(
+                                            ids,
+                                            computer.environmentId,
+                                            choice === "up" ? -1 : 1,
+                                          ),
+                                        );
+                                    });
+                                }}
                                 aria-expanded={!collapsed}
                                 onClick={() =>
                                   setCollapsedEnvironmentIds((current) =>
@@ -5554,9 +5590,12 @@ export default function Sidebar() {
                                       : [...current, computer.environmentId],
                                   )
                                 }
-                                className="flex w-full cursor-pointer items-center gap-1.5 px-2 py-2 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+                                className="flex w-full cursor-pointer items-center gap-1.5 border-b border-border px-2 py-2 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
                               >
-                                <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
+                                <ChevronRightIcon
+                                  aria-hidden
+                                  className={cn("size-4 shrink-0", !collapsed && "rotate-90")}
+                                />
                                 <span className="min-w-0 flex-1 truncate">
                                   {environments.find(
                                     (environment) =>
@@ -5585,22 +5624,12 @@ export default function Sidebar() {
                               {collapsed ? null : (
                                 <ul className="flex flex-col gap-px">
                                   {computer.sections.flatMap((section, index) =>
-                                    section.length === 0
-                                      ? []
-                                      : [
-                                          <li
-                                            key={`label:${["pinned", "active", "working"][index]}`}
-                                            className="list-none px-2 pt-1 text-2xs text-muted-foreground"
-                                          >
-                                            {["Pinned", "Active", "Working"][index]}
-                                          </li>,
-                                          ...section.map((thread) =>
-                                            renderThreadRow(
-                                              thread,
-                                              (["pinned", "active", "working"] as const)[index]!,
-                                            ),
-                                          ),
-                                        ],
+                                    section.map((thread) =>
+                                      renderThreadRow(
+                                        thread,
+                                        (["pinned", "active", "working"] as const)[index]!,
+                                      ),
+                                    ),
                                   )}
                                 </ul>
                               )}

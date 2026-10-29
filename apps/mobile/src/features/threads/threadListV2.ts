@@ -295,6 +295,7 @@ export interface ThreadListV2Group {
 }
 
 function threadListV2GroupStatus(thread: EnvironmentThreadShell): ThreadGroupStatus | null {
+  if (thread.attention) return "attention";
   const status = resolveThreadListV2Status(thread);
   if (status === "approval" || status === "input") return "attention";
   if (status === "failed" || status === "limited") return "failed";

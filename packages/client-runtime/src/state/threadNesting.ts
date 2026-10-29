@@ -115,7 +115,7 @@ export function listSidebarParentCandidates<T extends ParentCandidateThread>(
         candidate.settledOverride !== "settled" &&
         sidebarParentError([...byKey.values()], thread.id, candidate.id) === null,
     )
-    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, limit);
 }
 
@@ -156,23 +156,15 @@ export function threadDescendants<T>(parent: T, children: ReadonlyMap<T, readonl
 }
 
 export interface AttentionThread {
+  readonly attention?: { readonly reason: string } | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
   readonly runtime: { readonly status: string } | null;
 }
 
-/** Current shell signals only: an ordinary completed turn is never attention. */
-export function threadNeedsYou(thread: AttentionThread): boolean {
-  return (
-    thread.hasPendingApprovals ||
-    thread.hasPendingUserInput ||
-    thread.runtime?.status === "failed" ||
-    thread.runtime?.status === "interrupted"
-  );
-}
-
 export function threadAttentionStatus(thread: AttentionThread): ThreadGroupStatus | null {
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
+  if (thread.attention || thread.hasPendingApprovals || thread.hasPendingUserInput)
+    return "attention";
   if (thread.runtime?.status === "failed" || thread.runtime?.status === "interrupted")
     return "failed";
   if (
@@ -205,4 +197,28 @@ export function sidebarEnvironmentSections<T extends { readonly environmentId: s
       section.filter((thread) => thread.environmentId === environmentId),
     ),
   }));
+}
+
+/** Saved order wins; unseen environments append. Initially the primary comes first. */
+export function orderSidebarEnvironments(
+  ids: readonly string[],
+  saved: readonly string[],
+  primary: string | null,
+): string[] {
+  const preferred = saved.length > 0 ? saved : primary === null ? [] : [primary];
+  return [...new Set([...preferred.filter((id) => ids.includes(id)), ...ids])];
+}
+
+export function moveSidebarEnvironment(
+  ids: readonly string[],
+  id: string,
+  direction: -1 | 1,
+): string[] {
+  const result = [...ids];
+  const index = result.indexOf(id);
+  const next = index + direction;
+  if (index >= 0 && next >= 0 && next < result.length) {
+    [result[index], result[next]] = [result[next]!, result[index]!];
+  }
+  return result;
 }

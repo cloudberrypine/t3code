@@ -6,7 +6,8 @@ import {
   nestThreads,
   threadDescendants,
   sidebarEnvironmentSections,
-  threadNeedsYou,
+  orderSidebarEnvironments,
+  moveSidebarEnvironment,
   threadAttentionStatus,
 } from "./threadNesting.ts";
 
@@ -120,7 +121,7 @@ describe("mostUrgentThreadGroupStatus", () => {
   });
 });
 
-describe("computer sections and Needs you", () => {
+describe("computer sections", () => {
   it("keeps pins ahead of active rows inside each computer, preserving local order", () => {
     const m1Pin = thread("lead1", { environmentId: "M1" });
     const m5Pin = thread("lead5", { environmentId: "M5" });
@@ -144,17 +145,18 @@ describe("computer sections and Needs you", () => {
     expect(sidebarEnvironmentSections(["M5"], [[thread("lead")]])).toBeNull();
     expect(sidebarEnvironmentSections([], [])).toBeNull();
   });
-  it("uses pending questions and failed/interrupted runs, excluding ordinary completions", () => {
-    const state = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
-    expect(threadNeedsYou(state)).toBe(false);
-    expect(threadNeedsYou({ ...state, hasPendingApprovals: true })).toBe(true);
-    expect(threadNeedsYou({ ...state, hasPendingUserInput: true })).toBe(true);
-    for (const status of ["failed", "interrupted"])
-      expect(threadNeedsYou({ ...state, runtime: { status } })).toBe(true);
-    for (const status of ["completed", "running", "waiting", "cancelled"])
-      expect(threadNeedsYou({ ...state, runtime: { status } })).toBe(false);
-    expect(
-      threadAttentionStatus({ ...state, hasPendingUserInput: true, runtime: { status: "failed" } }),
-    ).toBe("attention");
+  it("ranks flags with attention above failures and work", () => {
+    const state = {
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      runtime: { status: "failed" },
+      attention: { reason: "Please test" },
+    };
+    expect(threadAttentionStatus(state)).toBe("attention");
+  });
+  it("defaults to primary and preserves saved client order with new computers last", () => {
+    expect(orderSidebarEnvironments(["M1", "M5"], [], "M5")).toEqual(["M5", "M1"]);
+    const saved = moveSidebarEnvironment(["M1", "M5"], "M5", -1);
+    expect(orderSidebarEnvironments(["M1", "M5", "new"], saved, "M1")).toEqual(["M5", "M1", "new"]);
   });
 });

@@ -1019,6 +1019,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         )}
         numberOfLines={2}
       >
+        {thread.attention ? (
+          <Text className="text-warning" accessibilityLabel={`Flag: ${thread.attention.reason}`}>
+            ⚑{" "}
+          </Text>
+        ) : null}
         {thread.title}
       </Text>
       {props.searchMatch ? (
@@ -1162,9 +1167,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionOpacity={rowAppearance.interactionOpacity}
         className={rowAppearance.className}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={[
+          thread.title,
+          thread.attention ? `Flag: ${thread.attention.reason}` : null,
+          props.hasQueuedMessages ? "messages queued to send" : null,
+        ]
+          .filter(Boolean)
+          .join(", ")}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         onPress={() => {
@@ -1194,9 +1203,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         interactionClassName={rowAppearance.interactionClassName}
         interactionOpacity={rowAppearance.interactionOpacity}
         accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={
-          props.hasQueuedMessages ? `${thread.title}, messages queued to send` : thread.title
-        }
+        accessibilityLabel={[
+          thread.title,
+          thread.attention ? `Flag: ${thread.attention.reason}` : null,
+          props.hasQueuedMessages ? "messages queued to send" : null,
+        ]
+          .filter(Boolean)
+          .join(", ")}
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={rowAppearance.className}
@@ -1235,6 +1248,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               )}
               numberOfLines={1}
             >
+              {thread.attention ? (
+                <Text
+                  className="text-warning"
+                  accessibilityLabel={`Flag: ${thread.attention.reason}`}
+                >
+                  ⚑{" "}
+                </Text>
+              ) : null}
               {thread.title}
             </Text>
             {props.searchMatch ? (
