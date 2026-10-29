@@ -2334,6 +2334,30 @@ describe("buildThreadListV2Items nesting", () => {
     ]);
   });
 
+  it("renders deep branches, counts descendants and preserves selected paths", () => {
+    const leaf = makeThread({ id: ThreadId.make("leaf"), sidebarParentThreadId: owl.id });
+    const base = { threads: [leaf, owl, parent], environmentId: null, searchQuery: "", now: NOW };
+    const open = buildThreadListV2Items(base);
+    expect(open.items.map((item) => [item.thread.id, item.depth, item.group?.count])).toEqual([
+      ["c2", 0, 2],
+      ["owl", 1, 1],
+      ["leaf", 2, undefined],
+    ]);
+    expect(
+      rows(
+        buildThreadListV2Items({
+          ...base,
+          collapsedThreadGroupKeys: new Set([`${environmentId}:c2`, `${environmentId}:owl`]),
+          selectedThreadKey: `${environmentId}:leaf`,
+        }),
+      ),
+    ).toEqual([
+      ["c2", false, 2],
+      ["owl", true, 1],
+      ["leaf", true, 0],
+    ]);
+  });
+
   it("hides a collapsed group's children except the selected thread", () => {
     const base = {
       threads: [owl, parent],

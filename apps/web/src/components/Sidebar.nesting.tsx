@@ -4,6 +4,7 @@ import {
   listSidebarParentCandidates,
   mostUrgentThreadGroupStatus,
   nestThreads,
+  threadDescendants,
   type ThreadGroupStatus,
 } from "@t3tools/client-runtime/state/thread-nesting";
 import { ThreadId } from "@t3tools/contracts";
@@ -63,6 +64,7 @@ export function useSidebarThreadNesting(input: {
   readonly pinned: readonly EnvironmentThreadShell[];
   readonly active: readonly EnvironmentThreadShell[];
   readonly working: readonly EnvironmentThreadShell[];
+  readonly allThreads: readonly EnvironmentThreadShell[];
   readonly routeThreadKey: string | null;
 }) {
   const [collapsedKeys, setCollapsedKeys] = useLocalStorage(
@@ -70,21 +72,28 @@ export function useSidebarThreadNesting(input: {
     [] as readonly string[],
     CollapsedThreadGroups,
   );
-  const { pinned, active, working, routeThreadKey } = input;
+  const { pinned, active, working, routeThreadKey, allThreads } = input;
   const nesting = useMemo(() => {
-    const { sections, childrenByParent } = nestThreads([pinned, active, working]);
+    const { sections, childrenByParent } = nestThreads([pinned, active, working], allThreads);
     const collapsed = new Set(collapsedKeys);
     const groups = new Map<string, SidebarThreadGroup>();
     for (const [parent, children] of childrenByParent) {
       const parentKey = keyOf(parent);
       const isCollapsed = collapsed.has(parentKey);
+      const descendants = threadDescendants(parent, childrenByParent);
       groups.set(parentKey, {
         children: isCollapsed
-          ? children.filter((child) => keyOf(child) === routeThreadKey)
+          ? children.filter(
+              (child) =>
+                keyOf(child) === routeThreadKey ||
+                threadDescendants(child, childrenByParent).some(
+                  (descendant) => keyOf(descendant) === routeThreadKey,
+                ),
+            )
           : children,
-        count: children.length,
+        count: descendants.length,
         collapsed: isCollapsed,
-        status: isCollapsed ? mostUrgentThreadGroupStatus(children.map(childGroupStatus)) : null,
+        status: isCollapsed ? mostUrgentThreadGroupStatus(descendants.map(childGroupStatus)) : null,
       });
     }
     return {
@@ -93,7 +102,7 @@ export function useSidebarThreadNesting(input: {
       working: sections[2] ?? working,
       groups,
     };
-  }, [active, collapsedKeys, pinned, routeThreadKey, working]);
+  }, [active, allThreads, collapsedKeys, pinned, routeThreadKey, working]);
   const toggleGroup = useCallback(
     (parentKey: string) =>
       setCollapsedKeys((keys) =>
@@ -126,7 +135,10 @@ export function flattenSidebarGroups(
   groups: ReadonlyMap<string, SidebarThreadGroup>,
 ): EnvironmentThreadShell[] {
   if (groups.size === 0) return [...rows];
-  return rows.flatMap((row) => [row, ...(groups.get(keyOf(row))?.children ?? [])]);
+  return rows.flatMap((row) => [
+    row,
+    ...flattenSidebarGroups(groups.get(keyOf(row))?.children ?? [], groups),
+  ]);
 }
 
 /** A row the lifted thread can be dropped onto, in list coordinates. */

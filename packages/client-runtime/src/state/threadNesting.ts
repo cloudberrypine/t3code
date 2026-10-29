@@ -1,6 +1,7 @@
+import { sidebarParentError } from "@t3tools/contracts";
 /**
  * Threads shown under another thread in thread lists (`sidebarParentThreadId`).
- * Purely presentational and one level deep: a thread nests under its parent
+ * Presentational tree: a thread nests under its parent
  * when both are in a list section that can hold groups (pinned, inbox,
  * working). Settled, snoozed, archived, and hidden threads neither nest nor
  * parent, so a child shows on its own while it or its parent is parked.
@@ -45,16 +46,27 @@ function compareCreated(left: NestableThread, right: NestableThread): number {
  */
 export function nestThreads<T extends NestableThread>(
   sections: ReadonlyArray<ReadonlyArray<T>>,
+  allThreads: readonly T[] = sections.flat(),
 ): ThreadNesting<T> {
   const byKey = new Map<string, T>();
   for (const section of sections) {
     for (const thread of section) byKey.set(threadKey(thread.environmentId, thread.id), thread);
   }
+  const allByKey = new Map(
+    allThreads.map((thread) => [threadKey(thread.environmentId, thread.id), thread]),
+  );
   const childrenByParent = new Map<T, T[]>();
   const nested = new Set<T>();
   for (const thread of byKey.values()) {
-    const parent = parentIn(thread, byKey);
-    if (parent === undefined || parentIn(parent, byKey) !== undefined) continue;
+    const seen = new Set<T>([thread]);
+    let ancestor = parentIn(thread, allByKey);
+    let parent: T | undefined;
+    while (ancestor !== undefined && !seen.has(ancestor)) {
+      seen.add(ancestor);
+      parent ??= byKey.get(threadKey(ancestor.environmentId, ancestor.id));
+      ancestor = parentIn(ancestor, allByKey);
+    }
+    if (ancestor !== undefined || parent === undefined) continue;
     nested.add(thread);
     const children = childrenByParent.get(parent);
     if (children) children.push(thread);
@@ -78,13 +90,12 @@ export interface ParentCandidateThread extends NestableThread {
 
 /**
  * Threads `thread` can be shown under, most recently updated first: unsettled
- * top-level threads of the same project. Empty when `thread` already holds
- * children, since groups are one level deep.
+ * threads of the same project that accept the entire subtree.
  */
 export function listSidebarParentCandidates<T extends ParentCandidateThread>(
   threads: ReadonlyArray<T>,
   thread: NestableThread,
-  limit = 20,
+  limit = Number.POSITIVE_INFINITY,
 ): T[] {
   const live = threads.filter(
     (candidate) =>
@@ -96,14 +107,13 @@ export function listSidebarParentCandidates<T extends ParentCandidateThread>(
   const byKey = new Map(
     live.map((candidate) => [threadKey(candidate.environmentId, candidate.id), candidate]),
   );
-  if (live.some((candidate) => candidate.sidebarParentThreadId === thread.id)) return [];
   return live
     .filter(
       (candidate) =>
         candidate.id !== thread.id &&
         candidate.id !== thread.sidebarParentThreadId &&
         candidate.settledOverride !== "settled" &&
-        parentIn(candidate, byKey) === undefined,
+        sidebarParentError([...byKey.values()], thread.id, candidate.id) === null,
     )
     .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, limit);
@@ -130,4 +140,17 @@ export function mostUrgentThreadGroupStatus(
     }
   }
   return best;
+}
+
+/** All descendants in display order, also used for collapsed counts and urgency. */
+export function threadDescendants<T>(parent: T, children: ReadonlyMap<T, readonly T[]>): T[] {
+  const result: T[] = [];
+  const visit = (node: T) => {
+    for (const child of children.get(node) ?? []) {
+      result.push(child);
+      visit(child);
+    }
+  };
+  visit(parent);
+  return result;
 }

@@ -2190,7 +2190,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       {props.childRows ? (
         <ul
           role="presentation"
-          className="mt-px ml-3 flex flex-col gap-px border-l border-sidebar-border pl-1"
+          className="mt-px ml-1.5 flex flex-col gap-px border-l border-sidebar-border pl-1"
           // Children are not drag sources: a press here must not lift the parent.
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -2869,6 +2869,7 @@ export default function Sidebar() {
     groups: threadGroups,
     toggleGroup: toggleThreadGroup,
   } = useSidebarThreadNesting({
+    allThreads: threads,
     pinned: pinnedSectionThreads,
     active: activeSectionThreads,
     working: workingSectionThreads,
@@ -3801,16 +3802,14 @@ export default function Sidebar() {
         activationY:
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
-      // A thread can nest under a top-level row of its project, unless it
-      // holds a group itself (groups are one level deep) or is parked.
       nestTargetKeyRef.current = null;
       const dragged = threadByKeyRef.current.get(activeKey);
-      const childKeys = new Set(
-        [...threadGroups.values()].flatMap((group) =>
-          group.children.map((child) =>
-            scopedThreadKey(scopeThreadRef(child.environmentId, child.id)),
-          ),
-        ),
+      const candidates = new Set(
+        dragged
+          ? readThreadNestingMenuState(dragged)?.candidates.map(
+              (candidate) => `${dragged!.environmentId}:${candidate.id}`,
+            )
+          : [],
       );
       const isGroupSection = (section: SidebarSection | undefined) =>
         section === "pinned" || section === "active" || section === "working";
@@ -3818,14 +3817,13 @@ export default function Sidebar() {
         list &&
         dragged &&
         isGroupSection(activeSection) &&
-        !threadGroups.has(activeKey) &&
         serverConfigs.get(dragged.environmentId)?.environment.capabilities.threadSidebarNesting ===
           true
           ? measureSidebarNestBands(list, (key) => {
               const candidate = threadByKeyRef.current.get(key);
               return (
                 key !== activeKey &&
-                !childKeys.has(key) &&
+                candidates.has(key) &&
                 isGroupSection(sectionByThreadKey.get(key)) &&
                 candidate?.environmentId === dragged.environmentId &&
                 candidate.projectId === dragged.projectId
@@ -5381,9 +5379,7 @@ export default function Sidebar() {
                             onToggleGroup={toggleThreadGroup}
                             childRows={
                               group && group.children.length > 0
-                                ? group.children.map((child) =>
-                                    renderThreadRowInner(child, section),
-                                  )
+                                ? group.children.map((child) => renderThreadRow(child, section))
                                 : undefined
                             }
                             isNestTarget={nestTargetKey === threadKey}

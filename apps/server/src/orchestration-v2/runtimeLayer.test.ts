@@ -1774,6 +1774,20 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const beforeNest = yield* orchestrator.getThreadProjection(threadId);
       const sidebarParentThreadId = ThreadId.make("runtime-layer-lifecycle-parent");
       yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("lifecycle-parent-create"),
+        threadId: sidebarParentThreadId,
+        projectId: beforeNest.thread.projectId,
+        title: "Parent",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
         type: "thread.sidebar-parent.set",
         commandId: CommandId.make("runtime-layer-lifecycle-nest"),
         threadId,
@@ -4833,6 +4847,23 @@ it.layer(TestLayer)("sidebar groups", (it) => {
           sidebarParentThreadId: parentId,
         });
       }
+      const grandchildId = ThreadId.make("runtime-layer-group-grandchild");
+      yield* create("grandchild");
+      yield* orchestrator.dispatch({
+        type: "thread.sidebar-parent.set",
+        commandId: CommandId.make("grandchild-nest"),
+        threadId: grandchildId,
+        sidebarParentThreadId: owlId,
+      });
+      const cycle = yield* orchestrator
+        .dispatch({
+          type: "thread.sidebar-parent.set",
+          commandId: CommandId.make("group-cycle"),
+          threadId: parentId,
+          sidebarParentThreadId: grandchildId,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(cycle, Orchestrator.OrchestratorDispatchError);
       const thread = (threadId: ThreadId) =>
         orchestrator.getThreadProjection(threadId).pipe(Effect.map((p) => p.thread));
       const lifecycle = (
@@ -4857,12 +4888,16 @@ it.layer(TestLayer)("sidebar groups", (it) => {
       const parent = yield* thread(parentId);
       const owl = yield* thread(owlId);
       assert.equal(owl.settledOverride, "settled");
+      assert.isTrue(
+        DateTime.Equivalence((yield* thread(grandchildId)).settledAt!, parent.settledAt!),
+      );
       assert.isTrue(DateTime.Equivalence(owl.settledAt!, parent.settledAt!));
       assert.isTrue(DateTime.Equivalence((yield* thread(beetleId)).settledAt!, beetleSettledAt!));
 
       // Un-settling the parent brings back only the child that went with it.
       yield* lifecycle(parentId, "unsettle", { type: "thread.unsettle", reason: "user" });
       assert.equal((yield* thread(owlId)).settledOverride, "active");
+      assert.equal((yield* thread(grandchildId)).settledOverride, "active");
       assert.equal((yield* thread(beetleId)).settledOverride, "settled");
 
       yield* TestClock.adjust("1 minute");
@@ -4877,6 +4912,19 @@ it.layer(TestLayer)("sidebar groups", (it) => {
 
       yield* lifecycle(parentId, "unsnooze", { type: "thread.unsnooze", reason: "user" });
       assert.isNull((yield* thread(owlId)).snoozedUntil ?? null);
+      assert.isNull((yield* thread(grandchildId)).snoozedUntil ?? null);
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("group-archive"),
+        threadId: owlId,
+      });
+      assert.equal((yield* thread(grandchildId)).sidebarParentThreadId, parentId);
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("group-delete"),
+        threadId: parentId,
+      });
+      assert.isNull((yield* thread(grandchildId)).sidebarParentThreadId ?? null);
     }),
   );
 });

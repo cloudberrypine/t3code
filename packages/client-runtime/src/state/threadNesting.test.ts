@@ -4,6 +4,7 @@ import {
   listSidebarParentCandidates,
   mostUrgentThreadGroupStatus,
   nestThreads,
+  threadDescendants,
 } from "./threadNesting.ts";
 
 const thread = (
@@ -52,6 +53,14 @@ describe("nestThreads", () => {
     expect(nesting.childrenByParent.size).toBe(0);
   });
 
+  it("bypasses hidden ancestors and keeps descendants attached to the nearest visible one", () => {
+    const root = thread("root");
+    const hidden = thread("hidden", { parent: "root" });
+    const leaf = thread("leaf", { parent: "hidden" });
+    const tree = nestThreads([[root, leaf]], [root, hidden, leaf]);
+    expect(ids(tree.childrenByParent.get(root))).toEqual(["leaf"]);
+  });
+
   it("does not nest across projects or environments", () => {
     const parent = thread("c2");
     const otherProject = thread("a", { parent: "c2", projectId: "elsewhere" });
@@ -61,13 +70,15 @@ describe("nestThreads", () => {
     expect(nesting.sections.map(ids)).toEqual([["c2", "a", "b"]]);
   });
 
-  it("stays one level deep: chains stop at the first level and cycles show flat", () => {
+  it("keeps chains recursive and cycles visible", () => {
     const root = thread("root");
     const middle = thread("middle", { parent: "root" });
     const leaf = thread("leaf", { parent: "middle" });
     const chain = nestThreads([[root, middle, leaf]]);
-    expect(chain.sections.map(ids)).toEqual([["root", "leaf"]]);
+    expect(chain.sections.map(ids)).toEqual([["root"]]);
     expect(ids(chain.childrenByParent.get(root))).toEqual(["middle"]);
+    expect(ids(chain.childrenByParent.get(middle))).toEqual(["leaf"]);
+    expect(ids(threadDescendants(root, chain.childrenByParent))).toEqual(["middle", "leaf"]);
 
     const cycle = nestThreads([[thread("a", { parent: "b" }), thread("b", { parent: "a" })]]);
     expect(cycle.sections.map(ids)).toEqual([["a", "b"]]);
@@ -87,14 +98,14 @@ describe("listSidebarParentCandidates", () => {
       thread("elsewhere", { projectId: "other" }),
     ];
 
-    expect(ids(listSidebarParentCandidates(threads, self))).toEqual(["varzea", "c2"]);
+    expect(ids(listSidebarParentCandidates(threads, self))).toEqual(["varzea", "c2", "nested"]);
   });
 
-  it("offers nothing to a thread that already holds children", () => {
+  it("offers valid parents for a whole subtree", () => {
     const parent = thread("c2");
     expect(
       listSidebarParentCandidates([parent, thread("owl", { parent: "c2" }), thread("b1")], parent),
-    ).toEqual([]);
+    ).toEqual([thread("b1")]);
   });
 });
 

@@ -5261,7 +5261,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           FROM orchestration_v2_projection_threads
           WHERE deleted_at IS NULL
             AND json_extract(payload_json, '$.sidebarParentThreadId') = ${parentThreadId}
-            AND json_extract(payload_json, '$.archivedAt') IS NULL
           ORDER BY created_at ASC, thread_id ASC
         `;
         return yield* Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json));
@@ -5713,9 +5712,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               .map(({ thread }) => thread)
               .filter(
                 (thread) =>
-                  thread.sidebarParentThreadId === parentThreadId &&
-                  thread.deletedAt === null &&
-                  thread.archivedAt === null,
+                  thread.sidebarParentThreadId === parentThreadId && thread.deletedAt === null,
               ),
           ),
         ),

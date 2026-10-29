@@ -385,6 +385,7 @@ describe("nested threads following their parent", () => {
     threads: [
       parent,
       { ...parent, id: CHILD_ID, sidebarParentThreadId: THREAD_ID },
+      { ...parent, id: ThreadId.make("grandchild"), sidebarParentThreadId: CHILD_ID },
       {
         ...parent,
         id: ALONE_ID,
@@ -407,6 +408,7 @@ describe("nested threads following their parent", () => {
         input: { threadId: THREAD_ID },
       });
       expect(visibleThread(h, CHILD_ID)?.settledOverride).toBe("settled");
+      expect(visibleThread(h, ThreadId.make("grandchild"))?.settledOverride).toBe("settled");
       // Settled on its own before: keeps its own settle time.
       expect(visibleThread(h, ALONE_ID)?.settledAt).toBe(NOW);
 
@@ -425,11 +427,12 @@ describe("nested threads following their parent", () => {
       };
       h.registry.set(source, parentSettled);
       expect(visibleThread(h, CHILD_ID)?.settledOverride).toBe("settled");
+      expect(visibleThread(h, ThreadId.make("grandchild"))?.settledOverride).toBe("settled");
       const childSettled = {
         ...parentSettled,
         snapshotSequence: 3,
         threads: parentSettled.threads.map((thread) =>
-          thread.id === CHILD_ID
+          thread.id === CHILD_ID || thread.id === ThreadId.make("grandchild")
             ? { ...thread, settledOverride: "settled" as const, settledAt: NOW }
             : thread,
         ),

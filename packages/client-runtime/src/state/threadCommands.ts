@@ -1,3 +1,6 @@
+import { sidebarParentError } from "@t3tools/contracts";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import * as Cause from "effect/Cause";
 import type { ThreadId } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -506,9 +509,27 @@ export function createThreadEnvironmentAtoms<R, E>(
       ...thread,
       activeOrderKey: input.orderKey,
     })),
-    setSidebarParent: optimistic.wrap(commands.setSidebarParent, (thread, input) => ({
-      ...thread,
-      sidebarParentThreadId: input.sidebarParentThreadId,
-    })),
+    setSidebarParent: {
+      ...commands.setSidebarParent,
+      run: (registry, target) => {
+        const snapshot = registry.get(optimistic.snapshotAtom(target.environmentId));
+        const error =
+          snapshot === null
+            ? null
+            : sidebarParentError(
+                snapshot.threads,
+                target.input.threadId,
+                target.input.sidebarParentThreadId,
+              );
+        if (error !== null)
+          return Promise.resolve(AsyncResult.failure(Cause.die(new Error(error))));
+        return optimistic
+          .wrap(commands.setSidebarParent, (thread, input) => ({
+            ...thread,
+            sidebarParentThreadId: input.sidebarParentThreadId,
+          }))
+          .run(registry, target);
+      },
+    } satisfies typeof commands.setSidebarParent,
   };
 }

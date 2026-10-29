@@ -131,7 +131,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     sidebarParentThreadId: Schema.optional(
       ThreadId.annotate({
         description:
-          "Show the new thread indented under this thread in the sidebar (display only, no lifecycle link). Pass your own thread id when launching one thread per item of your work. Must be in the same project. Omit for a top-level thread.",
+          "Show the new thread indented under this thread in the sidebar (sidebar grouping; settle and snooze follow the parent). Pass your own thread id when launching one thread per item of your work. Must be in the same project. Parents may themselves be nested, up to eight parent links. Omit for a top-level thread.",
       }),
     ),
   }),

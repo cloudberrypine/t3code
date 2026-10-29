@@ -26,6 +26,7 @@ import {
 import {
   mostUrgentThreadGroupStatus,
   nestThreads,
+  threadDescendants,
   type ThreadGroupStatus,
 } from "@t3tools/client-runtime/state/thread-nesting";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -281,6 +282,7 @@ export interface ThreadListV2Item {
   readonly isLast: boolean;
   /** Shown indented under its parent thread (see threadNesting.ts). */
   readonly nested?: boolean;
+  readonly depth?: number;
   /** Present on a parent row: its nested threads and their disclosure state. */
   readonly group?: ThreadListV2Group;
 }
@@ -436,6 +438,7 @@ export function threadListV2ListItemsAreEqual(
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
         previous.item.nested === item.item.nested &&
+        previous.item.depth === item.item.depth &&
         previous.item.group?.count === item.item.group?.count &&
         previous.item.group?.collapsed === item.item.group?.collapsed &&
         previous.item.group?.status === item.item.group?.status &&
@@ -761,12 +764,15 @@ export function buildThreadListV2Items(input: {
     ? sortInboxThreadsByReturn(active, input.inboxReturnAt)
     : applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
   // Nested threads leave their section and follow their parent's row.
-  const nesting = nestThreads([
-    applyPendingThreadOrder(sortPinnedThreadsByOrderKey(pinned), "pinned", pending),
-    orderedActive,
-    // Newest send first; finishing and waking again do not move a row.
-    sortWorkingThreadsBySend(working),
-  ]);
+  const nesting = nestThreads(
+    [
+      applyPendingThreadOrder(sortPinnedThreadsByOrderKey(pinned), "pinned", pending),
+      orderedActive,
+      // Newest send first; finishing and waking again do not move a row.
+      sortWorkingThreadsBySend(working),
+    ],
+    input.threads,
+  );
   const [topPinned = [], topActive = [], orderedWorking = []] = nesting.sections;
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
@@ -801,12 +807,21 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  const pushCard = (thread: EnvironmentThreadShell, pinned: boolean) => {
+  const pushCard = (thread: EnvironmentThreadShell, pinned: boolean, depth = 0) => {
     const children = nesting.childrenByParent.get(thread);
     if (children === undefined) {
-      items.push({ thread, variant: "card", snoozed: false, pinned, isLast: false });
+      items.push({
+        thread,
+        variant: "card",
+        snoozed: false,
+        pinned,
+        isLast: false,
+        nested: depth > 0,
+        depth,
+      });
       return;
     }
+    const descendants = threadDescendants(thread, nesting.childrenByParent);
     const collapsed =
       input.collapsedThreadGroupKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     items.push({
@@ -815,25 +830,26 @@ export function buildThreadListV2Items(input: {
       snoozed: false,
       pinned,
       isLast: false,
+      nested: depth > 0,
+      depth,
       group: {
-        count: children.length,
+        count: descendants.length,
         collapsed,
         status: collapsed
-          ? mostUrgentThreadGroupStatus(children.map(threadListV2GroupStatus))
+          ? mostUrgentThreadGroupStatus(descendants.map(threadListV2GroupStatus))
           : null,
       },
     });
     for (const child of children) {
       // A collapsed group still shows the selected thread, like the shelves.
-      if (collapsed && `${child.environmentId}:${child.id}` !== selectedThreadKey) continue;
-      items.push({
-        thread: child,
-        variant: "card",
-        snoozed: false,
-        pinned: child.pinnedAt != null,
-        isLast: false,
-        nested: true,
-      });
+      if (
+        collapsed &&
+        ![child, ...threadDescendants(child, nesting.childrenByParent)].some(
+          (descendant) => `${descendant.environmentId}:${descendant.id}` === selectedThreadKey,
+        )
+      )
+        continue;
+      pushCard(child, child.pinnedAt != null, depth + 1);
     }
   };
   for (const thread of topPinned) pushCard(thread, true);

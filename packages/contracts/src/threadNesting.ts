@@ -59,3 +59,48 @@ export function followsSidebarParent(
       return isSnoozed(child, now) && snoozedWith(child, parent);
   }
 }
+
+/** Maximum number of parent links, including the height of a moved subtree. */
+export const MAX_SIDEBAR_THREAD_DEPTH = 8;
+
+interface SidebarTreeThread {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sidebarParentThreadId?: string | null | undefined;
+  readonly archivedAt?: unknown;
+}
+
+/** Shared by command validation and client previews; null means the move is valid. */
+export function sidebarParentError(
+  threads: readonly SidebarTreeThread[],
+  threadId: string,
+  parentId: string | null,
+): string | null {
+  if (parentId === null) return null;
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  const thread = byId.get(threadId);
+  const parent = byId.get(parentId);
+  if (!thread || !parent || parent.projectId !== thread.projectId || parent.archivedAt != null) {
+    return "Choose an existing, unarchived parent in the same project.";
+  }
+  const depth = (id: string): number | null => {
+    const seen = new Set<string>();
+    let current: string | null | undefined = id;
+    let links = -1;
+    while (current != null) {
+      if (seen.has(current)) return null;
+      seen.add(current);
+      links++;
+      current = current === threadId ? parentId : byId.get(current)?.sidebarParentThreadId;
+    }
+    return links;
+  };
+  for (const candidate of threads) {
+    const links = depth(candidate.id);
+    if (links === null)
+      return "A thread cannot be shown under itself or one of its descendants (cycle).";
+    if (links > MAX_SIDEBAR_THREAD_DEPTH)
+      return `Thread nesting is limited to ${MAX_SIDEBAR_THREAD_DEPTH} levels below a root, including the moved subtree.`;
+  }
+  return null;
+}

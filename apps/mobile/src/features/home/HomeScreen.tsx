@@ -755,6 +755,7 @@ export function HomeScreen(props: HomeScreenProps) {
           )}
           searchQuery={props.searchQuery}
           nested={item.item.nested}
+          depth={item.item.depth}
           group={item.item.group}
           onToggleGroup={toggleThreadGroupOf}
           onSelectThread={props.onSelectThread}

@@ -117,7 +117,7 @@ open.
 To keep related threads together, show them indented under another thread of the same
 project. On web and desktop, drag a thread onto the middle of another thread's row (the
 dragged thread shows **Nest**), or choose **Show under** from its menu and pick the
-thread. **Remove from group** in the menu moves it back. Click the arrow on the parent
+thread at any depth. **Remove from group** in the menu moves it to the top level. Click the arrow on the parent
 row to collapse or expand its group; a collapsed parent shows how many threads it holds,
 colored by the one that most needs you. Each device remembers which groups you collapsed.
 Agents can nest the threads they launch, or move existing ones. Mobile shows the same
@@ -126,9 +126,7 @@ groups and can collapse them.
 Settling or snoozing a parent settles or snoozes the threads under it too, from any device
 or by an agent. **Un-settle** or **Wake** on the parent brings them back with it. A thread
 you settled or snoozed on its own keeps its own state, and a thread still working, or
-waiting on an approval or answer, stays active. Those, and the threads under an archived
-parent, show in the active list on their own until the parent returns. Archiving and
-pinning a parent do not change its children. Groups are one level deep.
+waiting on an approval or answer, stays active. Descendants of a parked thread attach to their nearest visible ancestor, or appear on their own. Archiving or deleting a parent moves its children up to its parent. Pinning does not change children. Groups allow eight parent links, and a move cannot create a cycle.
 
 ### Fold working threads (beta)
 

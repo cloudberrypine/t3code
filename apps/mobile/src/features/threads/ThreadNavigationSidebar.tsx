@@ -725,6 +725,7 @@ function ThreadNavigationSidebarPane(
               )}
               searchQuery={props.searchQuery}
               nested={item.item.nested}
+              depth={item.item.depth}
               group={item.item.group}
               onToggleGroup={toggleThreadGroupOf}
               pane="sidebar"

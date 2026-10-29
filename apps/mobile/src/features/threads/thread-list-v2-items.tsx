@@ -549,6 +549,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
   /** Indented under its parent thread (see threadNesting.ts). */
   readonly nested?: boolean;
+  readonly depth?: number;
   /** Parent rows: the disclosure for the threads nested under this one. */
   readonly group?: ThreadListV2Group;
   readonly onToggleGroup?: (thread: EnvironmentThreadShell) => void;
@@ -1266,7 +1267,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     );
 
   return (
-    <View collapsable={false} className={props.nested ? "pl-4" : undefined}>
+    <View collapsable={false} style={{ paddingLeft: (props.depth ?? (props.nested ? 1 : 0)) * 8 }}>
       {customSnoozeOpen && (
         <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}

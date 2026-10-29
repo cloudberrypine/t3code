@@ -166,22 +166,26 @@ export function createOptimisticThreadLifecycle(
     const parent = snapshot?.threads.find((thread) => thread.id === parentThreadId);
     if (snapshot == null || parent === undefined) return [];
     const now = DateTime.nowUnsafe();
-    return snapshot.threads.flatMap((child) => {
-      if (
-        child.sidebarParentThreadId !== parentThreadId ||
-        child.archivedAt !== null ||
-        child.projectId !== parent.projectId ||
-        !followsSidebarParent(child, parent, action, now)
-      ) {
-        return [];
-      }
-      // The same preview the thread gets on its own, so a child with work
-      // that blocks the action stays where it is.
-      const predicted = applyToChild(child);
-      if (predicted === child) return [];
-      const update: PendingThreadUpdate = { threadId: child.id, apply: applyToChild };
-      return [{ threadId: child.id, update, expected: parkState(predicted) }];
-    });
+    const seen = new Set<ThreadId>([parentThreadId]);
+    const visit = (
+      parent: OrchestrationV2ThreadShell,
+    ): Array<{ threadId: ThreadId; update: PendingThreadUpdate; expected: string }> =>
+      snapshot.threads.flatMap((child) => {
+        if (
+          seen.has(child.id) ||
+          child.sidebarParentThreadId !== parent.id ||
+          child.archivedAt !== null ||
+          child.projectId !== parent.projectId ||
+          !followsSidebarParent(child, parent, action, now)
+        )
+          return [];
+        seen.add(child.id);
+        const predicted = applyToChild(child);
+        if (predicted === child) return [];
+        const update: PendingThreadUpdate = { threadId: child.id, apply: applyToChild };
+        return [{ threadId: child.id, update, expected: parkState(predicted) }, ...visit(child)];
+      });
+    return visit(parent);
   }
 
   return { snapshotAtom, wrap };

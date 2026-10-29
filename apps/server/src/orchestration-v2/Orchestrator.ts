@@ -1,3 +1,5 @@
+import * as Semaphore from "effect/Semaphore";
+import { sidebarParentError } from "@t3tools/contracts";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -776,6 +778,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor;
+  const sidebarTopology = yield* Semaphore.make(1);
 
   const mapDispatchError =
     (command: OrchestrationV2ServerCommand) =>
@@ -2311,6 +2314,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const reattachSidebarChildren = Effect.fn(function* (
+    command: OrchestrationV2ServerCommand,
+    parent: { readonly id: ThreadId; readonly sidebarParentThreadId?: ThreadId | null | undefined },
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    now: DateTime.Utc,
+  ) {
+    const children = yield* projectionStore
+      .getSidebarChildThreads(parent.id)
+      .pipe(mapDispatchError(command));
+    for (const child of children) {
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.sidebar-parent-set",
+        threadId: child.id,
+        providerInstanceId: child.providerInstanceId,
+        occurredAt: now,
+        payload: { ...child, sidebarParentThreadId: parent.sidebarParentThreadId ?? null },
+      });
+    }
+  });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -2451,15 +2477,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} is not active and cannot be reordered.`,
       });
     }
-    if (
-      command.type === "thread.sidebar-parent.set" &&
-      command.sidebarParentThreadId === command.threadId
-    ) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: `Thread ${command.threadId} cannot be shown under itself.`,
-      });
+    if (command.type === "thread.sidebar-parent.set") {
+      const active = yield* projectionStore.getShellSnapshot().pipe(mapDispatchError(command));
+      const archive = yield* projectionStore
+        .getShellSnapshot({ location: "archive" })
+        .pipe(mapDispatchError(command));
+      const error = sidebarParentError(
+        [...active.threads, ...archive.threads],
+        command.threadId,
+        command.sidebarParentThreadId,
+      );
+      if (error !== null)
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: error,
+        });
     }
     if (command.type === "thread.pull-request.sync") {
       const project = yield* projects.get(command.projectId).pipe(mapDispatchError(command));
@@ -3196,6 +3229,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         } satisfies PendingOrchestrationEffectV2;
         yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);
       }
+    }
+
+    if (command.type === "thread.archive") {
+      yield* reattachSidebarChildren(command, thread, events, now);
     }
 
     if (command.type === "thread.metadata.update" && command.regenerateTitle === true) {
@@ -9563,7 +9600,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
             ),
           );
-        return yield* mapDispatchError(command)(
+        yield* reattachSidebarChildren(command, projection.thread, events, yield* DateTime.now);
+        const deletion = yield* mapDispatchError(command)(
           planThreadDeletion({
             command,
             projection,
@@ -9574,6 +9612,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             idAllocator,
           }),
         );
+        return { ...deletion, events: [...(yield* Ref.get(events)), ...deletion.events] };
       }
       case "thread.archive":
       case "thread.unarchive":
@@ -9945,8 +9984,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     } satisfies OrchestratorV2DispatchResult;
   });
 
-  const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
-    threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+  const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) => {
+    if (
+      command.type !== "thread.sidebar-parent.set" &&
+      command.type !== "thread.archive" &&
+      command.type !== "thread.delete"
+    ) {
+      return threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+    }
+    // Serialize topology edits, then lock every payload reattached in the same commit.
+    // Ordinary work still uses only its own thread lock; follow effects run afterwards.
+    return sidebarTopology.withPermits(1)(
+      Effect.gen(function* () {
+        const children =
+          command.type === "thread.sidebar-parent.set"
+            ? []
+            : yield* projectionStore
+                .getSidebarChildThreads(command.threadId)
+                .pipe(mapDispatchError(command));
+        const ids = [command.threadId, ...children.map((child) => child.id)].sort();
+        let operation = dispatchWithReceiptEffect(command);
+        for (const id of ids.toReversed()) operation = threadDispatch.withLock(id, operation);
+        return yield* operation;
+      }),
+    );
+  };
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {

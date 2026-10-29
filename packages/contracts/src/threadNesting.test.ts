@@ -1,3 +1,4 @@
+import { sidebarParentError } from "./threadNesting.ts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -39,5 +40,30 @@ describe("followsSidebarParent", () => {
   it("does not bring back a child whose snooze already ended", () => {
     const later = at("2026-10-10T00:00:00.000Z");
     expect(followsSidebarParent(snoozed, snoozed, "unsnooze", later)).toBe(false);
+  });
+});
+
+describe("sidebar tree moves", () => {
+  const chain = Array.from({ length: 9 }, (_, i) => ({
+    id: String(i),
+    projectId: "p",
+    sidebarParentThreadId: i === 0 ? null : String(i - 1),
+  }));
+  it("allows eight links but refuses depth overflow including a moved subtree", () => {
+    expect(sidebarParentError(chain, "8", "7")).toBeNull();
+    expect(sidebarParentError([...chain, { id: "extra", projectId: "p" }], "extra", "8")).toContain(
+      "8 levels",
+    );
+    expect(sidebarParentError([...chain, { id: "extra", projectId: "p" }], "0", "extra")).toContain(
+      "8 levels",
+    );
+  });
+  it("rejects self, descendants, missing and cross-project parents", () => {
+    expect(sidebarParentError(chain, "0", "0")).toContain("cycle");
+    expect(sidebarParentError(chain, "0", "8")).toContain("cycle");
+    expect(sidebarParentError(chain, "0", "missing")).toContain("same project");
+    expect(sidebarParentError([...chain, { id: "other", projectId: "q" }], "0", "other")).toContain(
+      "same project",
+    );
   });
 });
