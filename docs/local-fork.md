@@ -236,7 +236,8 @@ As of 6 October 2026 the installed build is `0.0.46+local.20261006.playweb.1`.
 
 Use a short clone path, `C:\pz\t3code`, on branch `polyzonia`. Install Vite+ 1.0.0
 (`$env:VP_VERSION = '1.0.0'` before running the official `https://vite.plus/ps1` installer).
-Use its managed Node 24.13.1 and the repo's pnpm 11.10.0. Install stable Rust through
+Use its managed Node 24 (the repo requires `^24.13.1`) and the repo's pnpm 11.10.0.
+Win1 resolved Node 24.22.2 with Vite+ 1.0.0 and stable Rust 1.99.1. Install stable Rust through
 rustup with host and target `x86_64-pc-windows-msvc`, Python 3, and Visual Studio C++
 with a Windows SDK and `Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`.
 Do not reboot automatically if an installer requests one.
