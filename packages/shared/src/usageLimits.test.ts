@@ -723,63 +723,6 @@ describe("pools", () => {
       expect(pools[0]?.windows).toHaveLength(3);
     },
   );
-
-  it("keeps Fable first among Claude weeklies without changing provider or session order", () => {
-    const input = new Map([
-      [
-        EnvironmentId.make("env-a"),
-        {
-          ...laptop,
-          serverConfig: {
-            providers: [
-              provider({ usageLimits: { checkedAt, windows: [window] } }),
-              provider({
-                driver: claude,
-                instanceId: ProviderInstanceId.make("claude"),
-                auth: { status: "authenticated", email: "same@example.com" },
-                usageLimits: {
-                  checkedAt,
-                  windows: [
-                    { ...weekly, id: "seven_day_fable", label: "Weekly · Fable", usedPercent: 31 },
-                  ],
-                },
-              }),
-            ],
-            usageLimitSources: [
-              {
-                ...source,
-                accounts: [
-                  {
-                    id: "claude-account",
-                    driver: claude,
-                    email: "same@example.com",
-                    usageLimits: {
-                      checkedAt: "2026-09-03T12:00:00.000Z",
-                      windows: [window, { ...weekly, usedPercent: 16 }],
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      ],
-    ]);
-    const pools = collectLimitPools(collectLimitAccounts(input), now);
-    expect(pools.map((pool) => pool.driver)).toEqual([ProviderDriverKind.make("codex"), claude]);
-    expect(pools[1]?.windows.map((window) => window.id)).toEqual([
-      "five_hour",
-      "seven_day_fable",
-      "seven_day",
-    ]);
-    expect(pools[1]?.windows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "seven_day", usedPercent: 16 }),
-        expect.objectContaining({ id: "seven_day_fable", usedPercent: 31 }),
-      ]),
-    );
-    expect(pools[1]?.accounts).toHaveLength(1);
-  });
 });
 
 describe("pooled account columns", () => {

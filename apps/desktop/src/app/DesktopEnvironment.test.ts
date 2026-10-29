@@ -40,6 +40,25 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it("brands production without Alpha and keeps distinct development channels", () => {
+    assert.equal(
+      DesktopEnvironment.resolveDesktopAppBranding({ isDevelopment: false, appVersion: "0.0.46" })
+        .displayName,
+      "PolyCode",
+    );
+    assert.equal(
+      DesktopEnvironment.resolveDesktopAppBranding({ isDevelopment: true, appVersion: "0.0.46" })
+        .displayName,
+      "PolyCode (Dev)",
+    );
+    assert.equal(
+      DesktopEnvironment.resolveDesktopAppBranding({
+        isDevelopment: false,
+        appVersion: "0.0.46-nightly.20261029.1",
+      }).displayName,
+      "PolyCode (Nightly)",
+    );
+  });
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Replaces the installed local fork build once no T3 thread has an active run.
 // See docs/local-fork.md. Usage:
-//   node scripts/local-install.mjs (--app <T3 Code (Alpha).app> | --zip <artifact.zip>)
+//   node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>)
 //     --version <build version> [--commit <sha prefix>] [--dry-run] [--max-wait-minutes N] [--launchd]
 // --launchd resubmits this command under launchd so it survives T3 quitting.
 import * as NodeChildProcess from "node:child_process";
@@ -17,8 +17,11 @@ const require = NodeModule.createRequire(import.meta.url);
 const { extractFile, listPackage } = require("@electron/asar");
 
 const HOME = NodeOS.homedir();
-const INSTALLED_APP = "/Applications/T3 Code (Alpha).app";
-const APP_NAME = "T3 Code (Alpha).app";
+const INSTALLED_APP = "/Applications/PolyCode.app";
+const PREVIOUS_APP = NodeFS.existsSync(INSTALLED_APP)
+  ? INSTALLED_APP
+  : "/Applications/T3 Code (Alpha).app";
+const APP_NAME = "PolyCode.app";
 const BUNDLE_ID = "com.t3tools.t3code";
 const SIGNING_IDENTITY = "9996FD65608B18E540C4FE341030A5E801214B56";
 const BACKUP_ROOT = NodePath.join(HOME, "Library/Application Support/T3 Code Backups");
@@ -64,7 +67,7 @@ const { values: options } = NodeUtil.parseArgs({
 });
 if (!options.app === !options.zip || !options.version) {
   console.error(
-    "Usage: node scripts/local-install.mjs (--app <T3 Code (Alpha).app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd]",
+    "Usage: node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd]",
   );
   process.exit(2);
 }
@@ -246,8 +249,8 @@ process.on("SIGTERM", () => {
 async function main() {
   log(`${dryRun ? "Dry run" : "Install"}: ${sourcePath} as ${expectedVersion}`);
   if (!NodeFS.existsSync(sourcePath)) throw new Error(`Missing artifact ${sourcePath}`);
-  if (!NodeFS.existsSync(INSTALLED_APP)) throw new Error(`Missing installed app ${INSTALLED_APP}`);
-  const installedVersion = readPackage(INSTALLED_APP).version;
+  if (!NodeFS.existsSync(PREVIOUS_APP)) throw new Error(`Missing installed app ${INSTALLED_APP}`);
+  const installedVersion = readPackage(PREVIOUS_APP).version;
   log(`Installed version: ${installedVersion}`);
   if (installedVersion === expectedVersion && !dryRun) {
     log("Target version is already installed");
@@ -292,8 +295,8 @@ async function main() {
     const backupApp = NodePath.join(backupDir, APP_NAME);
     if (NodeFS.existsSync(backupApp)) throw new Error(`Backup already exists: ${backupApp}`);
     NodeFS.mkdirSync(backupDir, { recursive: true });
-    run("ditto", [INSTALLED_APP, backupApp]);
-    const oldHash = hash(archive(INSTALLED_APP));
+    run("ditto", [PREVIOUS_APP, backupApp]);
+    const oldHash = hash(archive(PREVIOUS_APP));
     if (hash(archive(backupApp)) !== oldHash) throw new Error("Backup archive hash mismatch");
     log(`Backup verified: ${backupDir}`);
 
@@ -306,11 +309,11 @@ async function main() {
     replacing = true;
     notify(`Installing ${expectedVersion}. T3 Code will restart.`);
     await quitApp();
-    if (hash(archive(INSTALLED_APP)) !== oldHash) {
+    if (hash(archive(PREVIOUS_APP)) !== oldHash) {
       throw new Error("Installed app changed during preparation");
     }
     const previous = NodePath.join(stage, "previous.app");
-    NodeFS.renameSync(INSTALLED_APP, previous);
+    NodeFS.renameSync(PREVIOUS_APP, previous);
     try {
       NodeFS.renameSync(next, INSTALLED_APP);
       run("codesign", ["--verify", "--deep", "--strict", INSTALLED_APP]);
@@ -321,8 +324,8 @@ async function main() {
       log(`Install failed after quitting, restoring previous app: ${error.message}`);
       if (NodeFS.existsSync(INSTALLED_APP))
         NodeFS.renameSync(INSTALLED_APP, NodePath.join(stage, "failed.app"));
-      NodeFS.renameSync(previous, INSTALLED_APP);
-      run("open", [INSTALLED_APP]);
+      NodeFS.renameSync(previous, PREVIOUS_APP);
+      run("open", [PREVIOUS_APP]);
       log("Previous app restored and relaunched");
       throw error;
     }
@@ -330,7 +333,8 @@ async function main() {
     notify(`Installed ${expectedVersion}.`);
   } finally {
     // Keep the stage if the restore itself failed, since it then holds the previous app.
-    if (NodeFS.existsSync(INSTALLED_APP)) NodeFS.rmSync(stage, { recursive: true, force: true });
+    if (NodeFS.existsSync(INSTALLED_APP) || NodeFS.existsSync(PREVIOUS_APP))
+      NodeFS.rmSync(stage, { recursive: true, force: true });
     else log(`Installed app is missing; previous app left in ${stage}`);
   }
 }

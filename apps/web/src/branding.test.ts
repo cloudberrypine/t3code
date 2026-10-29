@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  formatAppDisplayName,
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
 } from "./branding.logic";
@@ -18,15 +19,24 @@ afterEach(() => {
 });
 
 describe("branding", () => {
+  it("omits the production stage but preserves Dev and Nightly", () => {
+    expect(formatAppDisplayName({ baseName: "PolyCode", stageLabel: "Alpha" })).toBe("PolyCode");
+    expect(formatAppDisplayName({ baseName: "PolyCode", stageLabel: "Dev" })).toBe(
+      "PolyCode (Dev)",
+    );
+    expect(formatAppDisplayName({ baseName: "PolyCode", stageLabel: "Nightly" })).toBe(
+      "PolyCode (Nightly)",
+    );
+  });
   it("uses injected desktop branding when available", async () => {
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
         desktopBridge: {
           getAppBranding: () => ({
-            baseName: "T3 Code",
+            baseName: "PolyCode",
             stageLabel: "Nightly",
-            displayName: "T3 Code (Nightly)",
+            displayName: "PolyCode (Nightly)",
           }),
         },
       },
@@ -34,9 +44,9 @@ describe("branding", () => {
 
     const branding = await import("./branding");
 
-    expect(branding.APP_BASE_NAME).toBe("T3 Code");
+    expect(branding.APP_BASE_NAME).toBe("PolyCode");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("PolyCode (Nightly)");
   });
 
   it("normalizes hosted app channel metadata", async () => {
@@ -47,7 +57,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("PolyCode (Nightly)");
   });
 
   it("does not label the latest hosted app channel", async () => {
@@ -58,7 +68,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code");
+    expect(branding.APP_DISPLAY_NAME).toBe("PolyCode");
   });
 
   it("ignores unknown hosted app channels", async () => {
@@ -84,33 +94,33 @@ describe("branding logic", () => {
   it("updates the display name for nightly primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "T3 Code",
-        fallbackDisplayName: "T3 Code (Alpha)",
+        baseName: "PolyCode",
+        fallbackDisplayName: "PolyCode (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.28-nightly.20260616.12",
       }),
-    ).toBe("T3 Code (Nightly)");
+    ).toBe("PolyCode (Nightly)");
   });
 
   it("keeps the fallback display name for stable primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "T3 Code",
-        fallbackDisplayName: "T3 Code (Alpha)",
+        baseName: "PolyCode",
+        fallbackDisplayName: "PolyCode (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.27",
       }),
-    ).toBe("T3 Code (Alpha)");
+    ).toBe("PolyCode (Alpha)");
   });
 
   it("keeps the fallback display name for malformed nightly primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "T3 Code",
-        fallbackDisplayName: "T3 Code (Alpha)",
+        baseName: "PolyCode",
+        fallbackDisplayName: "PolyCode (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.28-nightly.20260616",
       }),
-    ).toBe("T3 Code (Alpha)");
+    ).toBe("PolyCode (Alpha)");
   });
 });

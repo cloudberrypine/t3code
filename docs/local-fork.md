@@ -213,7 +213,7 @@ T3CODE_BUILD_CACHE=1 vp run dist:desktop:artifact --platform mac --target dir --
   --build-version <0.0.46+local.YYYYMMDD.label.N> --output-dir release/<unique-build-folder>
 ```
 
-This leaves `release/<folder>/mac-arm64/T3 Code (Alpha).app`. `--target zip` still produces a ZIP,
+This leaves `release/<folder>/mac-arm64/PolyCode.app`. `--target zip` still produces a ZIP,
 which takes about 30 seconds longer.
 
 `T3CODE_BUILD_CACHE=1` turns on our opt-in `vp run` cache for the web and server bundles (see
@@ -238,7 +238,7 @@ Installing quits T3 Code, which would kill every agent run inside it, including 
 install. `scripts/local-install.mjs` therefore waits for an idle app and runs outside T3:
 
 ```sh
-node scripts/local-install.mjs --launchd --app "release/<folder>/mac-arm64/T3 Code (Alpha).app" \
+node scripts/local-install.mjs --launchd --app "release/<folder>/mac-arm64/PolyCode.app" \
   --version <build version> [--commit <sha>] [--max-wait-minutes 180]
 ```
 

@@ -79,16 +79,16 @@ describe("resolveSidebarRowAccessibility", () => {
     {
       title: "Can you audit the UI?",
       statusLabel: "Working",
-      projectDisplayName: "T3 Code",
+      projectDisplayName: "PolyCode",
       isActive: true,
-      expected: { label: "Can you audit the UI?, Working, T3 Code", current: "page" },
+      expected: { label: "Can you audit the UI?, Working, PolyCode", current: "page" },
     },
     {
       title: "The audit is done",
       statusLabel: null,
-      projectDisplayName: "T3 Code",
+      projectDisplayName: "PolyCode",
       isActive: false,
-      expected: { label: "The audit is done, T3 Code", current: undefined },
+      expected: { label: "The audit is done, PolyCode", current: undefined },
     },
     {
       title: "Untitled task",

@@ -491,11 +491,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       resets,
     };
   });
-  return pools.sort(
-    (left, right) =>
-      WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind] ||
-      Number(right.id === "seven_day_fable") - Number(left.id === "seven_day_fable"),
-  );
+  return pools.sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind]);
 }
 
 /** The one-line status under a provider heading when there are no bars to draw. */

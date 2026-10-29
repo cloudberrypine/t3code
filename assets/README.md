@@ -6,7 +6,7 @@ The three Icon Composer projects are the source of truth for full application ic
 - `nightly/app-icon.icon`
 - `prod/app-icon.icon`
 
-Each project uses `text.svg` for the T3 mark and `background.svg` when the background is a vector layer. Additional layers use semantic names that describe their role and placement.
+Each project uses `text.svg` for the two-tone lime sprout and cream chevron, with `background.svg` for the dark rounded square. Production is forest green, development teal and nightly navy. The mark is traced vector art from the first-round “06 Sprout chevron” concept; no raster is embedded. Icon Composer uses the matching solid fill as its platform-masked background.
 
 Run `vp run icons:export` from the repository root to regenerate the tracked iOS, Linux, Windows, and web assets. The development web exports are also copied to `apps/web/public` for the browser favicon and splash screen. Run `vp run icons:check` to verify that the generated assets and public copies match their sources without changing files.
 
@@ -47,7 +47,7 @@ Do not resize, composite, or otherwise post-process the exported PNGs.
 Verify every result is 1024×1024 and has the classic macOS safe area: an 824×824 opaque body inset 100px on every side, with only Icon Composer's native shadow extending beyond it.
 ```
 
-Do not edit the generated PNG or ICO files directly.
+The PolyCode macOS PNGs were instead rendered directly from those SVG layers, with an 824×824 body inset 100px on a transparent 1024 canvas and a subtle Gaussian shadow, without launching Icon Composer. Other PNG and ICO assets remain pipeline exports.
 
 ## Android launcher and splash artwork
 
@@ -56,10 +56,10 @@ the central two thirds of a 288dp canvas, so the Icon Composer exports cannot be
 their rounded-square silhouette gets framed again and the wordmark is cropped. The Android artwork
 is instead rendered from the same Icon Composer SVG sources by `vp run icons:export:android`:
 
-- `apps/mobile/assets/android-icon-foreground.png`: the shared transparent wordmark, sized to stay
+- `apps/mobile/assets/android-icon-foreground.png`: the shared transparent sprout and chevron, sized to stay
   inside the safe zone
 - `apps/mobile/assets/android-icon-background-dev.png` and `-nightly.png`: full-bleed variant
-  artwork (blueprint grid and annotations; night sky and clouds). Production uses a solid color.
+  background colours. Production uses forest green.
 - `apps/mobile/assets/android-splash-icon-*.png`: the two layers composed into one 288dp image, so
   the splash mask reproduces the launcher icon's framing.
 

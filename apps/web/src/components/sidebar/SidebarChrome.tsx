@@ -6,7 +6,8 @@ import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
-import { T3Wordmark } from "../T3Wordmark";
+import { PolyWordmark } from "../PolyWordmark";
+import { SidebarUsageRings } from "../usage/SidebarUsageRings";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -14,8 +15,6 @@ import {
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
-import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
-import { UsageLimitsSection } from "../usage/UsageLimits";
 import {
   SidebarFooter,
   SidebarMenu,
@@ -114,7 +113,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
     <Link
       aria-label="Go to threads"
       className={cn(
-        "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+        "relative z-10 ml-[var(--workspace-titlebar-content-left)] hidden h-7 w-fit min-w-0 shrink-0 items-center overflow-visible rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
         onBackdrop ? "text-white" : "text-foreground",
       )}
       to="/"
@@ -127,8 +126,8 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   return (
     // Center the visible capitals, without the font's ascender/descender space.
-    <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-      <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
+    <span className="inline-flex min-w-0 items-baseline text-sm font-medium tracking-tight">
+      <PolyWordmark aria-label="Poly" className="shrink-0" />
       <span
         className={cn(
           "truncate [text-box:trim-both_cap_alphabetic]",
@@ -204,7 +203,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   }, [closeMobileSidebar, navigateToMainApp]);
 
   return (
-    <SidebarMenu className="flex-row items-center">
+    <SidebarMenu className="flex-row items-center group-data-[collapsible=icon]:flex-col">
       {isOnUtilityPage ? (
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>
@@ -227,27 +226,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             />
           ) : null}
           <SidebarMenuItem className="shrink-0">
-            <Popover>
-              <PopoverTrigger
-                openOnHover
-                delay={50}
-                closeDelay={200}
-                render={
-                  <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
-                    <ChartNoAxesColumnIcon />
-                  </SidebarMenuButton>
-                }
-              />
-              <PopoverPopup
-                side="top"
-                align="start"
-                className="w-[580px] max-w-[calc(100vw-2rem)] max-h-[min(32rem,70vh)] overflow-y-auto"
-                initialFocus={false}
-              >
-                <PopoverTitle className="mb-4">Limits</PopoverTitle>
-                <UsageLimitsSection selectedEnvironmentIds={null} now={Date.now()} />
-              </PopoverPopup>
-            </Popover>
+            <div className="flex items-end gap-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:items-center">
+              <SidebarMenuButton aria-label="Usage" onClick={handleUsageClick} size="icon">
+                <ChartNoAxesColumnIcon />
+              </SidebarMenuButton>
+              <Link to="/usage" aria-label="Usage limits" onClick={closeMobileSidebar}>
+                <SidebarUsageRings />
+              </Link>
+            </div>
           </SidebarMenuItem>
         </>
       )}
