@@ -1,7 +1,9 @@
 import type { SVGProps } from "react";
 
-// Code font size in source logo units: 150 now, 125 for the smaller option.
+// Keep Code in the surrounding font; enlarge only the source Poly artwork.
 const CODE_FONT_SIZE = 150;
+const POLY_SCALE = 1.125;
+const POLY_UNITS_PER_EM = CODE_FONT_SIZE / POLY_SCALE;
 const WIDTH = 264.2798156738281;
 const HEIGHT = 241.6011562347412;
 const BASELINE = 170.22650718688965;
@@ -13,19 +15,19 @@ export function PolyWordmark(props: SVGProps<SVGSVGElement>) {
     <span
       className="relative inline-block shrink-0"
       style={{
-        width: `${WIDTH / CODE_FONT_SIZE}em`,
+        width: `${WIDTH / POLY_UNITS_PER_EM}em`,
         height: "0.71em",
-        marginRight: `${-4 / CODE_FONT_SIZE}em`,
+        marginRight: "0.025em",
       }}
     >
       <svg
         {...props}
-        className={`absolute text-poly-wordmark ${props.className ?? ""}`}
+        className={`absolute overflow-visible text-foreground ${props.className ?? ""}`}
         style={{
           left: 0,
-          top: `${0.71 - BASELINE / CODE_FONT_SIZE}em`,
-          width: `${WIDTH / CODE_FONT_SIZE}em`,
-          height: `${HEIGHT / CODE_FONT_SIZE}em`,
+          top: `${0.71 - BASELINE / POLY_UNITS_PER_EM}em`,
+          width: `${WIDTH / POLY_UNITS_PER_EM}em`,
+          height: `${HEIGHT / POLY_UNITS_PER_EM}em`,
           ...props.style,
         }}
         viewBox="0 0 264.2798156738281 241.6011562347412"
