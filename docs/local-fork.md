@@ -267,7 +267,9 @@ From M5, always use `ssh -n anton@win1`. PowerShell 5.1 drops empty native argum
 and native stderr can appear as `NativeCommandError` even on success, so check exit codes.
 On Win1, children started directly from SSH can die when SSH disconnects. Run long steps
 through a temporary scheduled task as the logged-in user, with `cmd.exe` redirecting stdout
-and stderr to a log, then poll the log and task result over SSH. Remove the tasks afterward.
+and stderr to a log, then poll the log and task result over SSH. On a laptop, set
+`New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries`
+for these tasks, otherwise unplugging it terminates the build. Remove the tasks afterward.
 Keep Win1's clone build-only. Commit documentation and push from M5.
 
 ## Installing while T3 Code is running
