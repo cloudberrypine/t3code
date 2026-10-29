@@ -1,3 +1,4 @@
+import { sidebarVisibleOrder } from "./Sidebar.order";
 import {
   sidebarEnvironmentSections,
   orderSidebarEnvironments,
@@ -235,7 +236,6 @@ import {
 import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import {
-  flattenSidebarGroups,
   measureSidebarNestBands,
   parseNestMenuChoice,
   readThreadNestingMenuState,
@@ -243,6 +243,7 @@ import {
   SidebarThreadGroupToggle,
   type SidebarNestBand,
   type SidebarThreadGroup,
+  flattenSidebarGroups,
   useSidebarThreadNesting,
 } from "./Sidebar.nesting";
 import {
@@ -3117,18 +3118,23 @@ export default function Sidebar() {
   }, [routeThreadKey, workingShelfExpanded, workingThreads]);
 
   const orderedThreads = useMemo(
-    () => [
-      ...flattenSidebarGroups(pinnedThreads, threadGroups),
-      ...flattenSidebarGroups(activeThreads, threadGroups),
-      ...flattenSidebarGroups(visibleWorkingThreads, threadGroups),
-      ...visibleSnoozedThreads,
-      ...renderedSettledThreads,
-    ],
+    () =>
+      sidebarVisibleOrder({
+        computers: computerSections,
+        collapsed: collapsedEnvironmentIds,
+        singleSections: [pinnedThreads, activeThreads, visibleWorkingThreads],
+        children: (thread) =>
+          threadGroups.get(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
+            ?.children ?? [],
+        shelves: [visibleSnoozedThreads, renderedSettledThreads],
+      }),
     [
+      computerSections,
+      collapsedEnvironmentIds,
       pinnedThreads,
       activeThreads,
-      threadGroups,
       visibleWorkingThreads,
+      threadGroups,
       visibleSnoozedThreads,
       renderedSettledThreads,
     ],
