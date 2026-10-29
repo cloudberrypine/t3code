@@ -177,6 +177,45 @@ describe("previewWindowOpenAction", () => {
       expect(PreviewManager.previewWindowOpenAction(details({ url }))).toBe("navigate");
     }
   });
+
+  it("sends links that leave a Polyzonia play page to the system browser", () => {
+    const wikipedia = "https://en.wikipedia.org/wiki/Carollia_perspicillata";
+    for (const openerUrl of [
+      "http://127.0.0.1:8790/play/main/",
+      "https://t3.example.com/play/fix-frog/#ticket=abc",
+    ]) {
+      expect(
+        PreviewManager.previewWindowOpenAction({ ...details({ url: wikipedia }), openerUrl }),
+      ).toBe("external");
+      expect(
+        PreviewManager.previewWindowOpenAction({
+          ...details({ url: wikipedia, disposition: "foreground-tab" }),
+          openerUrl,
+        }),
+      ).toBe("external");
+    }
+  });
+
+  it("keeps play-origin links and non-play pages on today's behavior", () => {
+    expect(
+      PreviewManager.previewWindowOpenAction({
+        ...details({ url: "http://127.0.0.1:8790/play/other/" }),
+        openerUrl: "http://127.0.0.1:8790/play/main/",
+      }),
+    ).toBe("popup");
+    expect(
+      PreviewManager.previewWindowOpenAction({
+        ...details({}),
+        openerUrl: "http://localhost:5173/login",
+      }),
+    ).toBe("popup");
+    expect(
+      PreviewManager.previewWindowOpenAction({
+        ...details({ url: "file:///etc/passwd" }),
+        openerUrl: "http://127.0.0.1:8790/play/main/",
+      }),
+    ).toBe("navigate");
+  });
 });
 
 const {

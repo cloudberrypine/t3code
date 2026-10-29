@@ -562,8 +562,33 @@ const POPUP_WINDOW_OPTIONS = {
 export const previewWindowOpenAction = (details: {
   readonly url: string;
   readonly disposition: Electron.HandlerDetails["disposition"];
-}): "popup" | "navigate" =>
-  details.disposition === "new-window" && isPopupUrl(details.url) ? "popup" : "navigate";
+  readonly openerUrl?: string;
+}): "external" | "popup" | "navigate" => {
+  if (details.openerUrl !== undefined && isPlayPageLeaving(details.openerUrl, details.url)) {
+    return "external";
+  }
+  return details.disposition === "new-window" && isPopupUrl(details.url) ? "popup" : "navigate";
+};
+
+/**
+ * Fork: a Polyzonia play page (`/play/...`, from the local play server or T3's
+ * `/play` proxy) opening an http(s) page on another origin, such as a species'
+ * Wikipedia article. That goes to the system browser so the game stays put, as
+ * the mobile play screen already does.
+ */
+const isPlayPageLeaving = (openerUrl: string, targetUrl: string): boolean => {
+  try {
+    const opener = new URL(openerUrl);
+    const target = new URL(targetUrl);
+    return (
+      opener.pathname.startsWith("/play/") &&
+      POPUP_PROTOCOLS.has(target.protocol) &&
+      target.origin !== opener.origin
+    );
+  } catch {
+    return false;
+  }
+};
 
 export const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
   input.type === "keyDown" &&
@@ -2086,7 +2111,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.ipc.on(RECORDING_INPUT_CHANNEL, recordingInput);
         wc.ipc.on(MOUSE_NAVIGATE_CHANNEL, mouseNavigate);
         wc.setWindowOpenHandler((details) => {
-          if (previewWindowOpenAction(details) === "popup") {
+          const action = previewWindowOpenAction({ ...details, openerUrl: wc.getURL() });
+          if (action === "external") {
+            void shell.openExternal(details.url).catch(() => undefined);
+            return { action: "deny" };
+          }
+          if (action === "popup") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
           }
           runFork(
