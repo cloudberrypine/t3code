@@ -263,6 +263,10 @@ unless `--force-run` is supplied. Verify the installed
 executable and Start menu shortcut before reporting success. Do not run this while an
 existing PolyCode instance is active.
 
+Win1's installer is `release/win1/T3-Code-0.0.46-x64.exe` (the filename drops local build
+metadata). It installs `%LOCALAPPDATA%\Programs\t3code\PolyCode.exe` and the **PolyCode**
+Start menu shortcut. The installed `resources/app.asar` package retains the full local version.
+
 From M5, always use `ssh -n anton@win1`. PowerShell 5.1 drops empty native arguments,
 and native stderr can appear as `NativeCommandError` even on success, so check exit codes.
 On Win1, children started directly from SSH can die when SSH disconnects. Run long steps
