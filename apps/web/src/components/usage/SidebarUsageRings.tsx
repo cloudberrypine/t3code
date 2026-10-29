@@ -80,7 +80,7 @@ export function SidebarUsageRings() {
               <span aria-hidden>{remaining ?? "–"}</span>
             </TooltipTrigger>
             <TooltipPopup side="top">
-              <div className="flex w-76 max-w-[calc(100vw-2rem)] min-w-0 flex-col gap-2 wrap-anywhere text-left">
+              <div className="flex w-72 max-w-[calc(100vw-3rem)] min-w-0 flex-col gap-2 wrap-anywhere text-left">
                 <span className="font-medium">
                   {driver === "codex" ? "Codex" : "Claude"} ·{" "}
                   {window
