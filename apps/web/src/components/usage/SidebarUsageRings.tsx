@@ -23,7 +23,7 @@ export function SidebarUsageRings() {
             key={driver}
             role="img"
             aria-label={`${label}: ${remaining === null ? "no data" : `${remaining}% left`}`}
-            className="relative inline-flex size-7 items-center justify-center text-[9px] font-medium text-foreground tabular-nums"
+            className="relative inline-flex size-7 items-center justify-center text-3xs font-medium text-foreground tabular-nums"
           >
             <svg
               aria-hidden
@@ -49,11 +49,7 @@ export function SidebarUsageRings() {
                 strokeLinecap="round"
                 strokeDasharray={`${remaining ?? 0} 100`}
                 opacity={remaining === null || remaining === 0 ? 0 : 1}
-                className={
-                  driver === "codex"
-                    ? "text-blue-500 dark:text-blue-400"
-                    : "text-stone-500 dark:text-stone-400"
-                }
+                className={driver === "codex" ? "text-usage-codex" : "text-usage-claude"}
               />
             </svg>
             <span aria-hidden>{remaining ?? "–"}</span>
