@@ -11,7 +11,6 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   elapsedShare,
   formatDuration,
-  formatResetsIn,
   type LimitPace,
   paceOf,
   remainingPercent,
@@ -35,6 +34,8 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { formatLimitResetCountdown } from "./usageLimitFormatting";
+import { providerLimitPresentations } from "./sidebarUsageLimits";
 import { UsageLimitsPooled } from "./UsageLimitsPooled";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 
@@ -92,7 +93,7 @@ function WindowBar({
   const elapsed = elapsedShare(window, now);
   // The fill is quota left, so the even-spending mark is the time left.
   const timeLeft = elapsed === null ? null : Math.round((1 - elapsed) * 100);
-  const resetsIn = formatResetsIn(window, now);
+  const resetsIn = formatLimitResetCountdown(window, now);
   const resetsAt = window.resetsAt
     ? formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)
     : null;
@@ -163,17 +164,36 @@ export function LimitWindows({
   readonly compact?: boolean;
 }) {
   const color = barColor(driver);
+  const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   return (
     <div
       className={
         compact
-          ? "grid grid-cols-[minmax(0,9rem)_minmax(3rem,1fr)_auto] gap-x-3 gap-y-0.5"
+          ? "flex min-w-0 flex-col gap-3"
           : "grid grid-cols-[11rem_minmax(0,1fr)_7rem] gap-x-4 gap-y-1"
       }
     >
       {windows.map((window) => {
         const pace = paceOf(window, now);
-        const resetsIn = formatResetsIn(window, now);
+        const resetsIn = formatLimitResetCountdown(window, now);
+        if (compact)
+          return (
+            <div key={window.id} className="flex min-w-0 flex-col gap-1">
+              <div className="flex flex-wrap justify-between gap-x-2 text-xs">
+                <span className="text-muted-foreground">{window.label}</span>
+                <span>
+                  {remainingPercent(window)}% left ({100 - remainingPercent(window)}% used)
+                </span>
+              </div>
+              <WindowBar color={color} window={window} now={now} />
+              {window.resetsAt ? (
+                <span className="text-xs text-muted-foreground">
+                  {formatLimitResetCountdown(window, now)} ·{" "}
+                  {formatUpcomingTimestamp(window.resetsAt, timestampFormat, now)}
+                </span>
+              ) : null}
+            </div>
+          );
         return (
           <Fragment key={window.id}>
             <span className="flex min-w-0 items-center gap-2 text-xs">
@@ -323,7 +343,11 @@ export function UsageLimitsSection({
   selectedEnvironmentIds,
   now,
   cursorPrompt,
+  driver,
+  compact = false,
 }: {
+  readonly driver?: "codex" | "claudeAgent";
+  readonly compact?: boolean;
   readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
   readonly now: number;
   readonly cursorPrompt?: ReactNode;
@@ -333,5 +357,12 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  return <UsageLimitsPooled presentations={selected} now={now} cursorPrompt={cursorPrompt} />;
+  return (
+    <UsageLimitsPooled
+      presentations={driver ? providerLimitPresentations(selected, driver) : selected}
+      now={now}
+      cursorPrompt={cursorPrompt}
+      compact={compact}
+    />
+  );
 }

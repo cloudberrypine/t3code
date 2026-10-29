@@ -6,7 +6,6 @@ import {
   collectLimitPools,
   cursorUsageWindowDetails,
   displayLimitWindows,
-  formatResetsIn,
   type LimitAccount,
   type LimitPool,
   type LimitPoolMember,
@@ -16,10 +15,11 @@ import {
 import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
 
+import { formatLimitResetCountdown } from "./usageLimitFormatting";
 import { ensureLocalApi } from "../../localApi";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { formatUpcomingTimestamp } from "../../timestampFormat";
+import { formatDayAwareTimestamp, formatUpcomingTimestamp } from "../../timestampFormat";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
@@ -28,6 +28,7 @@ import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
+  LimitWindows,
   PaceIcon,
   ResetCreditDialog,
   barColor,
@@ -153,7 +154,7 @@ function SegmentPopover({
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const remaining = remainingPercent(window);
-  const resetsIn = formatResetsIn(window, now);
+  const resetsIn = formatLimitResetCountdown(window, now);
   const where =
     account.environments.length > 0
       ? account.environments.map((environment) => environment.label).join(", ")
@@ -242,7 +243,7 @@ function PoolSegment({
 }) {
   const [open, setOpen] = useState(false);
   const remaining = remainingPercent(window);
-  const resetsIn = formatResetsIn(window, now);
+  const resetsIn = formatLimitResetCountdown(window, now);
   const credits = account.limits.resetCredits?.availableCount ?? 0;
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -352,7 +353,7 @@ function LegendRow({
   readonly index: number;
 }) {
   const remaining = remainingPercent(window);
-  const resetsIn = formatResetsIn(window, now);
+  const resetsIn = formatLimitResetCountdown(window, now);
   const credits = account.limits.resetCredits?.availableCount ?? 0;
   return (
     <PopoverTrigger
@@ -570,12 +571,16 @@ export function UsageLimitsPooled({
   presentations,
   now,
   cursorPrompt,
+  compact = false,
 }: {
+  readonly compact?: boolean;
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
   readonly cursorPrompt?: ReactNode;
 }) {
-  const pools = collectLimitPools(collectLimitAccounts(presentations), now);
+  const accounts = collectLimitAccounts(presentations);
+  const pools = collectLimitPools(accounts, now);
+  const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const notices = collectLimitNotices(presentations);
   const externalLinks = collectExternalUsageLinks(presentations);
   const cursorPromptAt =
@@ -583,6 +588,36 @@ export function UsageLimitsPooled({
       pools.findIndex((pool) => pool.driver === "codex"),
       pools.findIndex((pool) => pool.driver === "claudeAgent"),
     ) + 1;
+  if (compact)
+    return (
+      <div className="flex min-w-0 flex-col gap-3">
+        {accounts.map((account) => (
+          <section
+            key={account.key}
+            className="flex min-w-0 flex-col gap-2 border-t border-border/60 pt-2"
+          >
+            {accounts.length > 1 ? (
+              <span className="text-xs">
+                {account.email ?? account.displayName ?? account.driver}
+              </span>
+            ) : null}
+            {account.plan ? (
+              <span className="text-xs text-muted-foreground">{account.plan}</span>
+            ) : null}
+            <LimitWindows
+              driver={account.driver}
+              windows={account.limits.windows}
+              now={now}
+              compact
+            />
+            <span className="text-xs text-muted-foreground">
+              Updated {formatDayAwareTimestamp(account.limits.checkedAt, timestampFormat, now)}
+            </span>
+          </section>
+        ))}
+        <LimitNotices notices={notices} />
+      </div>
+    );
   return (
     <div className="flex flex-col gap-8">
       {pools.length === 0 && notices.length === 0 && !cursorPrompt && externalLinks.length === 0 ? (

@@ -157,7 +157,7 @@ it.each([0, 1])(
     });
     expect(
       JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-    ).toContain("in 2h 0m");
+    ).toContain("in 2 h 0 min");
     vi.mocked(Date.now).mockReturnValue(Date.parse("2026-09-11T12:30:00Z"));
     await act(async () => {
       renderer.root
@@ -172,10 +172,10 @@ it.each([0, 1])(
     });
     expect(
       JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-    ).toContain("in 1h 30m");
+    ).toContain("in 1 h 30 min");
     expect(
       JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-    ).not.toContain("in 2h 0m");
+    ).not.toContain("in 2 h 0 min");
   },
 );
 
@@ -193,7 +193,7 @@ it("uses the current time when returning to limits from tokens", async () => {
   await act(() => selectMetric("limits"));
   expect(
     JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
-  ).toContain("in 1h 0m");
+  ).toContain("in 1 h 0 min");
   expect(state.refreshProviders).toHaveBeenCalledTimes(2);
 });
 
@@ -281,4 +281,31 @@ it("keeps manual refresh busy until the already-running automatic check settles"
     });
   }
   expect(button().props["aria-busy"]).toBe(false);
+});
+
+it("reuses compact limit widgets for one provider and updates their reset countdown", async () => {
+  const { UsageLimitsSection } = await import("./UsageLimits");
+  const codex = [...state.presentations.values()][0];
+  const claude = {
+    ...codex.serverConfig.providers[0],
+    driver: "claudeAgent",
+    instanceId: "claude",
+    auth: { status: "authenticated", label: "Max" },
+  };
+  codex.serverConfig.providers.push(claude);
+  const view = (now: number) => (
+    <UsageLimitsSection selectedEnvironmentIds={null} driver="claudeAgent" compact now={now} />
+  );
+  await act(() => {
+    renderer = create(view(Date.parse("2026-09-11T12:00:00Z")));
+  });
+  const text = () =>
+    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value));
+  expect(text()).toContain("Max");
+  expect(text()).toContain("used)");
+  expect(text()).toContain("resets in 2 h 0 min");
+  expect(text()).toContain("Updated");
+  expect(text()).not.toContain("Codex");
+  await act(() => renderer.update(view(Date.parse("2026-09-11T13:00:00Z"))));
+  expect(text()).toContain("resets in 1 h 0 min");
 });
