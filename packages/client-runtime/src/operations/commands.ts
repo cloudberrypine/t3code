@@ -501,6 +501,16 @@ export const reorderActiveThread = Effect.fn("EnvironmentCommands.reorderActiveT
   });
 });
 
+export const clearThreadAttention = Effect.fn("EnvironmentCommands.clearThreadAttention")(
+  function* (input: MarkThreadUnreadInput) {
+    return yield* dispatch({
+      type: "thread.attention.clear",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+    });
+  },
+);
+
 export const setThreadSidebarParent = Effect.fn("EnvironmentCommands.setThreadSidebarParent")(
   function* (input: SetThreadSidebarParentInput) {
     return yield* dispatch({

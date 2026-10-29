@@ -82,6 +82,7 @@ import {
   reorderPinnedThread,
   reorderActiveThread,
   setThreadSidebarParent,
+  clearThreadAttention,
   setThreadAutoSettle,
   settleThread,
   snoozeThread,
@@ -229,6 +230,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:reorder-active",
       execute: (input: ReorderActiveThreadInput) => reorderActiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    clearAttention: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:clear-attention",
+      execute: (input: MarkThreadUnreadInput) => clearThreadAttention(input),
       scheduler,
       concurrency,
     }),

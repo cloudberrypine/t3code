@@ -411,6 +411,14 @@ export const OrchestrationV2AppThread = Schema.Struct({
    * Thread this one is shown under in thread lists. Display only: no
    * lifecycle, wake, or notification behavior reads it.
    */
+  attention: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        reason: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
+        raisedAt: IsoDateTime,
+      }),
+    ),
+  ),
   sidebarParentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -1556,6 +1564,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.pin-reordered",
       "thread.active-reordered",
       "thread.sidebar-parent-set",
+      "thread.attention-updated",
       "thread.visited",
       "thread.marked-unread",
       "thread.metadata-updated",
@@ -1796,6 +1805,14 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Slot in the user-arranged active order; omitted by pre-reorder servers. */
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Thread this one is shown under in thread lists; omitted by older servers. */
+  attention: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        reason: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
+        raisedAt: IsoDateTime,
+      }),
+    ),
+  ),
   sidebarParentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   /**
    * Omitted by servers that predate server-side visited tracking; clients fall
@@ -2360,6 +2377,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.pin-reordered",
       "thread.active-reordered",
       "thread.sidebar-parent-set",
+      "thread.attention-updated",
       "thread.visited",
       "thread.marked-unread",
       "thread.pull-request-synced",
@@ -2600,6 +2618,17 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.attention.raise"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    reason: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.attention.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.sidebar-parent.set"),

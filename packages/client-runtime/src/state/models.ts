@@ -130,6 +130,7 @@ export interface EnvironmentThreadShell {
   /** Slot in the user-arranged active order; null for keyless active threads. */
   readonly activeOrderKey: string | null;
   /** Thread this one is shown under in thread lists (see threadNesting.ts). */
+  readonly attention?: { readonly reason: string; readonly raisedAt: string } | null;
   readonly sidebarParentThreadId: ThreadId | null;
   readonly pullRequests: ReadonlyArray<import("@t3tools/contracts").ThreadPullRequestLink>;
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
@@ -271,6 +272,7 @@ export function presentThreadShell(
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,
     activeOrderKey: thread.activeOrderKey ?? null,
+    attention: thread.attention ?? null,
     sidebarParentThreadId: thread.sidebarParentThreadId ?? null,
     ...(thread.lastVisitedAt === undefined
       ? {}

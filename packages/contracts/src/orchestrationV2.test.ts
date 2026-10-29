@@ -1277,3 +1277,21 @@ describe("limit recovery choice updates", () => {
     expect(decode({ ...identity, ...choice })).toEqual({ ...identity, ...choice });
   });
 });
+
+describe("thread attention commands", () => {
+  it("bounds the reason and supports clearing", () => {
+    const decode = Schema.decodeUnknownSync(OrchestrationV2Command);
+    const common = { commandId: "flag", threadId: "thread" };
+    expect(
+      decode({ ...common, type: "thread.attention.raise", reason: "Ready to land" }),
+    ).toHaveProperty("reason", "Ready to land");
+    expect(() =>
+      decode({ ...common, type: "thread.attention.raise", reason: "x".repeat(121) }),
+    ).toThrow();
+    expect(() => decode({ ...common, type: "thread.attention.raise", reason: "" })).toThrow();
+    expect(decode({ ...common, type: "thread.attention.clear" })).toHaveProperty(
+      "type",
+      "thread.attention.clear",
+    );
+  });
+});

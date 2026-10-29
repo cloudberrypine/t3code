@@ -220,6 +220,7 @@ export const layer: Layer.Layer<
       "thread.pin-reordered",
       "thread.active-reordered",
       "thread.sidebar-parent-set",
+      "thread.attention-updated",
       "thread.metadata-updated",
       "thread.pull-request-synced",
       "thread.runtime-mode-updated",

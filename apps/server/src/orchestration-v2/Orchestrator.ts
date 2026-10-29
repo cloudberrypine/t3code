@@ -391,6 +391,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.unpin":
     case "thread.pin.reorder":
     case "thread.active.reorder":
+    case "thread.attention.raise":
+    case "thread.attention.clear":
     case "thread.sidebar-parent.set":
     case "thread.visit":
     case "thread.mark-unread":
@@ -2353,6 +2355,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.unpin"
           | "thread.pin.reorder"
           | "thread.active.reorder"
+          | "thread.attention.raise"
+          | "thread.attention.clear"
           | "thread.sidebar-parent.set"
           | "thread.mark-unread"
           | "thread.metadata.update"
@@ -2447,6 +2451,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.unpin" ||
         command.type === "thread.pin.reorder" ||
         command.type === "thread.active.reorder" ||
+        command.type === "thread.attention.raise" ||
+        command.type === "thread.attention.clear" ||
         command.type === "thread.sidebar-parent.set" ||
         command.type === "thread.pull-request.sync") &&
       thread.archivedAt !== null
@@ -2838,6 +2844,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         }
+        case "thread.attention.raise":
+          return {
+            ...thread,
+            attention: { reason: command.reason, raisedAt: DateTime.formatIso(now) },
+          };
+        case "thread.attention.clear":
+          return { ...thread, attention: null };
         case "thread.sidebar-parent.set":
           // Grouping in the thread list is not thread activity either.
           return { ...thread, sidebarParentThreadId: command.sidebarParentThreadId };
@@ -3148,6 +3161,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.pin-reordered" as const;
         case "thread.active.reorder":
           return "thread.active-reordered" as const;
+        case "thread.attention.raise":
+        case "thread.attention.clear":
+          return "thread.attention-updated" as const;
         case "thread.sidebar-parent.set":
           return "thread.sidebar-parent-set" as const;
         case "thread.mark-unread":
@@ -9625,6 +9641,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.unpin":
       case "thread.pin.reorder":
       case "thread.active.reorder":
+      case "thread.attention.raise":
+      case "thread.attention.clear":
       case "thread.sidebar-parent.set":
       case "thread.mark-unread":
       case "thread.metadata.update":
@@ -9662,6 +9680,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             threadId: command.threadId,
           });
+        }
+        if (command.createdBy === "user" && thread.attention != null) {
+          yield* dispatchThreadMutation(
+            {
+              type: "thread.attention.clear",
+              commandId: command.commandId,
+              threadId: command.threadId,
+            },
+            events,
+            effects,
+          );
         }
         yield* dispatchMessage(command, events, effects);
         break;

@@ -115,6 +115,7 @@ export function shouldPublishAgentAwarenessEvent(
     case "thread.unpinned":
     case "thread.pin-reordered":
     case "thread.active-reordered":
+    case "thread.attention-updated":
     case "thread.sidebar-parent-set":
     case "thread.visited":
     case "thread.marked-unread":

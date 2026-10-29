@@ -261,7 +261,19 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const ThreadFlagTool = Tool.make("t3_thread_flag", {
+  ...commandTool,
+  description:
+    "Raise or clear a display-only flag on your own thread or a thread you manage. Raise when a turn ends waiting on the user: ready to merge or land, a question or decision, or please test. Never raise for routine progress. Omit threadId for the calling thread. Supply reason (1–120 characters) to raise, or clear: true to clear.",
+  parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId),
+    reason: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
+    clear: Schema.optional(Schema.Literal(true)),
+  }),
+}).annotate(Tool.Destructive, false);
+
 export const ThreadToolkit = Toolkit.make(
+  ThreadFlagTool,
   ScheduledTaskRunTool,
   ThreadSearchTool,
   ThreadForkTool,

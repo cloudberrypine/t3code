@@ -76,6 +76,20 @@ const readQuestion = Effect.fn("mcp.readQuestion")(function* (
   return { ...context, request, item };
 });
 export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
+  t3_thread_flag: (input) =>
+    Effect.gen(function* () {
+      if ((input.clear === true) === (input.reason !== undefined)) {
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Supply either reason or clear: true.",
+        });
+      }
+      return yield* dispatch(input.threadId, (common) =>
+        input.clear === true
+          ? { ...common, type: "thread.attention.clear" }
+          : { ...common, type: "thread.attention.raise", reason: input.reason! },
+      );
+    }),
   run_scheduled_task_now: (input) =>
     Effect.gen(function* () {
       const { caller } = yield* readMutationCaller();

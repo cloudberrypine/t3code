@@ -696,6 +696,13 @@ describe("orchestrator MCP toolkit", () => {
             const invoke = (name: string, args: Record<string, unknown>) =>
               invokeAs(invocation, name, args);
 
+            const flagged = yield* invoke("t3_thread_flag", { reason: "Please test" });
+            expect(flagged.structuredContent).toHaveProperty("sequence");
+            expect((yield* orchestrator.getThreadShell(parentThreadId))?.attention?.reason).toBe(
+              "Please test",
+            );
+            yield* invoke("t3_thread_flag", { clear: true });
+            expect((yield* orchestrator.getThreadShell(parentThreadId))?.attention).toBeNull();
             const pinned = yield* invoke("t3_thread_organize", { action: "pin" });
             expect(pinned.structuredContent).toHaveProperty("sequence");
             expect((yield* orchestrator.getThreadShell(parentThreadId))?.pinnedAt).not.toBeNull();

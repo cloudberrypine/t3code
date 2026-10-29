@@ -1625,6 +1625,87 @@ it.layer(LegacyImportTestLayer)("OrchestrationV2 legacy import", (it) => {
 });
 
 it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
+  it.effect("persists display-only flags and clears only for user messages", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("flag-test");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("flag-create"),
+        threadId,
+        projectId: ProjectId.make("flag-project"),
+        title: "Flag test",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.attention.raise",
+        commandId: CommandId.make("flag-raise"),
+        threadId,
+        reason: "Please test",
+      });
+      const raised = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(raised.thread.attention?.reason, "Please test");
+      assert.isTrue(DateTime.Equivalence(raised.thread.updatedAt, before.thread.updatedAt));
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.attention?.reason,
+        "Please test",
+      );
+      assert.deepEqual(raised.runs, before.runs);
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.attention?.reason,
+        "Please test",
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.attention.clear",
+        commandId: CommandId.make("flag-clear"),
+        threadId,
+      });
+      assert.isNull((yield* orchestrator.getThreadShell(threadId))?.attention);
+      yield* orchestrator.dispatch({
+        type: "thread.attention.raise",
+        commandId: CommandId.make("flag-reraise"),
+        threadId,
+        reason: "Ready to land",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make("flag-agent-message"),
+        threadId,
+        messageId: MessageId.make("flag-agent-message"),
+        text: "Progress",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.attention?.reason,
+        "Ready to land",
+      );
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("flag-user-message"),
+        threadId,
+        messageId: MessageId.make("flag-user-message"),
+        text: "Tested",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+      });
+      assert.isNull((yield* orchestrator.getThreadShell(threadId))?.attention);
+    }),
+  );
+
   it.effect("applies lifecycle commands idempotently and emits archive/removal shell deltas", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
