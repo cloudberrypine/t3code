@@ -154,6 +154,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
+  useSidebarEnvironments,
   useEnvironmentMachines,
   usePrimaryEnvironmentId,
 } from "../state/environments";
@@ -2504,7 +2505,7 @@ export default function Sidebar() {
   );
   const environments = useEnvironmentIdentities();
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const sidebarEnvironments = useSidebarEnvironments();
   const [collapsedEnvironmentIds, setCollapsedEnvironmentIds] = useLocalStorage(
     "polycode:sidebar:collapsed-environments",
     [] as readonly string[],
@@ -2935,11 +2936,15 @@ export default function Sidebar() {
   const computerSections = useMemo(
     () =>
       sidebarEnvironmentSections(
-        orderSidebarEnvironments(connectedEnvironmentIds, environmentOrder, primaryEnvironmentId),
+        orderSidebarEnvironments(
+          sidebarEnvironments.map((environment) => environment.environmentId),
+          environmentOrder,
+          primaryEnvironmentId,
+        ),
         [pinnedThreads, activeThreads, workingThreads],
       ),
     [
-      connectedEnvironmentIds,
+      sidebarEnvironments,
       environmentOrder,
       primaryEnvironmentId,
       pinnedThreads,

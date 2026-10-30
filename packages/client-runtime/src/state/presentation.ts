@@ -176,6 +176,17 @@ export function createEnvironmentSummaryAtoms(input: {
       ? previous
       : next;
   }).pipe(Atom.withLabel("environment-connection-summaries"));
+  // Sidebar membership follows saved environments, never transport readiness.
+  // Shell snapshots remain available from cache while a connection recovers.
+  const sidebarEnvironmentsAtom = Atom.make((get) => {
+    const next = get(environmentsAtom).filter((environment) => environment.isEnabled);
+    const previous = Option.getOrNull(get.self<ReadonlyArray<EnvironmentConnectionSummary>>());
+    return previous !== null &&
+      previous.length === next.length &&
+      next.every((value, index) => value === previous[index])
+      ? previous
+      : next;
+  });
   const connectedEnvironmentIdsAtom = Atom.make((get) => {
     const next = get(environmentIdsAtom).filter(
       (id) => get(environmentAtom(id))?.connectionState === "connected",
@@ -214,6 +225,7 @@ export function createEnvironmentSummaryAtoms(input: {
   return {
     environmentIdsAtom,
     connectedEnvironmentIdsAtom,
+    sidebarEnvironmentsAtom,
     identitiesAtom,
     environmentsAtom,
     machineByIdAtom,

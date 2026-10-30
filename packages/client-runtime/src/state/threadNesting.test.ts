@@ -141,9 +141,28 @@ describe("computer sections", () => {
       ["M5", [["lead5"], ["active5"]]],
     ]);
   });
-  it("leaves the existing layout alone for one connected computer", () => {
-    expect(sidebarEnvironmentSections(["M5"], [[thread("lead")]])).toBeNull();
+  it("leaves the existing layout alone for one known computer", () => {
+    expect(
+      sidebarEnvironmentSections(["M5"], [[thread("lead", { environmentId: "M5" })]]),
+    ).toBeNull();
     expect(sidebarEnvironmentSections([], [])).toBeNull();
+  });
+  it("keeps cached computers grouped even before the environment catalog is available", () => {
+    const rows = [
+      thread("lead5", { environmentId: "M5" }),
+      thread("lead1", { environmentId: "M1" }),
+    ];
+    for (const environments of [[], ["M5"]]) {
+      expect(
+        sidebarEnvironmentSections(environments, [rows])?.map((section) => [
+          section.environmentId,
+          section.sections.map(ids),
+        ]),
+      ).toEqual([
+        ["M5", [["lead5"]]],
+        ["M1", [["lead1"]]],
+      ]);
+    }
   });
   it("ranks flags with attention above failures and work", () => {
     const state = {

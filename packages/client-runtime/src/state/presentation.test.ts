@@ -9,6 +9,7 @@ import {
   createEnvironmentSummaryAtoms,
 } from "./presentation.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
+import { orderSidebarEnvironments, sidebarEnvironmentSections } from "./threadNesting.ts";
 
 const FIRST = EnvironmentId.make("first");
 const SECOND = EnvironmentId.make("second");
@@ -137,6 +138,70 @@ describe("environment summary subscriptions", () => {
       expect(changes).toBeGreaterThan(connectionChanges);
     } finally {
       stop();
+      h.registry.dispose();
+    }
+  });
+
+  it("preserves sidebar labels, saved order and cached rows through reconnects", () => {
+    const h = harness();
+    const rows = [
+      { environmentId: FIRST, id: "first-thread" },
+      { environmentId: SECOND, id: "second-thread" },
+    ];
+    const savedOrder = [SECOND, FIRST];
+    const collapsed = new Set([FIRST]);
+    const sidebar = () => {
+      const environments = h.registry.get(h.sidebarEnvironmentsAtom);
+      const sections = sidebarEnvironmentSections(
+        orderSidebarEnvironments(
+          environments.map((environment) => environment.environmentId),
+          savedOrder,
+          FIRST,
+        ),
+        [rows],
+      );
+      return sections?.map((section) => ({
+        label: environments.find(
+          (environment) => environment.environmentId === section.environmentId,
+        )?.environmentLabel,
+        expanded: !collapsed.has(section.environmentId as EnvironmentId),
+        threads: section.sections.flat().map((thread) => thread.id),
+      }));
+    };
+    try {
+      h.registry.set(
+        h.state,
+        AsyncResult.success({ ...AVAILABLE_CONNECTION_STATE, phase: "connected", generation: 1 }),
+      );
+      const before = sidebar();
+      expect(before).toEqual([
+        { label: "second", expanded: true, threads: ["second-thread"] },
+        { label: "first", expanded: false, threads: ["first-thread"] },
+      ]);
+      for (const phase of ["offline", "connecting", "backoff", "available", "connected"] as const) {
+        h.registry.set(
+          h.state,
+          AsyncResult.success({ ...AVAILABLE_CONNECTION_STATE, phase, generation: 2 }),
+        );
+        expect(sidebar()).toEqual(before);
+        expect(h.registry.get(h.connectedEnvironmentIdsAtom)).toEqual(
+          phase === "connected" ? [FIRST, SECOND] : [],
+        );
+      }
+      // Explicit disable/removal still updates membership, unlike a lost connection.
+      h.registry.set(h.catalog, {
+        isReady: true,
+        entries: new Map([
+          [FIRST, { ...entry(FIRST), enabled: false }],
+          [SECOND, entry(SECOND)],
+        ]),
+      });
+      expect(
+        h.registry.get(h.sidebarEnvironmentsAtom).map((environment) => environment.environmentId),
+      ).toEqual([SECOND]);
+      h.registry.set(h.catalog, { isReady: true, entries: new Map() });
+      expect(h.registry.get(h.sidebarEnvironmentsAtom)).toEqual([]);
+    } finally {
       h.registry.dispose();
     }
   });

@@ -2416,7 +2416,7 @@ describe("mobile computer sections", () => {
     { environmentId, environmentLabel: "M1" },
     { environmentId: m5, environmentLabel: "M5" },
   ];
-  const build = (collapsed: readonly string[] = [], connected = environments) => {
+  const build = (collapsed: readonly string[] = [], knownEnvironments = environments) => {
     const layout = buildThreadListV2Items({
       threads: [remote, child, parent, remotePin, settled],
       environmentId: null,
@@ -2429,7 +2429,13 @@ describe("mobile computer sections", () => {
       pendingTasks: [],
       settledCount: layout.settledCount,
       settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
-      computers: { environments: connected, primary: m5, order: [], collapsed, disabled: false },
+      computers: {
+        environments: knownEnvironments,
+        primary: m5,
+        order: [],
+        collapsed,
+        disabled: false,
+      },
     });
   };
   const labels = (items: ThreadListV2ListItem[]) =>
@@ -2470,9 +2476,16 @@ describe("mobile computer sections", () => {
       "settled",
     ]);
   });
-  it("leaves the list unchanged with one computer", () => {
-    expect(build([], environments.slice(0, 1)).some((item) => item.type === "v2-computer")).toBe(
-      false,
-    );
+  it("keeps cached threads under headers when only one computer has been discovered", () => {
+    expect(labels(build([], environments.slice(0, 1)))).toEqual([
+      "M1",
+      "parent",
+      "child",
+      "M5",
+      "remote-pin",
+      "remote",
+      "v2-settled-shelf",
+      "settled",
+    ]);
   });
 });

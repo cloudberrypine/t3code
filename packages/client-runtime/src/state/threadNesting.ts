@@ -185,12 +185,12 @@ export function sidebarEnvironmentSections<T extends { readonly environmentId: s
   readonly environmentId: string;
   readonly sections: readonly (readonly T[])[];
 }> | null {
-  if (environmentIds.length < 2) return null;
   // Keep cached rows from temporarily disconnected computers reachable too.
   const ids = new Set([
     ...environmentIds,
     ...sections.flat().map((thread) => thread.environmentId),
   ]);
+  if (ids.size < 2) return null;
   return [...ids].map((environmentId) => ({
     environmentId,
     sections: sections.map((section) =>

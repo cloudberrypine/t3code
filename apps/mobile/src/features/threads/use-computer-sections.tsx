@@ -8,18 +8,14 @@ import {
   moveSidebarEnvironment,
 } from "@t3tools/client-runtime/state/thread-nesting";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { useWorkspaceEnvironments } from "../../state/workspace";
+import { workspaceConnections } from "../../state/workspace";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPillMenu";
 import type { ThreadListV2ComputerItem } from "./threadListV2";
 
 const EMPTY: readonly string[] = [];
 export function useComputerSections() {
-  const all = useWorkspaceEnvironments();
-  const environments = useMemo(
-    () => all.filter((e) => e.isEnabled && e.connectionState === "connected"),
-    [all],
-  );
+  const environments = useAtomValue(workspaceConnections.sidebarEnvironmentsAtom);
   const result = useAtomValue(mobilePreferencesAtom);
   const save = useAtomSet(updateMobilePreferencesAtom);
   const loaded = AsyncResult.isSuccess(result);
