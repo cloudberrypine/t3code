@@ -1,5 +1,6 @@
 import type { EnvironmentId, ServerProviderUsageWindow } from "@t3tools/contracts";
 import {
+  selectUsageLimitWindows,
   remainingPercent,
   type LimitAccount,
   type LimitPresentations,
@@ -72,7 +73,9 @@ export function sidebarLimitLabel(
   if (!window) return `${prefix}: no usage limit data yet (${noDataReason})`;
   const details = [
     window,
-    ...(account?.limits.windows.filter((other) => other !== window) ?? []),
+    ...((account
+      ? selectUsageLimitWindows(driver, account.limits).windows.filter((other) => other !== window)
+      : []) ?? []),
   ].map((entry) => {
     const remaining = remainingPercent(entry);
     const reset = entry.resetsAt

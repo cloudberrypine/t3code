@@ -57,7 +57,7 @@ describe("sidebar limit selection", () => {
     expect(selectSidebarLimit(accounts, "codex", primary)).toBeUndefined();
     expect(selectSidebarLimit([], "claudeAgent", primary)).toBeUndefined();
   });
-  it("prefers Claude weekly and falls back to its main session window", () => {
+  it("uses only Claude regular weekly without a session fallback", () => {
     const session = window("five_hour", "session");
     const weekly = window("seven_day", "weekly");
     expect(
@@ -69,14 +69,14 @@ describe("sidebar limit selection", () => {
     ).toBe(weekly);
     expect(
       selectSidebarLimit([account("claudeAgent", primary, [session])], "claudeAgent", primary),
-    ).toBe(session);
+    ).toBeUndefined();
   });
 });
 
 const now = Date.parse("2026-10-29T09:00:00Z");
 describe("sidebar limit accessible tooltip summary", () => {
-  it("names weekly and session allowances, usage, countdown, reset, plan and update", () => {
-    const weekly = { ...window("weekly", "weekly"), resetsAt: "2026-10-31T14:00:00Z" };
+  it("names only weekly allowance, usage, countdown, reset, plan and update", () => {
+    const weekly = { ...window("seven_day", "weekly"), resetsAt: "2026-10-31T14:00:00Z" };
     const session = { ...window("five_hour", "session"), windowDurationMins: 300, usedPercent: 59 };
     const selected = {
       ...account("claudeAgent", primary, [weekly, session]),
@@ -92,7 +92,7 @@ describe("sidebar limit accessible tooltip summary", () => {
     );
     expect(label).toContain("Claude (one@example.com): weekly limit: 73% left (27% used)");
     expect(label).toContain("resets in 2 days 5 h");
-    expect(label).toContain("5-hour session limit: 41% left (59% used)");
+    expect(label).not.toContain("session");
     expect(label).toContain("Max; updated");
     expect(label).not.toContain("undefined");
   });
@@ -101,7 +101,7 @@ describe("sidebar limit accessible tooltip summary", () => {
     const selected = { ...account("claudeAgent", primary, [session]), email: "one@example.com" };
     expect(sidebarWindowName(session)).toBe("5-hour session");
     expect(sidebarLimitLabel([selected], "claudeAgent", primary, "24-hour", now)).toMatch(
-      /^Claude: 5-hour session limit: 73% left/,
+      /^Claude: no usage limit data yet/,
     );
     expect(sidebarLimitLabel([], "codex", primary, "24-hour", now, "not signed in")).toBe(
       "Codex: no usage limit data yet (not signed in)",

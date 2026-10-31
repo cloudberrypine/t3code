@@ -94,6 +94,10 @@ describe("subscription widget snapshots", () => {
         provider({
           instanceId: ProviderInstanceId.make(driver),
           driver: ProviderDriverKind.make(driver),
+          usageLimits:
+            driver === "claudeAgent"
+              ? { checkedAt, windows: [{ ...window, id: "seven_day", kind: "weekly" }] }
+              : limits,
         }),
         provider({
           instanceId: ProviderInstanceId.make("opencode"),
@@ -214,7 +218,12 @@ describe("subscription widget snapshots", () => {
   it("marks unknown or distant reset times stale after fifteen minutes", () => {
     const snapshot = buildSubscriptionUsageSnapshot(
       presentations([
-        provider({ usageLimits: { checkedAt, windows: [{ ...window, resetsAt: undefined }] } }),
+        provider({
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, id: "seven_day", kind: "weekly", resetsAt: undefined }],
+          },
+        }),
       ]),
       deepLink,
     );
@@ -235,7 +244,10 @@ describe("subscription widget snapshots", () => {
         provider({
           instanceId: ProviderInstanceId.make("claude"),
           driver: ProviderDriverKind.make("claudeAgent"),
-          usageLimits: { checkedAt, windows: [{ ...window, resetsAt: undefined }] },
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, id: "seven_day", kind: "weekly", resetsAt: undefined }],
+          },
         }),
       ]),
       deepLink,

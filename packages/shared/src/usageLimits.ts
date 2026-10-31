@@ -57,6 +57,16 @@ function cursorUsageWindowRank(id: string): number {
   return rank < 0 ? CURSOR_USAGE_WINDOWS.length : rank;
 }
 
+/** Claude displays only its regular weekly allowance on every client surface. */
+export function selectUsageLimitWindows(
+  driver: string,
+  limits: ServerProviderUsageLimits,
+): ServerProviderUsageLimits {
+  return driver === "claudeAgent"
+    ? { ...limits, windows: limits.windows.filter((window) => window.id === "seven_day") }
+    : limits;
+}
+
 /**
  * Providers that belong on the Limits view: enabled, installed, and one whose
  * driver reports subscription usage at all. A driver with no notion of usage
@@ -168,8 +178,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     Map<string, { checkedAt: number; window: ServerProviderUsageWindow }>
   >();
   const merge = (key: string, next: LimitAccount) => {
-    // Older servers and different sources can report fewer model buckets.
-    // A newer session/weekly read must not erase Fable's separate weekly limit.
+    // Older servers and different sources can report fewer windows.
     // Keep the original timestamp per window so a third snapshot can update it.
     let windows = windowSources.get(key);
     if (!windows) {
@@ -303,7 +312,10 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       }
     }
   }
-  return [...accounts.values()];
+  return [...accounts.values()].map((account) => ({
+    ...account,
+    limits: selectUsageLimitWindows(account.driver, account.limits),
+  }));
 }
 
 /**
@@ -745,5 +757,12 @@ export function collectProviderUsageLimits(
       notices.push(`${source.label}: ${source.error}`);
     }
   }
-  return { createdAt: DateTime.formatIso(DateTime.makeUnsafe(now)), accounts, notices };
+  return {
+    createdAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+    accounts: accounts.map((account) => ({
+      ...account,
+      limits: selectUsageLimitWindows(account.driver, account.limits),
+    })),
+    notices,
+  };
 }

@@ -1,5 +1,9 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { LimitAccount, LimitPresentations } from "@t3tools/shared/usageLimits";
+import {
+  selectUsageLimitWindows,
+  type LimitAccount,
+  type LimitPresentations,
+} from "@t3tools/shared/usageLimits";
 
 /** Limits pools all accounts. The footer instead prefers the primary environment's
  * first account, then the first connected account, preserving collectLimitAccounts order.
@@ -25,13 +29,8 @@ export function selectSidebarLimit(
   primaryEnvironmentId: EnvironmentId | null,
 ) {
   const account = selectSidebarAccount(accounts, driver, primaryEnvironmentId);
-  const windows = account?.limits.windows ?? [];
-  return (
-    windows.find((window) => window.kind === "weekly") ??
-    (driver === "claudeAgent"
-      ? (windows.find((window) => window.kind === "session") ?? windows[0])
-      : undefined)
-  );
+  const windows = account ? selectUsageLimitWindows(driver, account.limits).windows : [];
+  return windows.find((window) => window.kind === "weekly");
 }
 
 export function sidebarNoDataReason(

@@ -290,6 +290,14 @@ it("reuses compact limit widgets for one provider and updates their reset countd
     ...codex.serverConfig.providers[0],
     driver: "claudeAgent",
     instanceId: "claude",
+    usageLimits: {
+      ...codex.serverConfig.providers[0].usageLimits,
+      windows: codex.serverConfig.providers[0].usageLimits.windows.map((window) => ({
+        ...window,
+        id: "seven_day",
+        kind: "weekly",
+      })),
+    },
     auth: { status: "authenticated", label: "Max" },
   };
   codex.serverConfig.providers.push(claude);

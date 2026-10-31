@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  selectUsageLimitWindows,
   type LimitAccount,
   isUsageLimitsCommand,
   collectProviderUsageLimits,
@@ -152,7 +153,7 @@ describe("pools", () => {
       driver: claude,
       instanceId: ProviderInstanceId.make("claude"),
       auth: { status: "authenticated", email: "Same@example.com" },
-      usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 40 }] },
+      usageLimits: { checkedAt, windows: [{ ...weekly, usedPercent: 40 }] },
     });
     const input = new Map([
       [EnvironmentId.make("env-a"), { ...laptop, serverConfig: { providers: [native] } }],
@@ -166,7 +167,7 @@ describe("pools", () => {
                 ...native,
                 usageLimits: {
                   checkedAt: "2026-09-03T11:30:00.000Z",
-                  windows: [{ ...window, usedPercent: 55 }],
+                  windows: [{ ...weekly, usedPercent: 55 }],
                 },
               },
             ],
@@ -179,7 +180,7 @@ describe("pools", () => {
                     driver: claude,
                     email: "same@example.com",
                     plan: "Claude Subscription",
-                    usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 10 }] },
+                    usageLimits: { checkedAt, windows: [{ ...weekly, usedPercent: 10 }] },
                   },
                 ],
               },
@@ -279,7 +280,7 @@ describe("pools", () => {
       auth: { status: "authenticated", email: "same@example.com" },
       usageLimits: {
         checkedAt,
-        windows: [{ ...window, usedPercent: 40 }],
+        windows: [{ ...weekly, usedPercent: 40 }],
         resetCredits: { availableCount: 2 },
       },
     });
@@ -300,7 +301,7 @@ describe("pools", () => {
                     email: "same@example.com",
                     usageLimits: {
                       checkedAt: "2026-09-03T11:30:00.000Z",
-                      windows: [{ ...window, usedPercent: 55 }],
+                      windows: [{ ...weekly, usedPercent: 55 }],
                     },
                   },
                 ],
@@ -324,7 +325,7 @@ describe("pools", () => {
       auth: { status: "authenticated", email: "same@example.com" },
       usageLimits: {
         checkedAt: "2026-09-03T11:30:00.000Z",
-        windows: [{ ...window, usedPercent: 40 }],
+        windows: [{ ...weekly, usedPercent: 40 }],
         resetCredits: { availableCount: 3, nextCreditId: "native-credit" },
       },
     });
@@ -345,7 +346,7 @@ describe("pools", () => {
                     email: "same@example.com",
                     usageLimits: {
                       checkedAt,
-                      windows: [{ ...window, usedPercent: 55 }],
+                      windows: [{ ...weekly, usedPercent: 55 }],
                       resetCredits: { availableCount: 2, nextCreditId: "hub-credit" },
                     },
                   },
@@ -550,7 +551,7 @@ describe("pools", () => {
                 accounts: [
                   {
                     id: "a",
-                    driver: claude,
+                    driver: ProviderDriverKind.make("cursor"),
                     usageLimits: {
                       checkedAt,
                       windows: [
@@ -561,7 +562,7 @@ describe("pools", () => {
                   },
                   {
                     id: "b",
-                    driver: claude,
+                    driver: ProviderDriverKind.make("cursor"),
                     usageLimits: {
                       checkedAt,
                       windows: [{ ...window, usedPercent: 40 }],
@@ -574,7 +575,7 @@ describe("pools", () => {
                   },
                   {
                     id: "unsupported",
-                    driver: claude,
+                    driver: ProviderDriverKind.make("cursor"),
                     usageLimits: {
                       checkedAt,
                       windows: [],
@@ -590,7 +591,7 @@ describe("pools", () => {
     ]);
     const pools = collectLimitPools(collectLimitAccounts(input), now);
     expect(pools.map((pool) => [pool.driver, pool.accounts.length])).toEqual([
-      ["claudeAgent", 2],
+      ["cursor", 2],
       ["codex", 1],
     ]);
     const [session, week] = pools[0]!.windows;
@@ -631,7 +632,7 @@ describe("pools", () => {
         ...collectLimitAccounts(input),
         {
           key: "go",
-          driver: claude,
+          driver: ProviderDriverKind.make("cursor"),
           displayName: "Go",
           email: undefined,
           plan: undefined,
@@ -672,57 +673,45 @@ describe("pools", () => {
     [1, 2, 0],
     [2, 0, 1],
     [2, 1, 0],
-  ])(
-    "keeps the freshest Fable weekly limit across partial environment snapshots ordered %j",
-    (...order) => {
-      const fable = { ...weekly, id: "seven_day_fable", label: "Weekly · Fable" };
-      const reads = [
-        { checkedAt: "2026-09-03T10:00:00.000Z", windows: [{ ...fable, usedPercent: 10 }] },
+  ])("shows only regular Claude weekly limits across partial snapshots ordered %j", (...order) => {
+    const fable = { ...weekly, id: "seven_day_fable", label: "Weekly · Fable" };
+    const reads = [
+      { checkedAt: "2026-09-03T10:00:00.000Z", windows: [{ ...fable, usedPercent: 10 }] },
+      {
+        checkedAt: "2026-09-03T12:00:00.000Z",
+        windows: [
+          { ...window, usedPercent: 70 },
+          { ...weekly, usedPercent: 20 },
+        ],
+      },
+      { checkedAt: "2026-09-03T11:00:00.000Z", windows: [{ ...fable, usedPercent: 45 }] },
+    ];
+    const input = new Map(
+      order.map((index) => [
+        EnvironmentId.make(`env-${index}`),
         {
-          checkedAt: "2026-09-03T12:00:00.000Z",
-          windows: [
-            { ...window, usedPercent: 70 },
-            { ...weekly, usedPercent: 20 },
-          ],
-        },
-        { checkedAt: "2026-09-03T11:00:00.000Z", windows: [{ ...fable, usedPercent: 45 }] },
-      ];
-      const input = new Map(
-        order.map((index) => [
-          EnvironmentId.make(`env-${index}`),
-          {
-            ...laptop,
-            serverConfig: {
-              providers: [
-                provider({
-                  driver: claude,
-                  instanceId: ProviderInstanceId.make("claude"),
-                  auth: { status: "authenticated", email: "same@example.com" },
-                  usageLimits: reads[index]!,
-                }),
-              ],
-            },
+          ...laptop,
+          serverConfig: {
+            providers: [
+              provider({
+                driver: claude,
+                instanceId: ProviderInstanceId.make("claude"),
+                auth: { status: "authenticated", email: "same@example.com" },
+                usageLimits: reads[index]!,
+              }),
+            ],
           },
-        ]),
-      );
-      const accounts = collectLimitAccounts(input);
-      expect(accounts).toHaveLength(1);
-      const pools = collectLimitPools(accounts, now);
-      expect(pools[0]?.windows).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: "five_hour", usedPercent: 70 }),
-          expect.objectContaining({ id: "seven_day", usedPercent: 20 }),
-          expect.objectContaining({
-            id: "seven_day_fable",
-            label: "Weekly · Fable",
-            usedPercent: 45,
-            remainingPercent: 55,
-          }),
-        ]),
-      );
-      expect(pools[0]?.windows).toHaveLength(3);
-    },
-  );
+        },
+      ]),
+    );
+    const accounts = collectLimitAccounts(input);
+    expect(accounts).toHaveLength(1);
+    const pools = collectLimitPools(accounts, now);
+    expect(accounts[0]?.limits.windows).toEqual([{ ...weekly, usedPercent: 20 }]);
+    expect(pools[0]?.windows).toEqual([
+      expect.objectContaining({ id: "seven_day", usedPercent: 20, remainingPercent: 80 }),
+    ]);
+  });
 });
 
 describe("pooled account columns", () => {
@@ -1261,5 +1250,18 @@ describe("ChatGPT sharing presentation", () => {
         auth: { status: "unauthenticated", subscriptionSharing: true },
       }),
     ).toBe(false);
+  });
+});
+
+describe("Claude display windows", () => {
+  it("never substitutes session or model-specific weekly limits", () => {
+    const limits = {
+      checkedAt: "2026-09-03T12:00:00.000Z",
+      windows: [window, { ...window, id: "seven_day_fable", kind: "weekly" as const }],
+    };
+    expect(selectUsageLimitWindows(ProviderDriverKind.make("claudeAgent"), limits).windows).toEqual(
+      [],
+    );
+    expect(selectUsageLimitWindows(ProviderDriverKind.make("codex"), limits)).toBe(limits);
   });
 });
