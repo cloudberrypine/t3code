@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { environmentPresentations } from "../../state/presentation";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { AccountLimits } from "./UsageLimitsSection";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
@@ -22,6 +23,7 @@ export function HomeUsageRings() {
   } | null>(null);
   const { themeAppearance } = useAppearancePreferences();
   const insets = useSafeAreaInsets();
+  const theme = useUniwindTheme();
   return (
     <View style={{ flexDirection: "row" }}>
       {(["codex", "claudeAgent"] as const).map((driver) => {
@@ -88,12 +90,18 @@ export function HomeUsageRings() {
             accessibilityRole="button"
             accessibilityLabel="Dismiss usage details"
             onPress={() => setSelection(null)}
-            style={{ position: "absolute", inset: 0, backgroundColor: "rgba(0,0,0,0.4)" }}
+            style={{ position: "absolute", inset: 0, backgroundColor: "rgba(0,0,0,0.6)" }}
           />
           <View
             accessibilityViewIsModal
-            className="rounded-t-2xl bg-background"
-            style={{ maxHeight: "80%", paddingBottom: Math.max(insets.bottom, 16) }}
+            className="rounded-t-2xl"
+            style={{
+              // A Modal renders outside the themed tree, so className colours resolve to
+              // transparent here: give the sheet its theme colour explicitly.
+              backgroundColor: theme["--color-sheet"],
+              maxHeight: "80%",
+              paddingBottom: Math.max(insets.bottom, 16),
+            }}
           >
             <ScrollView>
               {selection ? (
