@@ -32,7 +32,14 @@ vi.mock("../../state/presentation", () => ({
 }));
 vi.mock("./UsageLimitsSection", () => ({ AccountLimits: "account" }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
-  useAppearancePreferences: () => ({ themeAppearance: "dark" }),
+  useAppearancePreferences: () => ({
+    themeAppearance: "dark",
+    themeVariables: {
+      "--color-sheet": "#202020",
+      "--color-foreground": "#eeeeee",
+      "--color-foreground-muted": "#aaaaaa",
+    },
+  }),
 }));
 import { HomeUsageRings } from "./HomeUsageRings";
 

@@ -309,6 +309,9 @@ export default defineConfig({
           "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
           "apps/mobile/src/features/files/thread-file-navigator-pane.tsx",
           "apps/mobile/src/features/home/HomeHeader.tsx",
+          // Native Modal descendants need explicit colors outside the scoped theme.
+          "apps/mobile/src/features/usage/HomeUsageRings.tsx",
+          "apps/mobile/src/features/usage/UsageLimitsSection.tsx",
           "apps/mobile/src/features/review/ReviewSheet.tsx",
           "apps/mobile/src/features/review/useNativeReviewDiffBridge.ts",
           "apps/mobile/src/features/settings/SettingsEnvironmentsRouteScreen.tsx",

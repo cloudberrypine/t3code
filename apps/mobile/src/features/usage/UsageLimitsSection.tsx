@@ -25,6 +25,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useProviderColors } from "./usageProviders";
 
 const PACE_LABEL = { ahead: "ahead of pace", on: "on pace", under: "under pace" } as const;
@@ -51,6 +52,7 @@ function WindowRow(props: {
   readonly now: number;
 }) {
   const { window, now } = props;
+  const theme = useUniwindTheme();
   const remaining = remainingPercent(window);
   const elapsed = elapsedShare(window, now);
   const timeLeft = elapsed === null ? null : Math.round((1 - elapsed) * 100);
@@ -59,39 +61,60 @@ function WindowRow(props: {
   return (
     <View className="gap-1">
       <View className="flex-row items-baseline justify-between gap-3">
-        <Text className="text-sm text-foreground">{window.label}</Text>
-        <Text className="text-sm font-t3-medium tabular-nums text-foreground">
+        <Text className="text-sm" style={{ color: theme["--color-foreground"] }}>
+          {window.label}
+        </Text>
+        <Text
+          className="text-sm font-t3-medium tabular-nums"
+          style={{ color: theme["--color-foreground"] }}
+        >
           {remaining}% left
         </Text>
       </View>
       <View className="h-3 justify-center">
-        <View className="h-1.5 flex-row overflow-hidden rounded-full bg-subtle">
+        <View
+          className="h-1.5 flex-row overflow-hidden rounded-full"
+          style={{ backgroundColor: theme["--color-subtle"] }}
+        >
           <View
-            className={
-              remaining <= 10
-                ? "h-full rounded-full bg-red-500"
-                : remaining <= 30
-                  ? "h-full rounded-full bg-amber-500"
-                  : "h-full rounded-full bg-foreground"
-            }
-            style={[
-              { flex: remaining },
-              remaining > 30 && props.color ? { backgroundColor: props.color } : null,
-            ]}
+            className="h-full rounded-full"
+            style={{
+              flex: remaining,
+              backgroundColor:
+                remaining <= 10
+                  ? "#ef4444"
+                  : remaining <= 30
+                    ? "#f59e0b"
+                    : (props.color ?? theme["--color-foreground"]),
+            }}
           />
           <View style={{ flex: 100 - remaining }} />
         </View>
         {timeLeft !== null ? (
           <View
-            className="absolute top-0 bottom-0 w-px bg-foreground"
-            style={{ left: `${timeLeft}%`, opacity: 0.6 }}
+            className="absolute top-0 bottom-0 w-px"
+            style={{
+              left: `${timeLeft}%`,
+              opacity: 0.6,
+              backgroundColor: theme["--color-foreground"],
+            }}
           />
         ) : null}
       </View>
       {pace || resetsIn ? (
         <View className="flex-row justify-between gap-3">
-          <Text className="text-xs text-foreground-tertiary">{pace ? PACE_LABEL[pace] : ""}</Text>
-          <Text className="text-xs tabular-nums text-foreground-tertiary">{resetsIn ?? ""}</Text>
+          <Text
+            style={{ color: theme["--color-foreground-tertiary"] }}
+            className="text-xs text-foreground-tertiary"
+          >
+            {pace ? PACE_LABEL[pace] : ""}
+          </Text>
+          <Text
+            style={{ color: theme["--color-foreground-tertiary"] }}
+            className="text-xs tabular-nums text-foreground-tertiary"
+          >
+            {resetsIn ?? ""}
+          </Text>
         </View>
       ) : null}
     </View>
@@ -99,10 +122,15 @@ function WindowRow(props: {
 }
 
 function AccountInstanceLabel({ value }: { readonly value: string }) {
+  const theme = useUniwindTheme();
   const [revealed, setRevealed] = useState(false);
   if (!value.includes("@")) {
     return (
-      <Text className="shrink text-xs text-foreground-tertiary" numberOfLines={1}>
+      <Text
+        style={{ color: theme["--color-foreground-tertiary"] }}
+        className="shrink text-xs text-foreground-tertiary"
+        numberOfLines={1}
+      >
         · {value}
       </Text>
     );
@@ -114,7 +142,11 @@ function AccountInstanceLabel({ value }: { readonly value: string }) {
       accessibilityLabel={revealed ? "Hide account label" : "Reveal account label"}
       onPress={() => setRevealed((current) => !current)}
     >
-      <Text className="text-xs text-foreground-tertiary" numberOfLines={1}>
+      <Text
+        style={{ color: theme["--color-foreground-tertiary"] }}
+        className="text-xs text-foreground-tertiary"
+        numberOfLines={1}
+      >
         · {revealed ? value : "••••••@••••••"}
       </Text>
     </Pressable>
@@ -136,6 +168,7 @@ export function AccountLimits(props: {
   readonly trailing?: ReactNode;
   readonly footer?: ReactNode;
 }) {
+  const theme = useUniwindTheme();
   const { limits, now, dense = false } = props;
   const color = useBarColor(props.driver);
   if (!limits) return null;
@@ -144,6 +177,7 @@ export function AccountLimits(props: {
   const padding = dense ? "px-4 py-3" : "p-4";
   return (
     <View
+      style={{ borderColor: theme["--color-border-subtle"] }}
       className={
         props.first ? `gap-3 ${padding}` : `gap-3 border-t border-border-subtle ${padding}`
       }
@@ -151,12 +185,21 @@ export function AccountLimits(props: {
       <View className="flex-row items-center gap-2">
         <ProviderIcon provider={props.driver} size={16} />
         <View className="min-w-0 flex-1 flex-row items-baseline gap-2">
-          <Text className="text-base font-t3-medium text-foreground">{props.label}</Text>
+          <Text
+            style={{ color: theme["--color-foreground"] }}
+            className="text-base font-t3-medium text-foreground"
+          >
+            {props.label}
+          </Text>
           {props.instanceLabel !== props.label ? (
             <AccountInstanceLabel key={props.instanceLabel} value={props.instanceLabel} />
           ) : null}
           {props.detail ? (
-            <Text className="shrink text-sm text-foreground-muted" numberOfLines={1}>
+            <Text
+              style={{ color: theme["--color-foreground-muted"] }}
+              className="shrink text-sm text-foreground-muted"
+              numberOfLines={1}
+            >
               · {props.detail}
             </Text>
           ) : null}
@@ -164,7 +207,12 @@ export function AccountLimits(props: {
         {props.trailing}
       </View>
       {notice ? (
-        <Text className="text-sm text-foreground-muted">{notice}</Text>
+        <Text
+          style={{ color: theme["--color-foreground-muted"] }}
+          className="text-sm text-foreground-muted"
+        >
+          {notice}
+        </Text>
       ) : (
         <View className="gap-3">
           {limits.windows.map((window) => (
@@ -178,7 +226,12 @@ export function AccountLimits(props: {
           className="min-h-11 justify-center"
           onPress={() => void Linking.openURL(externalUsage.url).catch(() => undefined)}
         >
-          <Text className="text-sm font-t3-medium text-primary">Manage usage</Text>
+          <Text
+            style={{ color: theme["--color-primary"] }}
+            className="text-sm font-t3-medium text-primary"
+          >
+            Manage usage
+          </Text>
         </Pressable>
       ) : null}
       {props.footer}

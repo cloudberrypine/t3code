@@ -106,11 +106,14 @@ export function HomeUsageRings() {
             <ScrollView>
               {selection ? (
                 <>
-                  <Text className="px-4 pt-4 text-lg font-t3-bold text-foreground">
+                  <Text
+                    className="px-4 pt-4 text-lg font-t3-bold"
+                    style={{ color: theme["--color-foreground"] }}
+                  >
                     {selection.driver === "codex" ? "OpenAI" : "Claude"} usage limits
                   </Text>
                   {!selectSidebarLimit(accounts, selection.driver, null) ? (
-                    <Text className="p-4 text-foreground-muted">
+                    <Text className="p-4" style={{ color: theme["--color-foreground-muted"] }}>
                       No usage limit data yet:{" "}
                       {sidebarNoDataReason(presentations, selection.driver, null)}
                     </Text>
@@ -128,7 +131,11 @@ export function HomeUsageRings() {
                           <View className="gap-1">
                             {account.limits.windows.map((window) =>
                               window.resetsAt ? (
-                                <Text key={window.id} className="text-xs text-foreground-muted">
+                                <Text
+                                  key={window.id}
+                                  className="text-xs"
+                                  style={{ color: theme["--color-foreground-muted"] }}
+                                >
                                   {window.label}: {formatLimitResetCountdown(window, selection.now)}{" "}
                                   ({new Date(window.resetsAt).toLocaleString()})
                                 </Text>
