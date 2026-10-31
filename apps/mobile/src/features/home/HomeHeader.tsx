@@ -42,7 +42,8 @@ export function HomeHeader(props: HomeHeaderProps) {
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           headerTintColor: iconColor,
           unstable_headerRightItems: () => [
-            { type: "custom", element: renderUsageRings(), hidesSharedBackground: true },
+            // iOS lays out right items from the trailing edge inwards, so the
+            // first item is the rightmost: the menu, then the usage rings to its left.
             withNativeGlassHeaderItem({
               accessibilityLabel: "Open settings",
               icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -51,6 +52,7 @@ export function HomeHeader(props: HomeHeaderProps) {
               onPress: props.onOpenSettings,
               type: "button",
             }),
+            { type: "custom", element: renderUsageRings(), hidesSharedBackground: true },
           ],
           // The keys below are set per-branch (not `undefined`) so a later
           // reapply cannot clobber options owned by NativeHeaderToolbar.
