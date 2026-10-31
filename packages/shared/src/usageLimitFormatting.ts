@@ -1,5 +1,5 @@
 import type { ServerProviderUsageWindow } from "@t3tools/contracts";
-import { formatResetsIn } from "./usageLimits.js";
+import { formatResetsIn } from "@t3tools/shared/usageLimits";
 
 /** Spell out days so a new user can read the reset countdown at a glance. */
 export function formatLimitResetCountdown(window: ServerProviderUsageWindow, now: number) {

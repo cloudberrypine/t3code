@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { LimitAccount, LimitPresentations } from "./usageLimits.js";
+import type { LimitAccount, LimitPresentations } from "@t3tools/shared/usageLimits";
 
 /** Limits pools all accounts. The footer instead prefers the primary environment's
  * first account, then the first connected account, preserving collectLimitAccounts order.
