@@ -1,4 +1,9 @@
-import { EnvironmentId, ProviderInstanceId, USAGE_CONTRACT_VERSION } from "@t3tools/contracts";
+import {
+  type ServerProviderUsageWindow,
+  EnvironmentId,
+  ProviderInstanceId,
+  USAGE_CONTRACT_VERSION,
+} from "@t3tools/contracts";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
 import { StrictMode, act } from "react";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
@@ -292,11 +297,13 @@ it("reuses compact limit widgets for one provider and updates their reset countd
     instanceId: "claude",
     usageLimits: {
       ...codex.serverConfig.providers[0].usageLimits,
-      windows: codex.serverConfig.providers[0].usageLimits.windows.map((window) => ({
-        ...window,
-        id: "seven_day",
-        kind: "weekly",
-      })),
+      windows: codex.serverConfig.providers[0].usageLimits.windows.map(
+        (window: ServerProviderUsageWindow) => ({
+          ...window,
+          id: "seven_day",
+          kind: "weekly",
+        }),
+      ),
     },
     auth: { status: "authenticated", label: "Max" },
   };
