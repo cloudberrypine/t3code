@@ -1,3 +1,4 @@
+import { HomeUsageRings } from "../usage/HomeUsageRings";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useCallback, useRef } from "react";
 import type { SearchBarCommands } from "react-native-screens";
@@ -12,6 +13,10 @@ import { buildHomeListFilterMenu } from "./home-list-filter-menu";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
+
+function renderUsageRings() {
+  return <HomeUsageRings />;
+}
 
 export function HomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
@@ -37,6 +42,7 @@ export function HomeHeader(props: HomeHeaderProps) {
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           headerTintColor: iconColor,
           unstable_headerRightItems: () => [
+            { type: "custom", element: renderUsageRings(), hidesSharedBackground: true },
             withNativeGlassHeaderItem({
               accessibilityLabel: "Open settings",
               icon: { name: "ellipsis", type: "sfSymbol" } as const,
