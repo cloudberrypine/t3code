@@ -19,17 +19,28 @@ export const ANALYSIS_LIMIT = 1000;
 const OPTIMIZE_INTERVAL = Duration.hours(6);
 
 // The query planner trusts sqlite_stat1. Statistics taken while a table was
-// small make it scan whole tables later, so `optimize` re-analyzes every table
-// whose size has changed a lot since its last ANALYZE (0x10002 at startup
-// checks tables this connection has not queried yet).
-const optimize = (sql: SqlClient.SqlClient, pragma: string) =>
-  sql
-    .unsafe(pragma)
-    .pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Failed to refresh SQLite planner statistics", { cause }),
-      ),
-    );
+// small make it scan whole tables later. `optimize` re-analyzes each table
+// whose size has changed about tenfold since its last ANALYZE (0x10002 also
+// checks tables this connection has not queried yet). Nothing here creates
+// statistics: a database without sqlite_stat1 keeps the planner's defaults.
+const refreshPlannerStatistics = (sql: SqlClient.SqlClient, pragma: string) =>
+  Effect.gen(function* () {
+    const stat = yield* sql<{ readonly present: number }>`
+      SELECT EXISTS (
+        SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'sqlite_stat1'
+      ) AS present
+    `;
+    if (stat[0]?.present !== 1) return;
+    // Migrations change the schema on this connection, which leaves the
+    // in-memory row estimates that optimize compares against out of date.
+    // Reload them from sqlite_stat1 first; this reads no table data.
+    yield* sql.unsafe("ANALYZE sqlite_schema;");
+    yield* sql.unsafe(pragma);
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Failed to refresh SQLite planner statistics", { cause }),
+    ),
+  );
 
 const setup = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -43,8 +54,8 @@ const setup = Layer.effectDiscard(
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
     yield* runMigrations();
     yield* sql.unsafe(`PRAGMA analysis_limit = ${ANALYSIS_LIMIT};`);
-    yield* optimize(sql, "PRAGMA optimize = 0x10002;");
-    yield* optimize(sql, "PRAGMA optimize;").pipe(
+    yield* refreshPlannerStatistics(sql, "PRAGMA optimize = 0x10002;");
+    yield* refreshPlannerStatistics(sql, "PRAGMA optimize;").pipe(
       Effect.delay(OPTIMIZE_INTERVAL),
       Effect.forever,
       Effect.forkScoped,

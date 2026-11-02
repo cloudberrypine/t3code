@@ -162,6 +162,25 @@ it.effect(
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("keeps the write lock for a read transaction nested in a write transaction", () =>
+  Effect.gen(function* () {
+    const { filename, other } = yield* makeTempDatabase;
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.withTransaction(
+        SqliteClient.withReadTransaction(sql)(
+          Effect.sync(() =>
+            assert.throws(
+              () => other.exec("UPDATE counters SET value = value + 1 WHERE id = 1"),
+              /database is locked/,
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(SqliteClient.layer({ filename })));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("reports a transaction blocked by another writer as a lock timeout", () =>
   Effect.gen(function* () {
     const { filename, other } = yield* makeTempDatabase;

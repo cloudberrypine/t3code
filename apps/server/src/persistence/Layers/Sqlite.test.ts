@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -94,3 +95,58 @@ it.effect("applies busy_timeout in the shared persistence setup", () =>
     assert.equal(rows[0]?.timeout, 5000);
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
+
+const statRows = (sql: SqlClient.SqlClient, table: string) =>
+  Effect.gen(function* () {
+    const present = yield* sql<{ readonly present: number }>`
+      SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1') AS present
+    `;
+    if (present[0]?.present !== 1) return undefined;
+    return yield* sql<{ readonly stat: string }>`
+      SELECT stat FROM sqlite_stat1 WHERE tbl = ${table}
+    `.pipe(Effect.map((rows) => rows.map((row) => row.stat)));
+  });
+
+it.effect("leaves a database without planner statistics on the planner's defaults", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-nostats-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    assert.isUndefined(yield* statRows(sql, "orchestration_events"));
+  }).pipe(
+    Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("refreshes planner statistics taken while a table was small", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-stalestats-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+  // Analyze at 43 rows, then grow the table a hundredfold without analyzing.
+  const seed = new NodeSqlite.DatabaseSync(dbPath);
+  seed.exec(`
+    CREATE TABLE stats_probe(id INTEGER PRIMARY KEY, bucket INTEGER NOT NULL);
+    CREATE INDEX stats_probe_bucket_idx ON stats_probe(bucket);
+    WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 43)
+    INSERT INTO stats_probe(bucket) SELECT i % 5 FROM n;
+    ANALYZE;
+    WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 4300)
+    INSERT INTO stats_probe(bucket) SELECT i % 5 FROM n;
+  `);
+  seed.close();
+
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const stats = yield* statRows(sql, "stats_probe");
+    assert.isDefined(stats);
+    assert.isTrue(stats.length > 0);
+    // The first number is the row count ANALYZE saw (an estimate under analysis_limit).
+    for (const stat of stats) {
+      assert.isAbove(Number(stat.split(" ")[0]), 4000);
+    }
+  }).pipe(
+    Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});

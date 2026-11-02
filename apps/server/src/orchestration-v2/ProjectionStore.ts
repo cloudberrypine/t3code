@@ -2715,8 +2715,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   UNION
                   SELECT request.payload_json, request.ordinal, request.turn_item_id
                   FROM orchestration_v2_projection_turn_items AS request
-                  -- The thread filter keeps this on an index even when planner
-                  -- statistics are stale; without it SQLite may scan every turn item.
+                  -- The thread filter lets SQLite use thread_run_idx. Without it,
+                  -- stale planner statistics made it scan every turn item.
                   WHERE request.thread_id = ${threadId}
                     AND request.run_id IN (
                       SELECT run_id FROM selected
@@ -4554,7 +4554,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       fields,
       filter,
     ) =>
-      sql.withTransaction(readCanonicalProjection(threadId, undefined, fields, filter)).pipe(
+      withReadTransaction(sql)(readCanonicalProjection(threadId, undefined, fields, filter)).pipe(
         Effect.map(
           (projection) =>
             Object.fromEntries([
@@ -4705,68 +4705,64 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       );
 
     const getTimelinePage: ProjectionStoreV2Shape["getTimelinePage"] = (threadId, options) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const index = yield* readTimelineIndex(threadId, new Set());
-            const matching = index.visible
-              .map((row, position) => ({ ...row, position }))
-              .filter((row) =>
-                options.itemId === undefined
-                  ? row.position > (options.afterPosition ?? -1) &&
-                    (options.view === "activity" ||
-                      ["user_message", "assistant_message", "proposed_plan"].includes(
-                        row.item.type,
-                      ))
-                  : row.sourceItemId === options.itemId,
-              );
-            const page = matching.slice(0, options.limit);
-            const items = yield* Effect.forEach(page, (row) =>
-              Effect.gen(function* () {
-                if (row.synthetic !== undefined)
-                  return {
-                    position: row.position,
-                    sourceThreadId: row.sourceThreadId,
-                    sourceItemId: row.sourceItemId,
-                    visibility: row.visibility,
-                    item: row.synthetic,
-                  };
-                const payloads =
-                  yield* sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_turn_items
-          WHERE thread_id = ${row.sourceThreadId} AND turn_item_id = ${row.sourceItemId}`;
-                const decoded = yield* decodeRows(
-                  decodeTurnItemPayload,
-                  row.sourceThreadId,
-                )(payloads);
-                const item = decoded[0];
-                if (item === undefined)
-                  return yield* new ProjectionStoreReadError({
-                    threadId,
-                    cause: "Timeline item disappeared during snapshot",
-                  });
+      withReadTransaction(sql)(
+        Effect.gen(function* () {
+          const index = yield* readTimelineIndex(threadId, new Set());
+          const matching = index.visible
+            .map((row, position) => ({ ...row, position }))
+            .filter((row) =>
+              options.itemId === undefined
+                ? row.position > (options.afterPosition ?? -1) &&
+                  (options.view === "activity" ||
+                    ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type))
+                : row.sourceItemId === options.itemId,
+            );
+          const page = matching.slice(0, options.limit);
+          const items = yield* Effect.forEach(page, (row) =>
+            Effect.gen(function* () {
+              if (row.synthetic !== undefined)
                 return {
                   position: row.position,
                   sourceThreadId: row.sourceThreadId,
                   sourceItemId: row.sourceItemId,
                   visibility: row.visibility,
-                  item,
+                  item: row.synthetic,
                 };
-              }),
-            );
-            return {
-              items,
-              totalItems: index.visible.length,
-              hasMore: matching.length > page.length,
-            };
-          }),
-        )
-        .pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        );
+              const payloads =
+                yield* sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_turn_items
+          WHERE thread_id = ${row.sourceThreadId} AND turn_item_id = ${row.sourceItemId}`;
+              const decoded = yield* decodeRows(
+                decodeTurnItemPayload,
+                row.sourceThreadId,
+              )(payloads);
+              const item = decoded[0];
+              if (item === undefined)
+                return yield* new ProjectionStoreReadError({
+                  threadId,
+                  cause: "Timeline item disappeared during snapshot",
+                });
+              return {
+                position: row.position,
+                sourceThreadId: row.sourceThreadId,
+                sourceItemId: row.sourceItemId,
+                visibility: row.visibility,
+                item,
+              };
+            }),
+          );
+          return {
+            items,
+            totalItems: index.visible.length,
+            hasMore: matching.length > page.length,
+          };
+        }),
+      ).pipe(
+        Effect.mapError((cause) =>
+          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
+            ? cause
+            : new ProjectionStoreReadError({ threadId, cause }),
+        ),
+      );
 
     const getThreadSnapshotWindow: ProjectionStoreV2Shape["getThreadSnapshotWindow"] = (
       threadId,
