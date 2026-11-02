@@ -1,3 +1,4 @@
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
@@ -12,6 +13,24 @@ import * as ServerConfig from "../../config.ts";
 // Size the -wal file is cut back to on the first commit after a WAL reset.
 export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
 
+// Rows ANALYZE samples per index, so a refresh stays short on a
+// multi-gigabyte database.
+export const ANALYSIS_LIMIT = 1000;
+const OPTIMIZE_INTERVAL = Duration.hours(6);
+
+// The query planner trusts sqlite_stat1. Statistics taken while a table was
+// small make it scan whole tables later, so `optimize` re-analyzes every table
+// whose size has changed a lot since its last ANALYZE (0x10002 at startup
+// checks tables this connection has not queried yet).
+const optimize = (sql: SqlClient.SqlClient, pragma: string) =>
+  sql
+    .unsafe(pragma)
+    .pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to refresh SQLite planner statistics", { cause }),
+      ),
+    );
+
 const setup = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -23,6 +42,13 @@ const setup = Layer.effectDiscard(
     // largest size until the last connection closes.
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
     yield* runMigrations();
+    yield* sql.unsafe(`PRAGMA analysis_limit = ${ANALYSIS_LIMIT};`);
+    yield* optimize(sql, "PRAGMA optimize = 0x10002;");
+    yield* optimize(sql, "PRAGMA optimize;").pipe(
+      Effect.delay(OPTIMIZE_INTERVAL),
+      Effect.forever,
+      Effect.forkScoped,
+    );
   }),
 );
 

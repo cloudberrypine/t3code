@@ -125,6 +125,43 @@ it.effect("keeps another connection from committing between a transaction's read
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect(
+  "lets another connection commit during a read transaction without moving its snapshot",
+  () =>
+    Effect.gen(function* () {
+      const { filename, other } = yield* makeTempDatabase;
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const read = sql<{ readonly value: number }>`SELECT value FROM counters WHERE id = 1`
+          .values;
+        const snapshot = yield* SqliteClient.withReadTransaction(sql)(
+          Effect.gen(function* () {
+            const before = yield* read;
+            yield* Effect.sync(() =>
+              other.exec("UPDATE counters SET value = value + 1 WHERE id = 1"),
+            );
+            // Nested transactions inside a read transaction are savepoints.
+            const nested = yield* sql.withTransaction(read);
+            return [before, nested, yield* read];
+          }),
+        );
+        assert.deepEqual(snapshot, [[[0]], [[0]], [[0]]]);
+        assert.deepEqual(yield* read, [[1]]);
+
+        // The read-only mark does not leak: the next write transaction still
+        // takes the write lock up front.
+        yield* sql.withTransaction(
+          Effect.sync(() =>
+            assert.throws(
+              () => other.exec("UPDATE counters SET value = value + 1 WHERE id = 1"),
+              /database is locked/,
+            ),
+          ),
+        );
+      }).pipe(Effect.provide(SqliteClient.layer({ filename })));
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("reports a transaction blocked by another writer as a lock timeout", () =>
   Effect.gen(function* () {
     const { filename, other } = yield* makeTempDatabase;

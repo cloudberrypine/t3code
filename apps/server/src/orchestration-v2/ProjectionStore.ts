@@ -61,6 +61,7 @@ import {
   isOrchestrationV2TurnItemVisible,
 } from "@t3tools/shared/orchestrationV2Timeline";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { withReadTransaction } from "@t3tools/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -2714,7 +2715,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   UNION
                   SELECT request.payload_json, request.ordinal, request.turn_item_id
                   FROM orchestration_v2_projection_turn_items AS request
-                  WHERE request.run_id IN (
+                  -- The thread filter keeps this on an index even when planner
+                  -- statistics are stale; without it SQLite may scan every turn item.
+                  WHERE request.thread_id = ${threadId}
+                    AND request.run_id IN (
                       SELECT run_id FROM selected
                       WHERE type = 'run_interrupt_result' AND run_id IS NOT NULL
                     )
@@ -4562,31 +4566,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       );
 
     const getThreadSnapshot: ProjectionStoreV2Shape["getThreadSnapshot"] = (threadId) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const projection = yield* getThreadProjection(threadId);
-            const rows = yield* sql<{ readonly snapshot_sequence: number | null }>`
+      withReadTransaction(sql)(
+        Effect.gen(function* () {
+          const projection = yield* getThreadProjection(threadId);
+          const rows = yield* sql<{ readonly snapshot_sequence: number | null }>`
             SELECT MAX(sequence) AS snapshot_sequence
             FROM orchestration_events
             WHERE application_event_version = 2
               AND aggregate_kind = 'thread'
               AND stream_id = ${threadId}
           `;
-            return {
-              schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
-              snapshotSequence: rows[0]?.snapshot_sequence ?? 0,
-              projection,
-            };
-          }),
-        )
-        .pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        );
+          return {
+            schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+            snapshotSequence: rows[0]?.snapshot_sequence ?? 0,
+            projection,
+          };
+        }),
+      ).pipe(
+        Effect.mapError((cause) =>
+          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
+            ? cause
+            : new ProjectionStoreReadError({ threadId, cause }),
+        ),
+      );
 
     // Only the timeline index is assembled across fork ancestry. Payloads are read
     // after page selection, so a small MCP page never hydrates all tool output.
@@ -4770,53 +4772,49 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       threadId,
       options,
     ) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const historyAnchor =
-              options.anchorItemId === undefined
-                ? undefined
-                : {
-                    itemId: options.anchorItemId,
-                    threadId:
-                      options.anchorThreadId ??
-                      (yield* sql<{ readonly thread_id: string }>`
+      withReadTransaction(sql)(
+        Effect.gen(function* () {
+          const historyAnchor =
+            options.anchorItemId === undefined
+              ? undefined
+              : {
+                  itemId: options.anchorItemId,
+                  threadId:
+                    options.anchorThreadId ??
+                    (yield* sql<{ readonly thread_id: string }>`
                         SELECT thread_id
                         FROM orchestration_v2_projection_turn_items
                         WHERE turn_item_id = ${options.anchorItemId}
                         LIMIT 1
                       `).map((row) => ThreadId.make(row.thread_id))[0] ??
-                      threadId,
-                  };
-            const projection = yield* readProjection(threadId, new Set(), {
-              rowLimit: options.rowLimit,
-              userTurnLimit: options.userTurnLimit,
-              ...(historyAnchor?.threadId === threadId
-                ? { anchorItemId: historyAnchor.itemId }
-                : {}),
-              ...(historyAnchor === undefined ? {} : { historyAnchor }),
-            });
-            const rows = yield* sql<{ readonly snapshot_sequence: number | null }>`
+                    threadId,
+                };
+          const projection = yield* readProjection(threadId, new Set(), {
+            rowLimit: options.rowLimit,
+            userTurnLimit: options.userTurnLimit,
+            ...(historyAnchor?.threadId === threadId ? { anchorItemId: historyAnchor.itemId } : {}),
+            ...(historyAnchor === undefined ? {} : { historyAnchor }),
+          });
+          const rows = yield* sql<{ readonly snapshot_sequence: number | null }>`
               SELECT MAX(sequence) AS snapshot_sequence
               FROM orchestration_events
               WHERE application_event_version = 2
                 AND aggregate_kind = 'thread'
                 AND stream_id = ${threadId}
             `;
-            return {
-              schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
-              snapshotSequence: rows[0]?.snapshot_sequence ?? 0,
-              projection,
-            };
-          }),
-        )
-        .pipe(
-          Effect.mapError((cause) =>
-            isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
-              ? cause
-              : new ProjectionStoreReadError({ threadId, cause }),
-          ),
-        );
+          return {
+            schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+            snapshotSequence: rows[0]?.snapshot_sequence ?? 0,
+            projection,
+          };
+        }),
+      ).pipe(
+        Effect.mapError((cause) =>
+          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
+            ? cause
+            : new ProjectionStoreReadError({ threadId, cause }),
+        ),
+      );
 
     const selectShellThreadRows = (
       threadId?: ThreadId,
@@ -5401,166 +5399,161 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       });
 
     const getShellSnapshot: ProjectionStoreV2Shape["getShellSnapshot"] = (options) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const targetThreadRows = yield* selectShellThreadRows(
-              undefined,
-              options?.location,
-              options?.unsettledOnly ?? false,
-            );
-            const targetThreadIds = new Set(
-              targetThreadRows.map((row) => ThreadId.make(row.thread_id)),
-            );
-            const rowsByThreadId = new Map(
-              targetThreadRows.map((row) => [ThreadId.make(row.thread_id), row] as const),
-            );
-            const pendingSourceIds = targetThreadRows.flatMap((row) =>
-              row.forked_from_run_source_thread_id === null
-                ? []
-                : [ThreadId.make(row.forked_from_run_source_thread_id)],
-            );
-            while (pendingSourceIds.length > 0) {
-              const sourceId = pendingSourceIds.pop();
-              if (sourceId === undefined || rowsByThreadId.has(sourceId)) continue;
-              const source = (yield* selectShellThreadRows(sourceId))[0];
-              if (source === undefined) continue;
-              rowsByThreadId.set(sourceId, source);
-              if (source.forked_from_run_source_thread_id !== null) {
-                pendingSourceIds.push(ThreadId.make(source.forked_from_run_source_thread_id));
-              }
+      withReadTransaction(sql)(
+        Effect.gen(function* () {
+          const targetThreadRows = yield* selectShellThreadRows(
+            undefined,
+            options?.location,
+            options?.unsettledOnly ?? false,
+          );
+          const targetThreadIds = new Set(
+            targetThreadRows.map((row) => ThreadId.make(row.thread_id)),
+          );
+          const rowsByThreadId = new Map(
+            targetThreadRows.map((row) => [ThreadId.make(row.thread_id), row] as const),
+          );
+          const pendingSourceIds = targetThreadRows.flatMap((row) =>
+            row.forked_from_run_source_thread_id === null
+              ? []
+              : [ThreadId.make(row.forked_from_run_source_thread_id)],
+          );
+          while (pendingSourceIds.length > 0) {
+            const sourceId = pendingSourceIds.pop();
+            if (sourceId === undefined || rowsByThreadId.has(sourceId)) continue;
+            const source = (yield* selectShellThreadRows(sourceId))[0];
+            if (source === undefined) continue;
+            rowsByThreadId.set(sourceId, source);
+            if (source.forked_from_run_source_thread_id !== null) {
+              pendingSourceIds.push(ThreadId.make(source.forked_from_run_source_thread_id));
             }
-            const threadRows = [...rowsByThreadId.values()];
-            const threadIds = [...rowsByThreadId.keys()];
-            const readForThreadIds = <A>(
-              read: (ids: ReadonlyArray<ThreadId>) => Effect.Effect<ReadonlyArray<A>, unknown>,
-            ) =>
-              threadIds.length === 0 ? Effect.succeed([] as ReadonlyArray<A>) : read(threadIds);
-            const [runRows, itemCountRows, sequenceRows, providerThreadRows, pendingTurnItemRows] =
-              yield* Effect.all([
-                readForThreadIds(selectShellRunRows),
-                readForThreadIds(selectShellRunItemCounts),
-                sql<{ readonly snapshot_sequence: number | null }>`
+          }
+          const threadRows = [...rowsByThreadId.values()];
+          const threadIds = [...rowsByThreadId.keys()];
+          const readForThreadIds = <A>(
+            read: (ids: ReadonlyArray<ThreadId>) => Effect.Effect<ReadonlyArray<A>, unknown>,
+          ) => (threadIds.length === 0 ? Effect.succeed([] as ReadonlyArray<A>) : read(threadIds));
+          const [runRows, itemCountRows, sequenceRows, providerThreadRows, pendingTurnItemRows] =
+            yield* Effect.all([
+              readForThreadIds(selectShellRunRows),
+              readForThreadIds(selectShellRunItemCounts),
+              sql<{ readonly snapshot_sequence: number | null }>`
             SELECT MAX(sequence) AS snapshot_sequence
             FROM orchestration_events
             WHERE application_event_version = 2
               AND aggregate_kind = 'thread'
           `,
-                readForThreadIds(selectShellProviderThreadRows),
-                readForThreadIds(selectShellPendingTurnItemRows),
-              ]);
+              readForThreadIds(selectShellProviderThreadRows),
+              readForThreadIds(selectShellPendingTurnItemRows),
+            ]);
 
-            const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
-              runRows,
-              itemCountRows,
-            });
-            const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
-              yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
-            const states = yield* Effect.forEach(threadRows, (row) =>
-              shellThreadStateFromRow({
-                row,
-                runOrdinalsByThreadId,
-                itemCountsByThreadId,
-                providerThreadsByThreadId,
-                pendingTurnItemsByThreadId,
+          const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
+            runRows,
+            itemCountRows,
+          });
+          const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
+            yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
+          const states = yield* Effect.forEach(threadRows, (row) =>
+            shellThreadStateFromRow({
+              row,
+              runOrdinalsByThreadId,
+              itemCountsByThreadId,
+              providerThreadsByThreadId,
+              pendingTurnItemsByThreadId,
+            }),
+          );
+          const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
+
+          const shells = states
+            .filter((state) => targetThreadIds.has(state.thread.id))
+            .map((state) =>
+              shellFromState({
+                state,
+                visibleItemCount: visibleItemCountForShell({
+                  threadId: state.thread.id,
+                  statesByThreadId,
+                }),
               }),
             );
-            const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
 
-            const shells = states
-              .filter((state) => targetThreadIds.has(state.thread.id))
-              .map((state) =>
-                shellFromState({
-                  state,
-                  visibleItemCount: visibleItemCountForShell({
-                    threadId: state.thread.id,
-                    statesByThreadId,
-                  }),
-                }),
-              );
-
-            return {
-              schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
-              snapshotSequence: sequenceRows[0]?.snapshot_sequence ?? 0,
-              threads: shells.filter((thread) => thread.archivedAt === null),
-              archivedThreads: shells.filter((thread) => thread.archivedAt !== null),
-            };
-          }),
-        )
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProjectionStoreReadError({
-                threadId: ThreadId.make("thread:shell"),
-                cause,
-              }),
-          ),
-        );
+          return {
+            schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+            snapshotSequence: sequenceRows[0]?.snapshot_sequence ?? 0,
+            threads: shells.filter((thread) => thread.archivedAt === null),
+            archivedThreads: shells.filter((thread) => thread.archivedAt !== null),
+          };
+        }),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectionStoreReadError({
+              threadId: ThreadId.make("thread:shell"),
+              cause,
+            }),
+        ),
+      );
 
     // Per-thread shell for the live shell streams: reads only the target thread
     // plus its fork-source chain instead of materializing every thread. Returns
     // null when the thread is deleted or unknown.
     const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const rowsByThreadId = new Map<ThreadId, ShellThreadRow>();
-            const pending: Array<ThreadId> = [threadId];
-            while (pending.length > 0) {
-              const nextId = pending.pop();
-              if (nextId === undefined || rowsByThreadId.has(nextId)) {
-                continue;
-              }
-              const rows = yield* selectShellThreadRows(nextId);
-              const row = rows[0];
-              if (row === undefined) {
-                continue;
-              }
-              rowsByThreadId.set(nextId, row);
-              if (row.forked_from_run_source_thread_id !== null) {
-                pending.push(ThreadId.make(row.forked_from_run_source_thread_id));
-              }
+      withReadTransaction(sql)(
+        Effect.gen(function* () {
+          const rowsByThreadId = new Map<ThreadId, ShellThreadRow>();
+          const pending: Array<ThreadId> = [threadId];
+          while (pending.length > 0) {
+            const nextId = pending.pop();
+            if (nextId === undefined || rowsByThreadId.has(nextId)) {
+              continue;
             }
-            if (!rowsByThreadId.has(threadId)) {
-              return null;
+            const rows = yield* selectShellThreadRows(nextId);
+            const row = rows[0];
+            if (row === undefined) {
+              continue;
             }
+            rowsByThreadId.set(nextId, row);
+            if (row.forked_from_run_source_thread_id !== null) {
+              pending.push(ThreadId.make(row.forked_from_run_source_thread_id));
+            }
+          }
+          if (!rowsByThreadId.has(threadId)) {
+            return null;
+          }
 
-            const threadIds = [...rowsByThreadId.keys()];
-            const [runRows, itemCountRows, providerThreadRows, pendingTurnItemRows] =
-              yield* Effect.all([
-                selectShellRunRows(threadIds),
-                selectShellRunItemCounts(threadIds),
-                selectShellProviderThreadRows(threadIds),
-                selectShellPendingTurnItemRows(threadIds),
-              ]);
-            const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
-              runRows,
-              itemCountRows,
-            });
-            const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
-              yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
+          const threadIds = [...rowsByThreadId.keys()];
+          const [runRows, itemCountRows, providerThreadRows, pendingTurnItemRows] =
+            yield* Effect.all([
+              selectShellRunRows(threadIds),
+              selectShellRunItemCounts(threadIds),
+              selectShellProviderThreadRows(threadIds),
+              selectShellPendingTurnItemRows(threadIds),
+            ]);
+          const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
+            runRows,
+            itemCountRows,
+          });
+          const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
+            yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
 
-            const states = yield* Effect.forEach([...rowsByThreadId.values()], (row) =>
-              shellThreadStateFromRow({
-                row,
-                runOrdinalsByThreadId,
-                itemCountsByThreadId,
-                providerThreadsByThreadId,
-                pendingTurnItemsByThreadId,
-              }),
-            );
-            const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
-            const state = statesByThreadId.get(threadId);
-            if (state === undefined) {
-              return null;
-            }
-            return shellFromState({
-              state,
-              visibleItemCount: visibleItemCountForShell({ threadId, statesByThreadId }),
-            });
-          }),
-        )
-        .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
+          const states = yield* Effect.forEach([...rowsByThreadId.values()], (row) =>
+            shellThreadStateFromRow({
+              row,
+              runOrdinalsByThreadId,
+              itemCountsByThreadId,
+              providerThreadsByThreadId,
+              pendingTurnItemsByThreadId,
+            }),
+          );
+          const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
+          const state = statesByThreadId.get(threadId);
+          if (state === undefined) {
+            return null;
+          }
+          return shellFromState({
+            state,
+            visibleItemCount: visibleItemCountForShell({ threadId, statesByThreadId }),
+          });
+        }),
+      ).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     return {
       apply,
