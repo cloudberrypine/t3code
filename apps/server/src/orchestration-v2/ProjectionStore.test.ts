@@ -927,28 +927,48 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         assert.strictEqual(snapshot.projection.turnItems[0]?.ordinal, 925);
         assert.strictEqual(snapshot.projection.turnItems.at(-1)?.ordinal, 1_000);
       }
-      const retainedRequestPlan = yield* sql<{ readonly detail: string }>`
-        EXPLAIN QUERY PLAN
-        WITH selected AS (
-          SELECT run_id, type
-          FROM orchestration_v2_projection_turn_items
-          WHERE thread_id = ${threadId}
-          ORDER BY ordinal DESC, turn_item_id DESC
-          LIMIT 77
-        )
-        SELECT request.payload_json
-        FROM orchestration_v2_projection_turn_items AS request
-        WHERE request.run_id IN (
-            SELECT run_id FROM selected
-            WHERE type = 'run_interrupt_result' AND run_id IS NOT NULL
+      // The retained-request lookup from readCanonicalProjection, with and
+      // without its thread filter.
+      const retainedRequestPlan = (threadFilter: boolean) =>
+        sql<{ readonly detail: string }>`
+          EXPLAIN QUERY PLAN
+          WITH selected AS (
+            SELECT run_id, type
+            FROM orchestration_v2_projection_turn_items
+            WHERE thread_id = ${threadId}
+            ORDER BY ordinal DESC, turn_item_id DESC
+            LIMIT 77
           )
-          AND request.type = 'run_interrupt_request'
+          SELECT request.payload_json
+          FROM orchestration_v2_projection_turn_items AS request
+          WHERE ${threadFilter ? sql`request.thread_id = ${threadId} AND` : sql``}
+            request.run_id IN (
+              SELECT run_id FROM selected
+              WHERE type = 'run_interrupt_result' AND run_id IS NOT NULL
+            )
+            AND request.type = 'run_interrupt_request'
+        `.pipe(Effect.map((rows) => rows.map((row) => row.detail)));
+      const scansTurnItems = (plan: ReadonlyArray<string>) =>
+        plan.some((detail) => /^SCAN request\b/.test(detail));
+
+      assert.isFalse(scansTurnItems(yield* retainedRequestPlan(true)));
+
+      // Statistics taken while the table was tiny, as on a database analyzed
+      // early in its life. Without the thread filter SQLite then scans every
+      // turn item, which took 10 to 27 s per thread read on a 5.6 GB database.
+      yield* sql`ANALYZE`;
+      yield* sql`DELETE FROM sqlite_stat1 WHERE tbl = 'orchestration_v2_projection_turn_items'`;
+      yield* sql`
+        INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES
+          ('orchestration_v2_projection_turn_items', 'orchestration_v2_projection_turn_items_run_ordinal_idx', '43 43 2'),
+          ('orchestration_v2_projection_turn_items', 'orchestration_v2_projection_turn_items_thread_run_idx', '43 4 4'),
+          ('orchestration_v2_projection_turn_items', 'orchestration_v2_projection_turn_items_thread_ordinal_idx', '43 4 1 1'),
+          ('orchestration_v2_projection_turn_items', 'sqlite_autoindex_orchestration_v2_projection_turn_items_1', '43 1')
       `;
-      assert.isTrue(
-        retainedRequestPlan.some((row) =>
-          row.detail.includes("orchestration_v2_projection_turn_items_run_ordinal_idx"),
-        ),
-      );
+      yield* sql`ANALYZE sqlite_schema`;
+      assert.isTrue(scansTurnItems(yield* retainedRequestPlan(false)));
+      assert.isFalse(scansTurnItems(yield* retainedRequestPlan(true)));
+      yield* sql`ANALYZE`;
 
       const older = yield* projectionStore.getThreadSnapshotWindow(threadId, {
         rowLimit: 76,

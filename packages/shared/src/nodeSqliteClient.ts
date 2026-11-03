@@ -27,6 +27,35 @@ import * as Statement from "effect/unstable/sql/Statement";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
+const BEGIN_IMMEDIATE = "BEGIN IMMEDIATE";
+
+/**
+ * Set by `withReadTransaction`. A transaction that starts with this set begins
+ * deferred, so it never takes the database write lock.
+ */
+export const ReadOnlyTransaction = Context.Reference<boolean>(
+  "@t3tools/shared/nodeSqliteClient/ReadOnlyTransaction",
+  { defaultValue: () => false },
+);
+
+/**
+ * Run `effect` in a transaction that only reads, for a consistent snapshot
+ * across several statements. It opens with a deferred `BEGIN`, so a long read
+ * does not hold the write lock against other processes. Writing inside it can
+ * fail with SQLITE_BUSY_SNAPSHOT, so use `sql.withTransaction` for writes.
+ * Nested inside another transaction it is an ordinary savepoint.
+ */
+export const withReadTransaction =
+  (sql: Client.SqlClient) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | SqlError, R> =>
+    Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) =>
+      current._tag === "Some"
+        ? sql.withTransaction(effect)
+        : sql
+            .withTransaction(Effect.provideService(effect, ReadOnlyTransaction, false))
+            .pipe(Effect.provideService(ReadOnlyTransaction, true)),
+    );
+
 export interface SqliteClientConfig {
   readonly filename: string;
   readonly readonly?: boolean | undefined;
@@ -248,9 +277,15 @@ const make = Effect.fn("makeWithDatabase")(function* (
         );
       },
       executeUnprepared(sql, params, rowTransform) {
-        const effect = prepare(sql).pipe(
-          Effect.flatMap((statement) => runStatement(statement, params ?? [], false)),
-        );
+        // Transaction control runs unprepared. A read-only transaction begins
+        // deferred instead of with the client's BEGIN IMMEDIATE.
+        const effect = Effect.withFiber((fiber) =>
+          prepare(
+            sql === BEGIN_IMMEDIATE && Context.get(fiber.context, ReadOnlyTransaction)
+              ? "BEGIN"
+              : sql,
+          ),
+        ).pipe(Effect.flatMap((statement) => runStatement(statement, params ?? [], false)));
         return rowTransform ? Effect.map(effect, rowTransform) : effect;
       },
       executeStream(_sql, _params) {
@@ -282,7 +317,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
     // the lock up front makes it wait instead, at the cost of serializing
     // read-only transactions behind other processes' writers. Read-only
     // connections cannot write, so they keep the deferred BEGIN.
-    beginTransaction: options.readonly === true ? "BEGIN" : "BEGIN IMMEDIATE",
+    beginTransaction: options.readonly === true ? "BEGIN" : BEGIN_IMMEDIATE,
     spanAttributes: [
       ...(options.spanAttributes ? Object.entries(options.spanAttributes) : []),
       [ATTR_DB_SYSTEM_NAME, "sqlite"],
