@@ -1,5 +1,5 @@
 diff --git a/dist/unstable/ai/McpServer.js b/dist/unstable/ai/McpServer.js
-index e8b9be4..9cffc5c 100644
+index e8b9be465ab495cf8264d5f6b7375b7b8ea63d48..9cffc5cd63265814a8cb53042e916faf52372ac6 100644
 --- a/dist/unstable/ai/McpServer.js
 +++ b/dist/unstable/ai/McpServer.js
 @@ -450,6 +450,26 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
@@ -39,7 +39,7 @@ index e8b9be4..9cffc5c 100644
  };
  const layerMcpProtocolHttp = options => Layer.effect(RpcServer.Protocol)(Effect.gen(function* () {
 diff --git a/dist/unstable/http/HttpClientResponse.js b/dist/unstable/http/HttpClientResponse.js
-index 59a2b12..ef54250 100644
+index 59a2b12243df2304c5893a28f4723c673e96e5c1..ef542500492bb21203f5636fc0fd6215ce81806b 100644
 --- a/dist/unstable/http/HttpClientResponse.js
 +++ b/dist/unstable/http/HttpClientResponse.js
 @@ -180,7 +180,7 @@ class WebHttpClientResponse extends Inspectable.Class {
@@ -52,7 +52,7 @@ index 59a2b12..ef54250 100644
    get remoteAddress() {
      return Option.none();
 diff --git a/dist/unstable/rpc/RpcClient.d.ts b/dist/unstable/rpc/RpcClient.d.ts
-index 1a471aa..7233784 100644
+index 1a471aa9f39ee9d6fbb71915d745be08eba947af..72337840e679cb594e99543536592716ff5bf723 100644
 --- a/dist/unstable/rpc/RpcClient.d.ts
 +++ b/dist/unstable/rpc/RpcClient.d.ts
 @@ -2,6 +2,7 @@ import * as Cause from "../../Cause.ts";
@@ -105,7 +105,7 @@ index 1a471aa..7233784 100644
  /**
   * Represents optional client protocol hooks that run when a transport connects
 diff --git a/dist/unstable/rpc/RpcClient.js b/dist/unstable/rpc/RpcClient.js
-index c586c60..49886d8 100644
+index c586c60856508c8ecc2e0476d56f748420fad53a..ae72d3d65f2e5bfdc1a9f2df5c457cdd0d532ccb 100644
 --- a/dist/unstable/rpc/RpcClient.js
 +++ b/dist/unstable/rpc/RpcClient.js
 @@ -49,6 +49,7 @@ export const makeNoSerialization = /*#__PURE__*/Effect.fnUntraced(function* (gro
@@ -277,9 +277,18 @@ index c586c60..49886d8 100644
            }
            if (Object.hasOwn(response, "requestId")) {
              const requestId = response.requestId;
-@@ -664,12 +694,12 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
+@@ -660,16 +690,21 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
+       }
+       while (true) {
+         const frames = yield* pull;
++        // Any frame shows the server is alive. While these frames are handed
++        // on, a full stream buffer can hold the reader (and the pongs queued
++        // behind it) for as long as the application takes to drain it.
++        pinger.onFramesStart();
+         for (let i = 0; i < frames.length; i++) {
            yield* processData(frames[i]);
          }
++        pinger.onFramesEnd();
        }
 -    }).pipe(Effect.scoped, Effect.raceFirst(Effect.flatMap(pinger.timeout, () => Effect.fail(new Socket.SocketError({
 +    }).pipe(Effect.scoped, Effect.raceFirst(Effect.flatMap(pinger.timeout, () => (Option.isSome(hooks) && hooks.value.onPingTimeout ? hooks.value.onPingTimeout : Effect.void).pipe(Effect.andThen(Effect.fail(new Socket.SocketError({
@@ -292,7 +301,7 @@ index c586c60..49886d8 100644
    }).pipe(Option.isSome(hooks) ? Effect.ensuring(hooks.value.onDisconnect) : identity, Effect.tapCause(cause => {
      const error = Cause.findError(cause);
      const hasError = Result.isSuccess(error);
-@@ -710,20 +740,28 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
+@@ -710,25 +745,49 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
    };
  }));
  const defaultRetryPolicy = /*#__PURE__*/Schedule.min([/*#__PURE__*/Schedule.exponential(500, 1.5), /*#__PURE__*/Schedule.spaced(5000)]);
@@ -300,20 +309,33 @@ index c586c60..49886d8 100644
 +const makePinger = /*#__PURE__*/Effect.fnUntraced(function* (writePing, hooks) {
    let recievedPong = true;
 +  let missedPongs = 0;
++  // True while the reader hands frames on. A reader held by local
++  // backpressure says nothing about the network, so missed pongs are not
++  // counted until it reads again.
++  let processingFrames = false;
    const latch = Latch.makeUnsafe();
    const reset = () => {
      recievedPong = true;
 +    missedPongs = 0;
++    processingFrames = false;
      latch.closeUnsafe();
    };
 -  const onPong = () => {
 +  const onPong = Effect.sync(() => {
-     recievedPong = true;
--  };
++    recievedPong = true;
 +    missedPongs = 0;
 +  }).pipe(Effect.andThen(hooks?.onPong ?? Effect.void));
++  const onFramesStart = () => {
+     recievedPong = true;
++    missedPongs = 0;
++    processingFrames = true;
++  };
++  const onFramesEnd = () => {
++    processingFrames = false;
+   };
    yield* Effect.suspend(() => {
 -    if (!recievedPong) return latch.open;
++    if (processingFrames) return Effect.void;
 +    if (!recievedPong) {
 +      missedPongs += 1;
 +      if (missedPongs >= 3) return latch.open;
@@ -326,7 +348,15 @@ index c586c60..49886d8 100644
    }).pipe(Effect.delay("5 seconds"), Effect.ignore, Effect.forever, Effect.interruptible, Effect.forkScoped);
    return {
      timeout: latch.await,
-@@ -874,6 +912,11 @@ export const makeProtocolWorker = options => Protocol.make(Effect.fnUntraced(fun
+     reset,
+-    onPong
++    onPong,
++    onFramesStart,
++    onFramesEnd
+   };
+ });
+ /**
+@@ -874,6 +933,11 @@ export const makeProtocolWorker = options => Protocol.make(Effect.fnUntraced(fun
   * @since 4.0.0
   */
  export const layerProtocolWorker = /*#__PURE__*/flow(makeProtocolWorker, /*#__PURE__*/Layer.effect(Protocol));
@@ -339,7 +369,7 @@ index c586c60..49886d8 100644
   * Represents optional client protocol hooks that run when a transport connects
   * and disconnects.
 diff --git a/src/unstable/http/HttpClientResponse.ts b/src/unstable/http/HttpClientResponse.ts
-index cbf047f..c7d5cc2 100644
+index cbf047f4c67b40eba3653e8a575212ae7bbe168f..c7d5cc25f6c94d42e89e3b954ec4300d2dc47bcc 100644
 --- a/src/unstable/http/HttpClientResponse.ts
 +++ b/src/unstable/http/HttpClientResponse.ts
 @@ -321,7 +321,7 @@ class WebHttpClientResponse extends Inspectable.Class implements HttpClientRespo

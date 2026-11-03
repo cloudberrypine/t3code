@@ -1156,6 +1156,84 @@ describe("RpcSessionFactory", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("keeps the session while a full stream buffer holds the reader", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      // A slow consumer leaves the reader waiting to hand this chunk on, so
+      // the pong behind it stays unread. That is not a dead connection.
+      const consuming = yield* Deferred.make<void>();
+      const streamFiber = yield* session.client[WS_METHODS.subscribeServerConfig]({}).pipe(
+        Stream.runForEach(() =>
+          Deferred.succeed(consuming, undefined).pipe(Effect.andThen(Effect.never)),
+        ),
+        Effect.forkChild,
+      );
+      const streamRequest = yield* awaitRequest(socket, 1);
+      const snapshot = { version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG };
+      socket.serverMessage(
+        encodeJson({
+          _tag: "Chunk",
+          requestId: streamRequest.id,
+          values: Array.from({ length: 64 }, () => snapshot),
+        }),
+      );
+      yield* Deferred.await(consuming);
+      socket.serverMessage(encodeJson({ _tag: "Pong" }));
+
+      yield* TestClock.adjust("60 seconds");
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+
+      // Once the reader runs again, the queued pong counts and pinging resumes.
+      yield* Fiber.interrupt(streamFiber);
+      yield* TestClock.adjust("15 seconds");
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+
+      // A server that then goes silent is still detected.
+      yield* TestClock.adjust("10 seconds");
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("counts any server frame as a sign of life", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+      const configRequest = yield* awaitRequest(socket);
+
+      // A busy server may answer pings late while it keeps streaming data.
+      for (let tick = 0; tick < 8; tick += 1) {
+        yield* TestClock.adjust("5 seconds");
+        socket.serverMessage(
+          encodeJson({
+            _tag: "Chunk",
+            requestId: configRequest.id,
+            values: [{ version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG }],
+          }),
+        );
+      }
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+
+      yield* TestClock.adjust("20 seconds");
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
   it.effect("reaches ready when a newer server sends unknown config members", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
