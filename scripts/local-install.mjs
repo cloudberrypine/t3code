@@ -3,6 +3,7 @@
 // See docs/local-fork.md. Usage:
 //   node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>)
 //     --version <build version> [--commit <sha prefix>] [--dry-run] [--max-wait-minutes N] [--launchd]
+// --signing-identity overrides the default codesign identity (each Mac has its own).
 // --launchd resubmits this command under launchd so it survives T3 quitting.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -23,7 +24,9 @@ const PREVIOUS_APP = NodeFS.existsSync(INSTALLED_APP)
   : "/Applications/T3 Code (Alpha).app";
 const APP_NAME = "PolyCode.app";
 const BUNDLE_ID = "com.t3tools.t3code";
-const SIGNING_IDENTITY = "9996FD65608B18E540C4FE341030A5E801214B56";
+// Each Mac signs with its own Apple Development identity; pass --signing-identity <sha1>
+// from `security find-identity -v -p codesigning` on Macs other than the default one.
+const DEFAULT_SIGNING_IDENTITY = "9996FD65608B18E540C4FE341030A5E801214B56";
 const BACKUP_ROOT = NodePath.join(HOME, "Library/Application Support/T3 Code Backups");
 const LOG_DIR = NodePath.join(HOME, "Library/Logs/t3-local-install");
 const STATE_DB = NodePath.join(HOME, ".t3/userdata/statev2.sqlite");
@@ -63,11 +66,12 @@ const { values: options } = NodeUtil.parseArgs({
     "dry-run": { type: "boolean", default: false },
     "max-wait-minutes": { type: "string", default: "180" },
     launchd: { type: "boolean", default: false },
+    "signing-identity": { type: "string" },
   },
 });
 if (!options.app === !options.zip || !options.version) {
   console.error(
-    "Usage: node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd]",
+    "Usage: node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd] [--signing-identity <sha1>]",
   );
   process.exit(2);
 }
@@ -76,6 +80,7 @@ const sourcePath = NodePath.resolve(options.app ?? options.zip);
 const expectedVersion = options.version;
 const dryRun = options["dry-run"];
 const maxWaitMinutes = Number(options["max-wait-minutes"]);
+const SIGNING_IDENTITY = options["signing-identity"] ?? DEFAULT_SIGNING_IDENTITY;
 if (!Number.isFinite(maxWaitMinutes) || maxWaitMinutes < 0) {
   console.error("--max-wait-minutes must be a non-negative number");
   process.exit(2);
@@ -140,6 +145,8 @@ if (options.launchd) {
     ...(dryRun ? ["--dry-run"] : []),
     "--max-wait-minutes",
     String(maxWaitMinutes),
+    "--signing-identity",
+    SIGNING_IDENTITY,
   ];
   run("launchctl", [
     "submit",
