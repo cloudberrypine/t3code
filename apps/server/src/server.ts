@@ -6,6 +6,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as CommandWatchService from "./commandWatch/CommandWatchService.ts";
+import * as ThreadPurge from "./persistence/ThreadPurge.ts";
 import * as ToolOutputStore from "./persistence/ToolOutputStore.ts";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -1042,6 +1043,8 @@ const makeServerLayer = Layer.unwrap(
         ),
       ),
       Layer.provide(activationLayer),
+      // Fork: only the server runs a requested settled-thread purge.
+      Layer.provide(Layer.succeed(ThreadPurge.StartupThreadPurge, true)),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ApplicationObservabilityLive),

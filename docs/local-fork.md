@@ -213,6 +213,47 @@ the same items as before.
 - Stored outputs of deleted threads stay in the table. `migrate-dev-db` keeps only the outputs its
   kept rows reference.
 
+## Settled-thread purge
+
+`apps/server/src/persistence/ThreadPurge.ts` deletes settled threads from `statev2.sqlite` and
+gives the space back with a VACUUM. It never runs by itself: the server runs it once at start,
+before anything else uses the database, only when `userdata/thread-purge-request.json` exists.
+CLI processes never run it.
+
+- **Kept:** threads that are not settled (an `"active"` override counts as not settled), pinned,
+  with an active or queued run or unfinished effects, bound to a scheduled task or a command watch,
+  listed in `userdata/thread-purge-keep.json` (`{"keepThreadIds": [...]}`, for the Lead threads;
+  edit it at a Lead handover), or whose existing worktree has uncommitted changes (untracked files
+  included) or commits not on origin/main. A worktree git cannot answer for counts as holding work.
+  Then, until nothing changes: every ancestor of a kept thread (subagent lineage, sidebar nesting,
+  subagent rows, the source a fork reads) and the source of every unfinished transfer into one.
+- **Removed:** every row of a purged thread in every table with a `thread_id` column (found from
+  the schema), its V2 and imported V1 events (the V1 importer would otherwise bring it back), V1
+  command receipts, the provider sessions only it owned or bound, and stored tool outputs nothing
+  references. A transfer stays while either of its threads does. A kept parent's subagent rows can
+  point at purged children; opening such a child says it is gone.
+- **Safety:** each chunk of deletes takes the write lock first and re-checks its threads, so one
+  another process woke since planning stays.
+- **Modes:** the request's `"mode"` is `"dry-run"` (default) or `"purge"`. Both write the plan to
+  `userdata/thread-purge-plan.json` and log its counts first; only purge deletes. Purge needs
+  `"backup"` (where the database was copied) and 2 GB free, and `"approvedPlan"` (a reviewed plan
+  file) limits it to the threads that plan lists, with anything they need kept.
+- **Every request is consumed:** done removes it; one that is older than an hour, malformed, or
+  missing its keep file, backup, plan or disk space becomes `.rejected`; a failure becomes
+  `.failed`. The outcome is in `userdata/thread-purge-last.json`, and the server always starts.
+- **VACUUM:** after a purge, when the disk has three times the kept data plus 1 GB free (an APFS
+  clone backup keeps the old blocks); otherwise it is skipped with a log line.
+- **Planning without a restart:** `node apps/server/scripts/thread-purge-plan.ts [--db <file>]
+[--keep <keep.json>] [--out <plan.json>]` opens the database read-only and writes the same plan.
+- **Requesting:** `scripts/local-install.mjs` takes `--thread-purge dry-run|purge`, with
+  `--db-backup <dir | host:dir>` for purge and optional `--thread-purge-plan <plan.json>`, during an
+  install or with `--restart-only` (wait for idle, quit, back up, request, relaunch, no install).
+  Either refuses a build without the purge. With T3 stopped it backs up the database under a read
+  snapshot taken with an empty WAL (an APFS clone locally, or scp to `host:dir`), checks the copy's
+  SHA-256, and publishes the request by rename. Any failure after the quit relaunches the previous
+  app and leaves no request. A local backup must leave 15 GB free, so a tight Mac backs up to
+  another one.
+
 ## Verification
 
 - Focused behavioral tests, scoped lint, and typechecks for affected packages. No repository-wide

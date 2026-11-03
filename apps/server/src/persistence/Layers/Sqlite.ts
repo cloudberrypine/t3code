@@ -8,6 +8,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
 import { initializeV2Database } from "../initializeV2Database.ts";
+import { startupThreadPurgeLayer } from "../ThreadPurge.ts";
 import { ensureToolOutputSchema } from "../ToolOutputStore.ts";
 import * as ServerConfig from "../../config.ts";
 
@@ -93,6 +94,7 @@ export const layerConfig = Layer.unwrap(
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig.ServerConfig;
     yield* initializeV2Database(dbPath);
-    return makeSqlitePersistenceLive(dbPath);
+    // A requested purge runs before anything else in this process uses the database.
+    return Layer.provideMerge(startupThreadPurgeLayer(dbPath), makeSqlitePersistenceLive(dbPath));
   }),
 );
