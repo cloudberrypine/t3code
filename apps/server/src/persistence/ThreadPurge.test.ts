@@ -28,9 +28,12 @@ import {
   THREAD_PURGE_PLAN_FILE,
   THREAD_PURGE_REQUEST_FILE,
   THREAD_PURGE_RESULT_FILE,
+  StartupThreadPurge,
+  purgeThreads,
   readKeepThreadIds,
   runRequestedThreadPurge,
   selectThreadsToPurge,
+  startupThreadPurgeLayer,
   worktreeHasUnlandedWork,
 } from "./ThreadPurge.ts";
 
@@ -54,6 +57,8 @@ interface ThreadSpec {
   readonly parent?: string;
   readonly sidebarParent?: string;
   readonly worktreePath?: string;
+  readonly settledOverride?: "settled" | "active";
+  readonly forkedFrom?: string;
 }
 
 function makeThread(spec: ThreadSpec, now: DateTime.Utc): OrchestrationV2AppThread {
@@ -79,11 +84,18 @@ function makeThread(spec: ThreadSpec, now: DateTime.Utc): OrchestrationV2AppThre
     ...(spec.sidebarParent === undefined
       ? {}
       : { sidebarParentThreadId: ThreadId.make(spec.sidebarParent) }),
-    forkedFrom: null,
+    forkedFrom:
+      spec.forkedFrom === undefined
+        ? null
+        : {
+            type: "run",
+            threadId: ThreadId.make(spec.forkedFrom),
+            runId: `run:${spec.forkedFrom}`,
+          },
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
-    settledOverride: null,
+    settledOverride: spec.settledOverride ?? null,
     settledAt: spec.settled === false ? null : DateTime.makeUnsafe(SETTLED),
     pinnedAt: spec.pinned === true ? now : null,
     lastVisitedAt: null,
@@ -203,6 +215,10 @@ const rowsOfThreads = (threadIds: ReadonlyArray<string>) =>
 
 const writeJsonFile = (path: string, value: unknown) =>
   NodeFS.writeFileSync(path, JSON.stringify(value));
+const freshRequest = (fields: Record<string, unknown> = {}) => ({
+  requestedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+  ...fields,
+});
 
 function stateDirWith(files: Record<string, unknown>) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "thread-purge-"));
@@ -341,6 +357,49 @@ describe("settled thread purge selection", () => {
     }).pipe(Effect.provide(stores)),
   );
 
+  it.effect("keeps reopened threads, fork sources and pending transfer sources", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      for (const spec of [
+        // Reopened: "active" with a stale settledAt.
+        { id: "reopened", settledOverride: "active" },
+        { id: "source" },
+        { id: "fork", forkedFrom: "source" },
+        { id: "fork-kept", forkedFrom: "source-of-kept-fork", pinned: true },
+        { id: "source-of-kept-fork" },
+        { id: "parent", settled: false },
+        { id: "merging-fork" },
+      ] satisfies ReadonlyArray<ThreadSpec>) {
+        yield* seedThread(spec);
+      }
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_context_transfers
+          (context_transfer_id, source_thread_id, target_thread_id, type, status, updated_at,
+           payload_json)
+        VALUES ('merge', 'merging-fork', 'parent', 'merge_back', 'pending', '2026-11-01', '{}')
+      `;
+      const selection = yield* selectThreadsToPurge(sql, {
+        keepThreadIds: [],
+        worktreeHasWork: noWorktreeWork,
+      });
+      assert.deepStrictEqual(threadIdsIn(selection.purge), ["fork", "source"]);
+      assert.include(selection.keptByReason, {
+        "not-settled": 2,
+        "pending-transfer-source": 1,
+        "kept-descendant": 1,
+      });
+
+      // A plan reviewed before "fork" existed approves only "source": the fork
+      // created since stays, and so does the source it reads.
+      const approved = yield* selectThreadsToPurge(sql, {
+        keepThreadIds: [],
+        worktreeHasWork: noWorktreeWork,
+        approvedThreadIds: new Set(["source"]),
+      });
+      assert.deepStrictEqual(threadIdsIn(approved.purge), []);
+    }).pipe(Effect.provide(stores)),
+  );
+
   it("reads the keep file and command watches", () => {
     const dir = stateDirWith({
       [THREAD_PURGE_KEEP_FILE]: { keepThreadIds: ["lead-1", "lead-2"] },
@@ -353,7 +412,8 @@ describe("settled thread purge selection", () => {
 });
 
 describe("settled thread purge", () => {
-  it.effect("dry run plans without deleting; purge removes every row of purged threads", () =>
+  // Live clock: requests carry wall-clock times.
+  it.live("dry run plans without deleting; purge removes every row of purged threads", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       // "kept" shares its tool output with "gone-shared", so that stored copy stays.
@@ -380,7 +440,7 @@ describe("settled thread purge", () => {
       `;
 
       // Dry run is the default.
-      writeJsonFile(requestPath, { requestedAt: "now" });
+      writeJsonFile(requestPath, freshRequest());
       const before = yield* countRows;
       yield* runRequestedThreadPurge(sql, dbPath, { worktreeHasWork: noWorktreeWork });
       assert.deepStrictEqual(yield* countRows, before);
@@ -388,33 +448,39 @@ describe("settled thread purge", () => {
         "gone",
         "gone-shared",
       ]);
-      assert.include(readState(THREAD_PURGE_RESULT_FILE), { mode: "dry-run", wouldPurge: 2 });
+      assert.include(readState(THREAD_PURGE_RESULT_FILE), { outcome: "dry-run", wouldPurge: 2 });
       assert.isFalse(NodeFS.existsSync(requestPath));
 
-      // A purge needs a named backup.
-      writeJsonFile(requestPath, { mode: "purge" });
+      // A purge needs a named backup; without one the request is set aside.
+      writeJsonFile(requestPath, freshRequest({ mode: "purge" }));
       yield* runRequestedThreadPurge(sql, dbPath, { worktreeHasWork: noWorktreeWork });
       assert.deepStrictEqual(yield* countRows, before);
-      assert.isTrue(NodeFS.existsSync(requestPath));
+      assert.isFalse(NodeFS.existsSync(requestPath));
+      assert.isTrue(NodeFS.existsSync(`${requestPath}.rejected`));
+      assert.include(readState(THREAD_PURGE_RESULT_FILE), { outcome: "rejected" });
 
       // Limited to a reviewed plan that lists only "gone".
       const approvedPlan = NodePath.join(stateDir, "approved.json");
       writeJsonFile(approvedPlan, { purge: [{ threadId: "gone" }] });
-      writeJsonFile(requestPath, { mode: "purge", backup: "test", vacuum: false, approvedPlan });
+      writeJsonFile(
+        requestPath,
+        freshRequest({ mode: "purge", backup: "test", vacuum: false, approvedPlan }),
+      );
       yield* runRequestedThreadPurge(sql, dbPath, { worktreeHasWork: noWorktreeWork });
       assert.deepStrictEqual(yield* rowsOfThreads(["gone"]), []);
       assert.include(readState(THREAD_PURGE_RESULT_FILE), {
-        mode: "purge",
+        outcome: "purge",
         wouldPurge: 1,
         notInApprovedPlan: 1,
       });
 
       // Unrestricted purge of the rest.
-      writeJsonFile(requestPath, { mode: "purge", backup: "test", vacuum: false });
+      writeJsonFile(requestPath, freshRequest({ mode: "purge", backup: "test", vacuum: false }));
       yield* runRequestedThreadPurge(sql, dbPath, { worktreeHasWork: noWorktreeWork });
       assert.deepStrictEqual(yield* rowsOfThreads(["gone", "gone-shared"]), []);
 
-      // The kept thread is whole: its rows, its transfer, and its stored output.
+      // The kept thread is whole: its rows, the transfers it sent and received,
+      // and its stored output.
       assert.includeMembers(yield* rowsOfThreads(["kept"]), [
         "orchestration_events",
         "orchestration_v2_projection_threads",
@@ -424,10 +490,7 @@ describe("settled thread purge", () => {
       const transfers = yield* sql<{ readonly id: string }>`
         SELECT context_transfer_id AS id FROM orchestration_v2_projection_context_transfers
       `;
-      assert.deepStrictEqual(
-        transfers.map((row) => row.id),
-        ["to-kept"],
-      );
+      assert.deepStrictEqual(transfers.map((row) => row.id).toSorted(), ["to-gone", "to-kept"]);
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const item = yield* projectionStore.getTurnItem({
         threadId: ThreadId.make("kept"),
@@ -449,19 +512,101 @@ describe("settled thread purge", () => {
     }).pipe(Effect.provide(stores)),
   );
 
-  it.effect("does nothing without the keep file", () =>
+  // Live clock: requests carry wall-clock times.
+  it.live("sets aside requests it must not run, without failing", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* seedThread({ id: "settled" });
-      const stateDir = stateDirWith({
-        [THREAD_PURGE_REQUEST_FILE]: { mode: "purge", backup: "test" },
-      });
-      yield* runRequestedThreadPurge(sql, NodePath.join(stateDir, "statev2.sqlite"), {
-        worktreeHasWork: noWorktreeWork,
-      });
+      const keep = { [THREAD_PURGE_KEEP_FILE]: { keepThreadIds: [] } };
+      for (const [files, suffix] of [
+        // No keep file.
+        [
+          { [THREAD_PURGE_REQUEST_FILE]: freshRequest({ mode: "purge", backup: "test" }) },
+          "rejected",
+        ],
+        // Stale: written for an earlier restart.
+        [
+          {
+            ...keep,
+            [THREAD_PURGE_REQUEST_FILE]: {
+              requestedAt: "2026-01-01T00:00:00.000Z",
+              mode: "purge",
+              backup: "test",
+            },
+          },
+          "rejected",
+        ],
+        // A reviewed plan that is not there.
+        [
+          {
+            ...keep,
+            [THREAD_PURGE_REQUEST_FILE]: freshRequest({
+              mode: "purge",
+              backup: "test",
+              approvedPlan: "/missing/plan.json",
+            }),
+          },
+          "rejected",
+        ],
+      ] as const) {
+        const stateDir = stateDirWith(files);
+        const requestPath = NodePath.join(stateDir, THREAD_PURGE_REQUEST_FILE);
+        yield* runRequestedThreadPurge(sql, NodePath.join(stateDir, "statev2.sqlite"), {
+          worktreeHasWork: noWorktreeWork,
+        });
+        assert.isFalse(NodeFS.existsSync(requestPath));
+        assert.isTrue(NodeFS.existsSync(`${requestPath}.${suffix}`));
+        NodeFS.rmSync(stateDir, { recursive: true, force: true });
+      }
+      // Malformed JSON is set aside too.
+      const stateDir = stateDirWith(keep);
+      const requestPath = NodePath.join(stateDir, THREAD_PURGE_REQUEST_FILE);
+      NodeFS.writeFileSync(requestPath, "{ not json");
+      yield* runRequestedThreadPurge(sql, NodePath.join(stateDir, "statev2.sqlite"));
+      assert.isTrue(NodeFS.existsSync(`${requestPath}.rejected`));
       assert.includeMembers(yield* rowsOfThreads(["settled"]), ["orchestration_events"]);
-      assert.isTrue(NodeFS.existsSync(NodePath.join(stateDir, THREAD_PURGE_REQUEST_FILE)));
       NodeFS.rmSync(stateDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(stores)),
+  );
+
+  // Live clock: requests carry wall-clock times.
+  it.live("runs only in the server process", () =>
+    Effect.gen(function* () {
+      yield* seedThread({ id: "settled" });
+      const stateDir = stateDirWith({
+        [THREAD_PURGE_KEEP_FILE]: { keepThreadIds: [] },
+        [THREAD_PURGE_REQUEST_FILE]: freshRequest(),
+      });
+      const requestPath = NodePath.join(stateDir, THREAD_PURGE_REQUEST_FILE);
+      const layer = startupThreadPurgeLayer(NodePath.join(stateDir, "statev2.sqlite"));
+      // CLI processes leave the reference at its default.
+      yield* Effect.provide(Effect.void, layer);
+      assert.isTrue(NodeFS.existsSync(requestPath));
+      yield* Effect.provide(
+        Effect.void,
+        layer.pipe(Layer.provide(Layer.succeed(StartupThreadPurge, true))),
+      );
+      assert.isFalse(NodeFS.existsSync(requestPath));
+      assert.isTrue(NodeFS.existsSync(NodePath.join(stateDir, THREAD_PURGE_PLAN_FILE)));
+      NodeFS.rmSync(stateDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(stores)),
+  );
+
+  it.effect("skips a planned thread that another process woke before the purge", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seedThread({ id: "woken" });
+      yield* seedThread({ id: "settled" });
+      // Unsettled after planning, before its chunk runs.
+      yield* sql`
+        UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.settledOverride', 'active')
+        WHERE thread_id = 'woken'
+      `;
+      const result = yield* purgeThreads(sql, ["woken", "settled"]);
+      assert.include(result, { purgedThreads: 1, skippedAsBusy: 1 });
+      assert.includeMembers(yield* rowsOfThreads(["woken"]), ["orchestration_events"]);
+      assert.deepStrictEqual(yield* rowsOfThreads(["settled"]), []);
     }).pipe(Effect.provide(stores)),
   );
 });
