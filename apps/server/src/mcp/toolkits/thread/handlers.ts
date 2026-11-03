@@ -21,6 +21,7 @@ import {
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as SettleAfterRun from "../../../settleAfterRun/SettleAfterRunService.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -288,7 +289,24 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
     })),
   t3_thread_organize: (input) =>
     Effect.gen(function* () {
-      const { threads, projection } = yield* readWritableThread(input.threadId);
+      const { threads, projection, caller } = yield* readWritableThread(input.threadId);
+      // Fork: settle after run.
+      if (input.action === "settle_after_run" || input.action === "cancel_settle_after_run") {
+        const settleAfterRun = yield* SettleAfterRun.SettleAfterRunService;
+        const result =
+          input.action === "settle_after_run"
+            ? settleAfterRun.request({
+                threadId: projection.thread.id,
+                requestedByThreadId: caller.id,
+              })
+            : settleAfterRun.cancel(projection.thread.id);
+        return yield* result.pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
+          ),
+        );
+      }
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       let command: OrchestrationV2Command;
       switch (input.action) {

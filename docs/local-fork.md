@@ -192,6 +192,39 @@ view and Android keep theirs.
   watches (`ThreadCommandWatchesPanel`) with a stop button, through the `commandWatches.subscribe`
   and `commandWatches.stop` RPCs. Mobile shows nothing yet.
 
+## Settle after run
+
+A thread cannot settle itself with `t3_thread_organize` `settle`: its last step runs inside its
+own active run, which settle refuses. `t3_thread_organize({action: "settle_after_run"})` (on the
+calling thread, or with `threadId` on any thread it may manage) records a request instead, and
+the server settles the thread with an ordinary `thread.settle` (watches pause, never archived)
+once the run that was active at the request has completed. The code is
+`apps/server/src/settleAfterRun/`.
+
+- It waits while anything is pending: a queued run, a pending runtime request or question,
+  pending background work (provider tasks, running command, tool or subagent items), a running
+  child thread, an unsettled nested thread, or a command watch. It settles once that clears,
+  checked on the thread's own events, a child's or nested thread's end, watch changes, and every
+  minute.
+- It avoids a thread the user is looking at: a visit from a client in the last two minutes
+  (before or after the request) postpones it, and every settle waits five seconds for that visit
+  to arrive. Clients send visits only as a thread's activity advances, so a user reading an idle
+  thread for longer than that is not seen.
+- The last check and the settle run under the service's lock, so a cancel cannot slip between
+  them. The settle is upstream's `thread.auto-settle` with the thread row read in that check,
+  which refuses under the thread lock if the thread changed since (a pin, snooze or message), and
+  the next recheck decides again. A thread the user once unsettled (override `active`) takes a
+  plain `thread.settle`.
+- It is cancelled by a new message (user or agent) or turn after the request, by the run ending
+  any way other than completed (interrupted, failed, cancelled), by the user pinning, snoozing or
+  unsettling the thread, by archive or delete, and by `cancel_settle_after_run`.
+- Requests live in `userdata/settle-after-run.json`, for the reason command watches do, and
+  survive a restart: each is checked again when the server is active. A request that cannot be
+  saved is refused. A cancel that cannot be saved reports the failure, stays cancelled in memory,
+  and the file is saved again on the next recheck.
+- The tool answers `{settleAfterRun: "pending", waitingFor}`, `"settled"` (already settled),
+  `"cancelled"` or `"none"` (nothing to cancel).
+
 ## Tool output store
 
 Command and dynamic tool output over 4,096 characters is stored once, as JSON keyed by its

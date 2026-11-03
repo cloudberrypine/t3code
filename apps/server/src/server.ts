@@ -6,6 +6,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as CommandWatchService from "./commandWatch/CommandWatchService.ts";
+import * as SettleAfterRunService from "./settleAfterRun/SettleAfterRunService.ts";
 import * as ThreadPurge from "./persistence/ThreadPurge.ts";
 import * as ToolOutputStore from "./persistence/ToolOutputStore.ts";
 
@@ -539,6 +540,13 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* CommandWatchService.CommandWatchService;
+      yield* ServerActivation.forkParked(service.start());
+    }),
+  ),
+  // Fork: settles threads whose settle-after-run request is due, once the server is active.
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* SettleAfterRunService.SettleAfterRunService;
       yield* ServerActivation.forkParked(service.start());
     }),
   ),

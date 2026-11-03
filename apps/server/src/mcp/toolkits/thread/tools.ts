@@ -26,10 +26,11 @@ import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as SettleAfterRun from "../../../settleAfterRun/SettleAfterRunService.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread in the calling project, or nest it under another thread in the sidebar. Omit threadId for this thread. snooze requires snoozedUntil; nest requires parentThreadId, a thread in the same project, and shows the thread indented under it (display only, up to eight parent links; cycles and moves exceeding the limit are refused); unnest moves it back to the top level. Existing thread lifecycle rules apply; this does not schedule a future action.",
+    "Pin, snooze, settle, archive, or mark a thread unread in the calling project, or nest it under another thread in the sidebar. Omit threadId for this thread. snooze requires snoozedUntil; nest requires parentThreadId, a thread in the same project, and shows the thread indented under it (display only, up to eight parent links; cycles and moves exceeding the limit are refused); unnest moves it back to the top level. settle_after_run settles the thread once its current run completes and nothing is pending (queued messages, questions, background work, running child or unsettled nested threads, command watches); it works on this thread, so it can be your last step. A new message or turn, an unfinished run, or the user pinning, snoozing or unsettling cancels it, as does cancel_settle_after_run. Otherwise existing thread lifecycle rules apply.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([
@@ -44,17 +45,24 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
       "mark_unread",
       "nest",
       "unnest",
+      // Fork: settle after run.
+      "settle_after_run",
+      "cancel_settle_after_run",
     ]),
     snoozedUntil: Schema.optional(IsoDateTime),
     parentThreadId: Schema.optional(ThreadId),
   }),
-  success: OrchestrationV2DispatchCommandResult,
+  success: Schema.Union([
+    OrchestrationV2DispatchCommandResult,
+    SettleAfterRun.SettleAfterRunResult,
+  ]),
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     Crypto.Crypto,
+    SettleAfterRun.SettleAfterRunService,
   ],
 })
   .annotate(Tool.Title, "Organize a thread")

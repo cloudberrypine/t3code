@@ -52,6 +52,7 @@ import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
 import { layer as commandWatchServiceLayer } from "../commandWatch/CommandWatchService.ts";
+import { layer as settleAfterRunServiceLayer } from "../settleAfterRun/SettleAfterRunService.ts";
 
 /** The shared application event log and its command receipts. */
 export const OrchestrationEventInfrastructureLayerLive = Layer.mergeAll(
@@ -220,6 +221,9 @@ const orchestratorProvided = orchestratorLayer.pipe(
   ),
 );
 
+// Fork: one command watch service, shared by settle after run.
+const commandWatchProvided = commandWatchServiceLayer.pipe(Layer.provide(orchestratorProvided));
+
 const agentSessionImporterProvided = agentSessionImporterLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -315,8 +319,11 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLaunchProvided,
   threadLifecycleProvided,
   scheduledTaskProvided,
-  // Fork: command watches.
-  commandWatchServiceLayer.pipe(Layer.provide(orchestratorProvided)),
+  // Fork: command watches, and settle after run, which waits for a thread's watches.
+  commandWatchProvided,
+  settleAfterRunServiceLayer.pipe(
+    Layer.provide(Layer.mergeAll(orchestratorProvided, projectionStoreLayer, commandWatchProvided)),
+  ),
   UsageLimitRecoveryWorker.workerLive.pipe(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
   ),
