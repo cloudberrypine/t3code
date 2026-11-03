@@ -293,16 +293,19 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
       // Fork: settle after run.
       if (input.action === "settle_after_run" || input.action === "cancel_settle_after_run") {
         const settleAfterRun = yield* SettleAfterRun.SettleAfterRunService;
-        return yield* input.action === "settle_after_run"
-          ? settleAfterRun
-              .request({ threadId: projection.thread.id, requestedByThreadId: caller.id })
-              .pipe(
-                Effect.mapError(
-                  (error) =>
-                    new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
-                ),
-              )
-          : settleAfterRun.cancel(projection.thread.id);
+        const result =
+          input.action === "settle_after_run"
+            ? settleAfterRun.request({
+                threadId: projection.thread.id,
+                requestedByThreadId: caller.id,
+              })
+            : settleAfterRun.cancel(projection.thread.id);
+        return yield* result.pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
+          ),
+        );
       }
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       let command: OrchestrationV2Command;

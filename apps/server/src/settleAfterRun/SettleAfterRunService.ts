@@ -96,6 +96,12 @@ export interface SettleAfterRunThread {
   }>;
   readonly pendingRuntimeRequests: number;
   readonly pendingBackgroundTasks: number;
+  /**
+   * The thread's updatedAt when it has no settle override, for upstream's `thread.auto-settle`,
+   * which refuses if the thread changed since (a pin, snooze or message under the thread lock).
+   * Null for a thread the user once unsettled, which takes a plain settle.
+   */
+  readonly settleSnapshotAt: DateTime.Utc | null;
 }
 
 /** Other threads and watches that keep it open. Read only when nothing on the thread does. */
@@ -189,7 +195,10 @@ export interface SettleAfterRunDependencies {
   readonly events: Stream.Stream<OrchestrationV2DomainEvent, SettleAfterRunError>;
   /** Emits whenever command watches change. */
   readonly watchChanges: Stream.Stream<void, SettleAfterRunError>;
-  readonly settle: (threadId: ThreadId) => Effect.Effect<void, SettleAfterRunError>;
+  readonly settle: (
+    threadId: ThreadId,
+    snapshotAt: DateTime.Utc | null,
+  ) => Effect.Effect<void, SettleAfterRunError>;
   /** Waits between deciding to settle and checking once more. */
   readonly settleDelay: Effect.Effect<void>;
 }
@@ -202,7 +211,9 @@ export class SettleAfterRunService extends Context.Service<
       readonly threadId: ThreadId;
       readonly requestedByThreadId: ThreadId | null;
     }) => Effect.Effect<SettleAfterRunResult, SettleAfterRunError>;
-    readonly cancel: (threadId: ThreadId) => Effect.Effect<SettleAfterRunResult>;
+    readonly cancel: (
+      threadId: ThreadId,
+    ) => Effect.Effect<SettleAfterRunResult, SettleAfterRunError>;
     readonly list: () => Effect.Effect<ReadonlyArray<SettleAfterRunRequest>>;
     /** Decides one thread now and acts on it: drops, keeps, or settles. */
     readonly evaluate: (threadId: ThreadId) => Effect.Effect<SettleAfterRunDecision>;
@@ -263,6 +274,8 @@ function canChangeOwnThread(event: OrchestrationV2DomainEvent): boolean {
   }
 }
 
+const failed = (message: string) => (cause: unknown) => new SettleAfterRunError({ message, cause });
+
 export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
   deps: SettleAfterRunDependencies,
 ) {
@@ -271,10 +284,12 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
   const lock = yield* Semaphore.make(1);
   const fibers = yield* FiberSet.make();
   const requests = new Map<ThreadId, SettleAfterRunRequest>();
-  /** Server time of each requesting thread's latest user visit. */
+  /** Server time of each thread's latest user visit, kept across requests. */
   const lastViewedAt = new Map<ThreadId, number>();
   const inFlight = new Set<ThreadId>();
   const dirty = new Set<ThreadId>();
+  /** The file is behind the requests after a failed save; the next save or recheck retries. */
+  let fileStale = false;
 
   const locked = <A, E, R>(body: Effect.Effect<A, E, R>) =>
     Semaphore.withPermits(lock, 1)(Effect.uninterruptible(body));
@@ -285,8 +300,21 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
     ),
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(Path.Path, path),
-    Effect.catchCause(logFailure("settle-after-run requests could not be saved", {})),
+    Effect.tap(() =>
+      Effect.sync(() => {
+        fileStale = false;
+      }),
+    ),
+    Effect.tapCause((cause) =>
+      Effect.sync(() => {
+        fileStale = true;
+      }).pipe(
+        Effect.andThen(logFailure("settle-after-run requests could not be saved", {})(cause)),
+      ),
+    ),
+    Effect.mapError(failed("The settle-after-run request could not be saved.")),
   );
+  const persistOrLog = persist.pipe(Effect.ignore);
 
   const restored = yield* fs.readFileString(deps.statePath).pipe(
     Effect.flatMap(decodeStateFile),
@@ -305,50 +333,53 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
   );
   for (const request of restored) requests.set(request.threadId, request);
 
-  /** Removes a request, unless it was replaced by a newer one meanwhile. */
-  const drop = (request: SettleAfterRunRequest, reason: string) =>
-    locked(
-      Effect.gen(function* () {
-        if (requests.get(request.threadId) !== request) return;
-        requests.delete(request.threadId);
-        lastViewedAt.delete(request.threadId);
-        yield* persist;
-        yield* Effect.logDebug("settle-after-run request ended", {
-          threadId: request.threadId,
-          reason,
-        });
-      }),
-    );
+  /** Removes a request under the lock, unless it was replaced by a newer one meanwhile. */
+  const remove = (request: SettleAfterRunRequest, reason: string) =>
+    Effect.gen(function* () {
+      if (requests.get(request.threadId) !== request) return;
+      requests.delete(request.threadId);
+      yield* persistOrLog;
+      yield* Effect.logDebug("settle-after-run request ended", {
+        threadId: request.threadId,
+        reason,
+      });
+    });
+  const drop = (request: SettleAfterRunRequest, reason: string) => locked(remove(request, reason));
 
   const decide = Effect.fn("SettleAfterRunService.decide")(function* (
     request: SettleAfterRunRequest,
   ) {
     const thread = yield* deps.readThread(request.threadId);
     const own = decideForThread(request, thread);
-    if (own.type !== "ready") return own;
+    if (own.type !== "ready" || thread === null) return { decision: own, thread };
     const relations = decideForRelations(yield* deps.readRelations(request.threadId));
-    if (relations.type !== "ready") return relations;
+    if (relations.type !== "ready") return { decision: relations, thread };
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-    return decideForViewer(lastViewedAt.get(request.threadId), nowMs);
+    return { decision: decideForViewer(lastViewedAt.get(request.threadId), nowMs), thread };
   });
 
   const evaluate = Effect.fn("SettleAfterRunService.evaluate")(
     function* (threadId: ThreadId) {
       const request = requests.get(threadId);
       if (request === undefined) return { type: "drop", reason: "no request" } as const;
-      const first = yield* decide(request);
+      const first = (yield* decide(request)).decision;
       if (first.type === "drop") yield* drop(request, first.reason);
       if (first.type !== "ready") return first;
       yield* deps.settleDelay;
-      if (requests.get(threadId) !== request) {
-        return { type: "drop", reason: "the request changed" } as const;
-      }
-      const second = yield* decide(request);
-      if (second.type === "drop") yield* drop(request, second.reason);
-      if (second.type !== "ready") return second;
-      yield* deps.settle(threadId);
-      yield* drop(request, "settled");
-      return second;
+      // The last check and the settle hold the lock, so a cancel cannot pass between them.
+      return yield* locked(
+        Effect.gen(function* () {
+          if (requests.get(threadId) !== request) {
+            return { type: "drop", reason: "the request changed" } as const;
+          }
+          const { decision, thread } = yield* decide(request);
+          if (decision.type === "drop") yield* remove(request, decision.reason);
+          if (decision.type !== "ready" || thread === null) return decision;
+          yield* deps.settle(threadId, thread.settleSnapshotAt);
+          yield* remove(request, "settled");
+          return decision;
+        }),
+      );
     },
     (effect, threadId) =>
       effect.pipe(
@@ -385,21 +416,32 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
     Effect.forEach([...requests.keys()], schedule, { discard: true }),
   );
 
+  const recheck = Effect.gen(function* () {
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    for (const [threadId, viewedAtMs] of lastViewedAt) {
+      if (nowMs - viewedAtMs >= SETTLE_AFTER_RUN_VIEW_GRACE_MS) lastViewedAt.delete(threadId);
+    }
+    if (fileStale) yield* locked(persistOrLog);
+    yield* scheduleAll;
+  });
+
   const onEvent = (event: OrchestrationV2DomainEvent) =>
     Effect.gen(function* () {
+      // Visits are kept for every thread, so a request made while the user reads it waits.
+      if (event.type === "thread.visited") {
+        lastViewedAt.set(event.threadId, DateTime.toEpochMillis(event.occurredAt));
+        return;
+      }
       const request = requests.get(event.threadId);
       if (request !== undefined) {
-        if (event.type === "thread.visited") {
-          lastViewedAt.set(event.threadId, DateTime.toEpochMillis(event.occurredAt));
-        } else if (
+        if (
           CANCELLING_EVENTS.has(event.type) &&
           DateTime.toEpochMillis(event.occurredAt) > Date.parse(request.requestedAt)
         ) {
           yield* drop(request, event.type);
           return;
-        } else if (canChangeOwnThread(event)) {
-          yield* schedule(event.threadId);
         }
+        if (canChangeOwnThread(event)) yield* schedule(event.threadId);
       }
       if (requests.size > 0 && canFreeOtherThread(event)) {
         for (const threadId of requests.keys()) {
@@ -423,11 +465,19 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
       runId: thread.activeRunId,
       requestedByThreadId: input.requestedByThreadId,
     };
+    // A request that could not be saved would not survive a restart: refuse it.
     yield* locked(
       Effect.gen(function* () {
+        const previous = requests.get(input.threadId);
         requests.set(input.threadId, stored);
-        lastViewedAt.delete(input.threadId);
-        yield* persist;
+        yield* persist.pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              if (previous === undefined) requests.delete(input.threadId);
+              else requests.set(input.threadId, previous);
+            }),
+          ),
+        );
       }),
     );
     const own = decideForThread(stored, thread);
@@ -438,14 +488,19 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
     } as const;
   });
 
+  // A cancel whose save fails stays cancelled here, and the file is saved again on the next
+  // recheck, so the request cannot settle the thread after a restart once that save lands.
   const cancel: SettleAfterRunService["Service"]["cancel"] = (threadId) =>
-    Effect.suspend((): Effect.Effect<SettleAfterRunResult> => {
-      const existing = requests.get(threadId);
-      if (existing === undefined) return Effect.succeed({ settleAfterRun: "none" });
-      return drop(existing, "cancelled").pipe(Effect.as({ settleAfterRun: "cancelled" as const }));
-    });
+    locked(
+      Effect.gen(function* () {
+        const existing = requests.get(threadId);
+        if (existing === undefined) return { settleAfterRun: "none" } as const;
+        requests.delete(threadId);
+        yield* persist;
+        return { settleAfterRun: "cancelled" } as const;
+      }),
+    );
 
-  // Under the lock, so a request that is gone from the list is gone from the file too.
   const list: SettleAfterRunService["Service"]["list"] = () =>
     locked(Effect.sync(() => [...requests.values()]));
 
@@ -462,7 +517,7 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
         Effect.forkScoped,
       );
       // Restored requests are checked at once; the recheck covers a viewer's grace ending.
-      yield* scheduleAll.pipe(
+      yield* recheck.pipe(
         Effect.repeat(Schedule.spaced(RECHECK_INTERVAL)),
         Effect.asVoid,
         Effect.forkScoped,
@@ -477,8 +532,6 @@ export const makeWith = Effect.fn("SettleAfterRunService.makeWith")(function* (
     start,
   });
 });
-
-const failed = (message: string) => (cause: unknown) => new SettleAfterRunError({ message, cause });
 
 const CHILD_ACTIVE_SUBAGENT_STATUSES = new Set(["pending", "running", "waiting"]);
 
@@ -496,6 +549,7 @@ export const make = Effect.gen(function* () {
         const shell = yield* engine.getThreadShell(threadId);
         if (shell === null || shell.deletedAt !== null) return null;
         const records = yield* engine.getThreadRecords(threadId, ["runs", "runtimeRequests"]);
+        // records.thread is the thread row thread.auto-settle compares its snapshot with.
         return {
           archived: shell.archivedAt !== null,
           settled: shell.settledOverride === "settled",
@@ -517,6 +571,7 @@ export const make = Effect.gen(function* () {
             (request) => request.status === "pending",
           ).length,
           pendingBackgroundTasks: shell.pendingBackgroundTasks?.length ?? 0,
+          settleSnapshotAt: shell.settledOverride === null ? records.thread.updatedAt : null,
         } satisfies SettleAfterRunThread;
       }).pipe(Effect.mapError(failed("Could not read the thread."))),
     readRelations: (threadId) =>
@@ -543,21 +598,28 @@ export const make = Effect.gen(function* () {
         const nested = yield* projections.getSidebarChildThreads(threadId);
         return {
           runningChildThreads,
-          unsettledNestedThreads: nested.filter((child) => child.settledOverride !== "settled")
-            .length,
+          unsettledNestedThreads: nested.filter(
+            (child) =>
+              child.archivedAt === null &&
+              child.deletedAt === null &&
+              child.settledOverride !== "settled",
+          ).length,
           commandWatches: (yield* watches.list(threadId)).length,
         } satisfies SettleAfterRunRelations;
       }).pipe(Effect.mapError(failed("Could not read the thread's children."))),
     events: engine.streamDomainEvents.pipe(Stream.mapError(failed("Thread events stopped."))),
     watchChanges: watches.subscribe().pipe(Stream.map(() => undefined)),
-    settle: (threadId) =>
+    settle: (threadId, snapshotAt) =>
       Effect.gen(function* () {
         const uuid = yield* crypto.randomUUIDv4;
-        yield* engine.dispatch({
-          type: "thread.settle",
-          commandId: CommandId.make(`server:settle-after-run:${threadId}:${uuid}`),
-          threadId,
-        });
+        const commandId = CommandId.make(`server:settle-after-run:${threadId}:${uuid}`);
+        // Both end in thread.settle. Auto-settle first refuses, under the thread lock, if the
+        // thread changed since it was read, so a pin or message just before cannot be lost.
+        yield* engine.dispatch(
+          snapshotAt === null
+            ? { type: "thread.settle", commandId, threadId }
+            : { type: "thread.auto-settle", commandId, threadId, snapshotAt },
+        );
       }).pipe(Effect.mapError(failed("Could not settle the thread."))),
     settleDelay: Effect.sleep(SETTLE_AFTER_RUN_DELAY_MS),
   });

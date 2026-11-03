@@ -40,6 +40,7 @@ const idleThread: SettleAfterRunThread = {
   runs: [{ id: runA, status: "completed", startedAt: before }],
   pendingRuntimeRequests: 0,
   pendingBackgroundTasks: 0,
+  settleSnapshotAt: before,
 };
 const runningThread: SettleAfterRunThread = {
   ...idleThread,
@@ -170,6 +171,8 @@ describe("decideForRelations and decideForViewer", () => {
 /** The service with fake threads and events; the state file lives in a temp dir. */
 const harness = Effect.fn("settleAfterRunHarness")(function* (options?: {
   readonly statePath?: string;
+  /** Replaces the wait between deciding to settle and the last check. */
+  readonly settleDelay?: Effect.Effect<void>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -185,19 +188,21 @@ const harness = Effect.fn("settleAfterRunHarness")(function* (options?: {
   const events = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
   const watchChanges = yield* PubSub.unbounded<void>();
   const settles = yield* Queue.unbounded<ThreadId>();
+  const snapshots: Array<DateTime.Utc | null> = [];
   const service = yield* makeWith({
     statePath,
     readThread: (threadId) => Effect.sync(() => threads.get(threadId) ?? null),
     readRelations: (threadId) => Effect.sync(() => relations.get(threadId) ?? noRelations),
     events: Stream.fromPubSub(events),
     watchChanges: Stream.fromPubSub(watchChanges),
-    settle: (threadId) =>
+    settle: (threadId, snapshotAt) =>
       Effect.gen(function* () {
+        snapshots.push(snapshotAt);
         const thread = threads.get(threadId)!;
         threads.set(threadId, { ...thread, settled: true });
         yield* Queue.offer(settles, threadId);
       }),
-    settleDelay: Effect.void,
+    settleDelay: options?.settleDelay ?? Effect.void,
   });
   const event = (type: string, threadId: ThreadId, payload: unknown = {}) =>
     PubSub.publish(events, {
@@ -217,6 +222,7 @@ const harness = Effect.fn("settleAfterRunHarness")(function* (options?: {
     threads,
     relations,
     settles,
+    snapshots,
     event,
     finishRun,
     watchChanged: PubSub.publish(watchChanges, undefined),
@@ -237,6 +243,8 @@ it.layer(NodeServices.layer)("SettleAfterRunService", (it) => {
       );
       yield* h.finishRun(threadA);
       assert.equal(yield* Queue.take(h.settles), threadA);
+      // Settled through auto-settle's snapshot check.
+      assert.deepEqual(h.snapshots, [before]);
       // The request ends with the settle.
       yield* h.service
         .list()
@@ -350,6 +358,58 @@ it.layer(NodeServices.layer)("SettleAfterRunService", (it) => {
       });
       yield* TestClock.adjust(SETTLE_AFTER_RUN_VIEW_GRACE_MS + 60_000);
       assert.equal(yield* Queue.take(h.settles), threadA);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a cancel during the last wait wins over the settle", () =>
+    Effect.gen(function* () {
+      const delays = yield* Queue.unbounded<void>();
+      const reached = yield* Queue.unbounded<void>();
+      const h = yield* harness({
+        settleDelay: Queue.offer(reached, undefined).pipe(Effect.andThen(Queue.take(delays))),
+      });
+      yield* h.service.start();
+      yield* h.service.request({ threadId: threadA, requestedByThreadId: threadA });
+      yield* h.finishRun(threadA);
+      yield* Queue.take(reached);
+      assert.deepEqual(yield* h.service.cancel(threadA), { settleAfterRun: "cancelled" });
+      yield* Queue.offer(delays, undefined);
+      yield* Effect.yieldNow;
+      yield* h.service.list();
+      assert.equal(yield* Queue.size(h.settles), 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a visit just before the request still counts", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.service.start();
+      // Lets the event stream subscribe before publishing.
+      yield* Effect.yieldNow;
+      yield* h.event("thread.visited", threadA);
+      yield* Effect.yieldNow;
+      h.threads.set(threadA, idleThread);
+      yield* h.service.request({ threadId: threadA, requestedByThreadId: threadB });
+      assert.deepEqual(yield* h.service.evaluate(threadA), {
+        type: "wait",
+        reason: "the user viewing the thread",
+      });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses a request it cannot save", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-settle-unsaved-" });
+      const blocker = path.join(dir, "not-a-directory");
+      yield* fs.writeFileString(blocker, "");
+      const h = yield* harness({ statePath: path.join(blocker, "settle.json") });
+      const result = yield* h.service
+        .request({ threadId: threadA, requestedByThreadId: threadA })
+        .pipe(Effect.flip);
+      assert.equal(result._tag, "SettleAfterRunError");
+      assert.deepEqual(yield* h.service.list(), []);
     }).pipe(Effect.scoped),
   );
 
