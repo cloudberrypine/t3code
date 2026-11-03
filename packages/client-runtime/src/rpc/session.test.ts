@@ -1188,7 +1188,8 @@ describe("RpcSessionFactory", () => {
       yield* Deferred.await(consuming);
       socket.serverMessage(encodeJson({ _tag: "Pong" }));
 
-      yield* TestClock.adjust("60 seconds");
+      // The old limit closed the session after about 15 s.
+      yield* TestClock.adjust("50 seconds");
       expect(closedFiber.pollUnsafe()).toBeUndefined();
 
       // Once the reader runs again, the queued pong counts and pinging resumes.
@@ -1202,6 +1203,53 @@ describe("RpcSessionFactory", () => {
       expect(error).toBeInstanceOf(ConnectionTransientError);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
+
+  for (const closeSocket of [false, true]) {
+    it.effect(
+      closeSocket
+        ? "detects a socket that closes while a full stream buffer holds the reader"
+        : "reconnects when a stream consumer holds the reader for over a minute",
+      () =>
+        Effect.gen(function* () {
+          const { factory, sockets } = yield* makeFactory();
+          const session = yield* factory.connect(PREPARED);
+          const readyFiber = yield* Effect.forkChild(session.ready);
+          const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+          const socket = yield* awaitSocket(sockets);
+          socket.open();
+          yield* completeInitialConfig(socket);
+          yield* Fiber.join(readyFiber);
+
+          const consuming = yield* Deferred.make<void>();
+          yield* session.client[WS_METHODS.subscribeServerConfig]({}).pipe(
+            Stream.runForEach(() =>
+              Deferred.succeed(consuming, undefined).pipe(Effect.andThen(Effect.never)),
+            ),
+            Effect.forkChild,
+          );
+          const streamRequest = yield* awaitRequest(socket, 1);
+          const snapshot = { version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG };
+          socket.serverMessage(
+            encodeJson({
+              _tag: "Chunk",
+              requestId: streamRequest.id,
+              values: Array.from({ length: 64 }, () => snapshot),
+            }),
+          );
+          yield* Deferred.await(consuming);
+
+          // A close is only seen by the next pull, and a consumer that never
+          // drains is a local deadlock. Either way the held reader never pulls
+          // again, so the longer ping allowance has to end the session.
+          if (closeSocket) socket.close(1006);
+          yield* TestClock.adjust("50 seconds");
+          expect(closedFiber.pollUnsafe()).toBeUndefined();
+          yield* TestClock.adjust("20 seconds");
+          const error = yield* Fiber.join(closedFiber);
+          expect(error).toBeInstanceOf(ConnectionTransientError);
+        }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    );
+  }
 
   it.effect("counts any server frame as a sign of life", () =>
     Effect.gen(function* () {
@@ -1228,7 +1276,10 @@ describe("RpcSessionFactory", () => {
       }
       expect(closedFiber.pollUnsafe()).toBeUndefined();
 
-      yield* TestClock.adjust("20 seconds");
+      // Silence after the last frame is still detected after three windows.
+      yield* TestClock.adjust("15 seconds");
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("10 seconds");
       const error = yield* Fiber.join(closedFiber);
       expect(error).toBeInstanceOf(ConnectionTransientError);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),

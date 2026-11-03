@@ -105,7 +105,7 @@ index 1a471aa9f39ee9d6fbb71915d745be08eba947af..72337840e679cb594e99543536592716
  /**
   * Represents optional client protocol hooks that run when a transport connects
 diff --git a/dist/unstable/rpc/RpcClient.js b/dist/unstable/rpc/RpcClient.js
-index c586c60856508c8ecc2e0476d56f748420fad53a..ae72d3d65f2e5bfdc1a9f2df5c457cdd0d532ccb 100644
+index c586c60856508c8ecc2e0476d56f748420fad53a..44ec42c219043354a24a9647b6e5dd6b5e3a4dd1 100644
 --- a/dist/unstable/rpc/RpcClient.js
 +++ b/dist/unstable/rpc/RpcClient.js
 @@ -49,6 +49,7 @@ export const makeNoSerialization = /*#__PURE__*/Effect.fnUntraced(function* (gro
@@ -301,7 +301,7 @@ index c586c60856508c8ecc2e0476d56f748420fad53a..ae72d3d65f2e5bfdc1a9f2df5c457cdd
    }).pipe(Option.isSome(hooks) ? Effect.ensuring(hooks.value.onDisconnect) : identity, Effect.tapCause(cause => {
      const error = Cause.findError(cause);
      const hasError = Result.isSuccess(error);
-@@ -710,25 +745,49 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
+@@ -710,25 +745,51 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
    };
  }));
  const defaultRetryPolicy = /*#__PURE__*/Schedule.min([/*#__PURE__*/Schedule.exponential(500, 1.5), /*#__PURE__*/Schedule.spaced(5000)]);
@@ -310,8 +310,9 @@ index c586c60856508c8ecc2e0476d56f748420fad53a..ae72d3d65f2e5bfdc1a9f2df5c457cdd
    let recievedPong = true;
 +  let missedPongs = 0;
 +  // True while the reader hands frames on. A reader held by local
-+  // backpressure says nothing about the network, so missed pongs are not
-+  // counted until it reads again.
++  // backpressure cannot read the pongs queued behind it, so it gets a longer
++  // allowance. The allowance stays bounded because a socket that closes
++  // meanwhile is only seen by the next pull.
 +  let processingFrames = false;
    const latch = Latch.makeUnsafe();
    const reset = () => {
@@ -332,13 +333,14 @@ index c586c60856508c8ecc2e0476d56f748420fad53a..ae72d3d65f2e5bfdc1a9f2df5c457cdd
 +  };
 +  const onFramesEnd = () => {
 +    processingFrames = false;
++    // Pongs that arrived while the reader was held are read next, not missed.
++    missedPongs = 0;
    };
    yield* Effect.suspend(() => {
 -    if (!recievedPong) return latch.open;
-+    if (processingFrames) return Effect.void;
 +    if (!recievedPong) {
 +      missedPongs += 1;
-+      if (missedPongs >= 3) return latch.open;
++      if (missedPongs >= (processingFrames ? 12 : 3)) return latch.open;
 +      return (hooks?.onPing ?? Effect.void).pipe(Effect.andThen(writePing));
 +    }
      recievedPong = false;
@@ -356,7 +358,7 @@ index c586c60856508c8ecc2e0476d56f748420fad53a..ae72d3d65f2e5bfdc1a9f2df5c457cdd
    };
  });
  /**
-@@ -874,6 +933,11 @@ export const makeProtocolWorker = options => Protocol.make(Effect.fnUntraced(fun
+@@ -874,6 +935,11 @@ export const makeProtocolWorker = options => Protocol.make(Effect.fnUntraced(fun
   * @since 4.0.0
   */
  export const layerProtocolWorker = /*#__PURE__*/flow(makeProtocolWorker, /*#__PURE__*/Layer.effect(Protocol));
