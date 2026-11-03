@@ -5,6 +5,10 @@
 //     --version <build version> [--commit <sha prefix>] [--dry-run] [--max-wait-minutes N] [--launchd]
 // --signing-identity overrides the default codesign identity (each Mac has its own).
 // --launchd resubmits this command under launchd so it survives T3 quitting.
+// --thread-purge dry-run|purge asks the next server start to plan, or plan and run, the
+// settled-thread purge (apps/server/src/persistence/ThreadPurge.ts). purge needs
+// --db-backup <dir | host:dir>; --thread-purge-plan <plan.json> limits it to a reviewed plan.
+// --restart-only does that without installing: wait, quit, back up, request, relaunch.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -30,6 +34,10 @@ const DEFAULT_SIGNING_IDENTITY = "9996FD65608B18E540C4FE341030A5E801214B56";
 const BACKUP_ROOT = NodePath.join(HOME, "Library/Application Support/T3 Code Backups");
 const LOG_DIR = NodePath.join(HOME, "Library/Logs/t3-local-install");
 const STATE_DB = NodePath.join(HOME, ".t3/userdata/statev2.sqlite");
+const PURGE_REQUEST = NodePath.join(HOME, ".t3/userdata/thread-purge-request.json");
+const PURGE_KEEP = NodePath.join(HOME, ".t3/userdata/thread-purge-keep.json");
+// A local database backup must leave this much free beyond its own size.
+const DB_BACKUP_MIN_FREE_BYTES = 15 * 1024 ** 3;
 const LAUNCHD_LABEL_PREFIX = "com.t3code.local-install.";
 const POLL_MS = 15_000;
 const ACTIVE_RUNS_QUERY =
@@ -50,11 +58,15 @@ const FEATURE_MARKERS = [
 ];
 const TOOLS = {
   codesign: "/usr/bin/codesign",
+  cp: "/bin/cp",
   ditto: "/usr/bin/ditto",
   launchctl: "/bin/launchctl",
   open: "/usr/bin/open",
   osascript: "/usr/bin/osascript",
+  scp: "/usr/bin/scp",
+  shasum: "/usr/bin/shasum",
   sqlite3: "/usr/bin/sqlite3",
+  ssh: "/usr/bin/ssh",
 };
 
 const { values: options } = NodeUtil.parseArgs({
@@ -67,17 +79,33 @@ const { values: options } = NodeUtil.parseArgs({
     "max-wait-minutes": { type: "string", default: "180" },
     launchd: { type: "boolean", default: false },
     "signing-identity": { type: "string" },
+    "thread-purge": { type: "string" },
+    "db-backup": { type: "string" },
+    "thread-purge-plan": { type: "string" },
+    "restart-only": { type: "boolean", default: false },
   },
 });
-if (!options.app === !options.zip || !options.version) {
+const restartOnly = options["restart-only"];
+const threadPurge = options["thread-purge"];
+const usageError =
+  (restartOnly
+    ? Boolean(options.app || options.zip || options.version) || !threadPurge
+    : !options.app === !options.zip || !options.version) ||
+  (threadPurge !== undefined && !["dry-run", "purge"].includes(threadPurge)) ||
+  (threadPurge === "purge" && !options["db-backup"]);
+if (usageError) {
   console.error(
-    "Usage: node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd] [--signing-identity <sha1>]",
+    "Usage: node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd] [--signing-identity <sha1>] [--thread-purge dry-run|purge [--db-backup <dir|host:dir>] [--thread-purge-plan <plan.json>]]\n" +
+      "       node scripts/local-install.mjs --restart-only --thread-purge dry-run|purge [--db-backup <dir|host:dir>] [--thread-purge-plan <plan.json>] [--dry-run] [--max-wait-minutes N] [--launchd]",
   );
   process.exit(2);
 }
-const sourceFlag = options.app ? "--app" : "--zip";
-const sourcePath = NodePath.resolve(options.app ?? options.zip);
+const sourceFlag = restartOnly ? null : options.app ? "--app" : "--zip";
+const sourcePath = restartOnly ? null : NodePath.resolve(options.app ?? options.zip);
 const expectedVersion = options.version;
+const approvedPlan = options["thread-purge-plan"]
+  ? NodePath.resolve(options["thread-purge-plan"])
+  : undefined;
 const dryRun = options["dry-run"];
 const maxWaitMinutes = Number(options["max-wait-minutes"]);
 const SIGNING_IDENTITY = options["signing-identity"] ?? DEFAULT_SIGNING_IDENTITY;
@@ -137,11 +165,11 @@ if (options.launchd) {
   const command = [
     process.execPath,
     NodeURL.fileURLToPath(import.meta.url),
-    sourceFlag,
-    sourcePath,
-    "--version",
-    expectedVersion,
+    ...(restartOnly ? ["--restart-only"] : [sourceFlag, sourcePath, "--version", expectedVersion]),
     ...(options.commit ? ["--commit", options.commit] : []),
+    ...(threadPurge ? ["--thread-purge", threadPurge] : []),
+    ...(options["db-backup"] ? ["--db-backup", options["db-backup"]] : []),
+    ...(approvedPlan ? ["--thread-purge-plan", approvedPlan] : []),
     ...(dryRun ? ["--dry-run"] : []),
     "--max-wait-minutes",
     String(maxWaitMinutes),
@@ -253,7 +281,120 @@ process.on("SIGTERM", () => {
   finish(143);
 });
 
+// "host:dir" backs up over ssh (for example antonm5:t3-db-backups); anything else is a local dir.
+function backupTarget() {
+  const target = options["db-backup"];
+  const remote = /^([A-Za-z0-9._-]+):(.+)$/.exec(target);
+  return remote ? { host: remote[1], dir: remote[2] } : { dir: NodePath.resolve(target) };
+}
+
+const freeBytes = (dir) => {
+  const stats = NodeFS.statfsSync(dir);
+  return stats.bavail * stats.bsize;
+};
+const sha256File = (file) => run("shasum", ["-a", "256", file]).split(/\s/)[0];
+
+/** Checks a thread purge request can be met, before anything is quit. */
+function checkThreadPurge() {
+  if (!threadPurge) return;
+  if (!NodeFS.existsSync(PURGE_KEEP)) throw new Error(`Thread purge needs ${PURGE_KEEP}`);
+  const keep = JSON.parse(NodeFS.readFileSync(PURGE_KEEP, "utf8"));
+  if (!Array.isArray(keep.keepThreadIds)) {
+    throw new Error(`${PURGE_KEEP} needs a keepThreadIds array`);
+  }
+  log(`Thread purge ${threadPurge}: keep list has ${keep.keepThreadIds.length} thread(s)`);
+  if (approvedPlan && !NodeFS.existsSync(approvedPlan)) {
+    throw new Error(`Missing approved plan ${approvedPlan}`);
+  }
+  if (threadPurge !== "purge") return;
+  const size = NodeFS.statSync(STATE_DB).size;
+  const target = backupTarget();
+  if (target.host) {
+    const available =
+      Number(
+        run("ssh", [target.host, `mkdir -p ${target.dir} && df -k ${target.dir} | tail -1`])
+          .trim()
+          .split(/\s+/)[3],
+      ) * 1024;
+    if (!(available > size * 1.2)) {
+      throw new Error(`${target.host} has ${available} bytes free for a ${size} byte backup`);
+    }
+  } else {
+    NodeFS.mkdirSync(target.dir, { recursive: true });
+    const available = freeBytes(target.dir);
+    if (available - size < DB_BACKUP_MIN_FREE_BYTES) {
+      throw new Error(
+        `A ${size} byte backup in ${target.dir} would leave less than 15 GB of ${available} free; back up to another Mac (--db-backup host:dir)`,
+      );
+    }
+  }
+  log(`Database backup target checked: ${options["db-backup"]}`);
+}
+
+/** With T3 stopped: folds the WAL in, backs up the database and writes the request. */
+function requestThreadPurge() {
+  if (!threadPurge) return;
+  const checkpoint = run("sqlite3", [STATE_DB, "PRAGMA wal_checkpoint(TRUNCATE);"]).trim();
+  if (!checkpoint.startsWith("0|")) throw new Error(`WAL checkpoint was busy: ${checkpoint}`);
+  let backup;
+  if (threadPurge === "purge") {
+    const name = `statev2-${stamp}.sqlite`;
+    const target = backupTarget();
+    const localHash = sha256File(STATE_DB);
+    if (target.host) {
+      backup = `${target.host}:${target.dir}/${name}`;
+      run("scp", ["-q", STATE_DB, backup]);
+      const remoteHash = run("ssh", [target.host, `shasum -a 256 ${target.dir}/${name}`]).split(
+        /\s/,
+      )[0];
+      if (remoteHash !== localHash) throw new Error(`Backup hash mismatch at ${backup}`);
+    } else {
+      backup = NodePath.join(target.dir, name);
+      run("cp", ["-c", STATE_DB, backup]);
+      if (sha256File(backup) !== localHash) throw new Error(`Backup hash mismatch at ${backup}`);
+    }
+    log(`Database backed up and verified: ${backup}`);
+  }
+  NodeFS.writeFileSync(
+    PURGE_REQUEST,
+    `${JSON.stringify(
+      {
+        requestedAt: new Date().toISOString(),
+        mode: threadPurge,
+        ...(backup ? { backup } : {}),
+        ...(approvedPlan ? { approvedPlan } : {}),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  log(`Thread purge ${threadPurge} requested for the next start: ${PURGE_REQUEST}`);
+}
+
+/** Quits T3, requests the purge and relaunches the installed app, without installing. */
+async function restartForThreadPurge() {
+  log(`${dryRun ? "Dry run" : "Restart"} for thread purge ${threadPurge}`);
+  checkThreadPurge();
+  const idle = await waitForIdle();
+  if (dryRun) {
+    log(`Gate check: ${idle ? "idle" : "busy"}; dry run complete, nothing was quit`);
+    return;
+  }
+  if (!idle) throw new Error(`T3 still had active runs after ${maxWaitMinutes} minutes`);
+  replacing = true;
+  notify("Restarting T3 Code for the thread purge.");
+  await quitApp();
+  try {
+    requestThreadPurge();
+  } finally {
+    run("open", [PREVIOUS_APP]);
+  }
+  log(`Relaunched ${PREVIOUS_APP}; the server runs the request on start`);
+  notify(`Restarted T3 Code for thread purge ${threadPurge}.`);
+}
+
 async function main() {
+  if (restartOnly) return restartForThreadPurge();
   log(`${dryRun ? "Dry run" : "Install"}: ${sourcePath} as ${expectedVersion}`);
   if (!NodeFS.existsSync(sourcePath)) throw new Error(`Missing artifact ${sourcePath}`);
   if (!NodeFS.existsSync(PREVIOUS_APP)) throw new Error(`Missing installed app ${INSTALLED_APP}`);
@@ -277,6 +418,7 @@ async function main() {
     if (!name) throw new Error("Artifact contains no .app");
     const next = NodePath.join(stage, name);
     verifyStagedApp(next);
+    checkThreadPurge();
     run("codesign", [
       "--force",
       "--deep",
@@ -319,6 +461,14 @@ async function main() {
     if (hash(archive(PREVIOUS_APP)) !== oldHash) {
       throw new Error("Installed app changed during preparation");
     }
+    try {
+      requestThreadPurge();
+    } catch (error) {
+      NodeFS.rmSync(PURGE_REQUEST, { force: true });
+      run("open", [PREVIOUS_APP]);
+      log("Previous app relaunched without a thread purge request");
+      throw error;
+    }
     const previous = NodePath.join(stage, "previous.app");
     NodeFS.renameSync(PREVIOUS_APP, previous);
     try {
@@ -329,6 +479,8 @@ async function main() {
       run("open", [INSTALLED_APP]);
     } catch (error) {
       log(`Install failed after quitting, restoring previous app: ${error.message}`);
+      // The previous app has no purge; don't leave it a request for later builds.
+      NodeFS.rmSync(PURGE_REQUEST, { force: true });
       if (NodeFS.existsSync(INSTALLED_APP))
         NodeFS.renameSync(INSTALLED_APP, NodePath.join(stage, "failed.app"));
       NodeFS.renameSync(previous, PREVIOUS_APP);

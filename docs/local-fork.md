@@ -213,6 +213,40 @@ the same items as before.
 - Stored outputs of deleted threads stay in the table. `migrate-dev-db` keeps only the outputs its
   kept rows reference.
 
+## Settled-thread purge
+
+`apps/server/src/persistence/ThreadPurge.ts` deletes settled threads from `statev2.sqlite` and
+gives the space back with a VACUUM. It never runs by itself: the server runs it once at start,
+before anything else uses the database, only when `userdata/thread-purge-request.json` exists.
+CLI processes never run it.
+
+- **Kept:** threads that are not settled, pinned, with an active or queued run or unfinished
+  effects, bound to a scheduled task or a command watch, listed in
+  `userdata/thread-purge-keep.json` (`{"keepThreadIds": [...]}`, for the Lead threads; edit it at a
+  Lead handover), or whose existing worktree has uncommitted changes (untracked files included) or
+  commits not on origin/main. A worktree git cannot answer for counts as holding work. Every
+  ancestor of a kept thread (subagent lineage, sidebar nesting, subagent rows) is kept too. Without
+  the keep file nothing runs.
+- **Removed:** every row of a purged thread in every table with a `thread_id` column (found from
+  the schema), its V2 and imported V1 events, V1 command receipts, transfers it received, provider
+  sessions nothing else owns or binds, and stored tool outputs nothing references. Transfers it sent
+  stay with the receiver.
+- **Modes:** the request's `"mode"` is `"dry-run"` (default) or `"purge"`. Both write the plan to
+  `userdata/thread-purge-plan.json` and log its counts first; only purge deletes. Purge needs
+  `"backup"` (where the database was copied), and `"approvedPlan"` (a reviewed plan file) limits it
+  to the threads that plan lists. The outcome goes to `userdata/thread-purge-last.json`, and the
+  request is removed once handled.
+- **VACUUM:** after a purge, when the disk has twice the kept data plus 1 GB free; otherwise it is
+  skipped with a log line.
+- **Planning without a restart:** `node apps/server/scripts/thread-purge-plan.ts [--db <file>]
+[--keep <keep.json>] [--out <plan.json>]` opens the database read-only and writes the same plan.
+- **Requesting:** `scripts/local-install.mjs` takes `--thread-purge dry-run|purge`, with
+  `--db-backup <dir | host:dir>` for purge and optional `--thread-purge-plan <plan.json>`, during an
+  install or with `--restart-only` (wait for idle, quit, back up, request, relaunch, no install).
+  With T3 stopped it folds the WAL in, copies the database (an APFS clone locally, or scp to
+  `host:dir`) and checks the copy's SHA-256 before it writes the request. A local backup must leave
+  15 GB free, so a tight Mac backs up to another one.
+
 ## Verification
 
 - Focused behavioral tests, scoped lint, and typechecks for affected packages. No repository-wide
