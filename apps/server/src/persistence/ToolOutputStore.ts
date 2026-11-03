@@ -57,8 +57,17 @@ interface ToolOutputPlan<P> extends StoredToolOutput {
   readonly ref: OrchestrationV2ToolOutputRef;
 }
 
+function sha256(json: string): string {
+  return NodeCrypto.createHash("sha256").update(json, "utf8").digest("hex");
+}
+
 function storedOutput(json: string): StoredToolOutput {
-  return { id: NodeCrypto.createHash("sha256").update(json, "utf8").digest("hex"), json };
+  return { id: sha256(json), json };
+}
+
+function previewId(output: unknown): string | undefined {
+  const json = JSON.stringify(output);
+  return json === undefined ? undefined : sha256(json);
 }
 
 /** Head and tail of the output, cut on code point boundaries. */
@@ -71,25 +80,28 @@ function commandPreview(text: string): string {
   return `${head}\n… ${omitted} more characters, full output stored separately …\n${tail}`;
 }
 
+// Blank output stays inline: clients offer no detail for it.
 function planCommandOutput(text: string): ToolOutputPlan<string> | undefined {
-  if (text.length <= TOOL_OUTPUT_INLINE_CHARS) return undefined;
+  if (text.length <= TOOL_OUTPUT_INLINE_CHARS || text.trim() === "") return undefined;
   const stored = storedOutput(JSON.stringify(text));
   const indicatesFailure = toolOutputIndicatesFailure(
     text.slice(0, TOOL_OUTPUT_FAILURE_SCAN_CHARS),
   );
+  const preview = commandPreview(text);
   return {
     ...stored,
-    preview: commandPreview(text),
+    preview,
     ref: {
       id: stored.id,
       bytes: Buffer.byteLength(stored.json, "utf8"),
       ...(indicatesFailure ? { indicatesFailure: true } : {}),
+      previewId: sha256(JSON.stringify(preview)),
     },
   };
 }
 
 function planDynamicOutput(value: unknown): ToolOutputPlan<unknown> | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || (typeof value === "string" && value.trim() === "")) return undefined;
   let json: string | undefined;
   try {
     json = JSON.stringify(value);
@@ -99,17 +111,23 @@ function planDynamicOutput(value: unknown): ToolOutputPlan<unknown> | undefined 
   if (json === undefined || json.length <= TOOL_OUTPUT_INLINE_CHARS) return undefined;
   const stored = storedOutput(json);
   // The compact form is all the timeline derives from a dynamic tool's output.
+  const preview = compactDynamicToolOutput(value) ?? {};
   return {
     ...stored,
-    preview: compactDynamicToolOutput(value) ?? {},
-    ref: { id: stored.id, bytes: Buffer.byteLength(json, "utf8") },
+    preview,
+    ref: {
+      id: stored.id,
+      bytes: Buffer.byteLength(json, "utf8"),
+      previewId: sha256(JSON.stringify(preview)),
+    },
   };
 }
 
 /**
  * The item as stored: a bulky output becomes a preview plus a reference, and
- * `stored` carries the full output to save. Items that already carry a reference
- * keep it; their `output` is that reference's preview.
+ * `stored` carries the full output to save. An item that still holds its
+ * reference's preview keeps the reference. One whose output was replaced since
+ * (a re-emitted copy of a read item) drops it and is planned from the new output.
  */
 export function externalizeToolOutput(item: OrchestrationV2TurnItem): {
   readonly item: OrchestrationV2TurnItem;
@@ -117,18 +135,24 @@ export function externalizeToolOutput(item: OrchestrationV2TurnItem): {
 } {
   switch (item.type) {
     case "command_execution": {
-      if (item.outputRef !== undefined || item.output === undefined) return { item };
-      const plan = planCommandOutput(item.output);
+      const { outputRef, ...rest } = item;
+      if (outputRef !== undefined && previewId(rest.output) === outputRef.previewId) {
+        return { item };
+      }
+      const plan = rest.output === undefined ? undefined : planCommandOutput(rest.output);
       return plan === undefined
-        ? { item }
-        : { item: { ...item, output: plan.preview, outputRef: plan.ref }, stored: plan };
+        ? { item: rest }
+        : { item: { ...rest, output: plan.preview, outputRef: plan.ref }, stored: plan };
     }
     case "dynamic_tool": {
-      if (item.outputRef !== undefined) return { item };
-      const plan = planDynamicOutput(item.output);
+      const { outputRef, ...rest } = item;
+      if (outputRef !== undefined && previewId(rest.output) === outputRef.previewId) {
+        return { item };
+      }
+      const plan = planDynamicOutput(rest.output);
       return plan === undefined
-        ? { item }
-        : { item: { ...item, output: plan.preview, outputRef: plan.ref }, stored: plan };
+        ? { item: rest }
+        : { item: { ...rest, output: plan.preview, outputRef: plan.ref }, stored: plan };
     }
     default:
       return { item };
@@ -191,6 +215,13 @@ export const restoreToolOutputs = <T extends OrchestrationV2TurnItem>(
         WHERE output_id IN ${sql.in(ids.slice(start, start + RESTORE_CHUNK))}
       `;
       for (const row of rows) outputs.set(row.output_id, row.output_json);
+    }
+    const missing = ids.filter((id) => !outputs.has(id));
+    if (missing.length > 0) {
+      yield* Effect.logWarning("Stored tool output is missing; items keep their previews", {
+        missing: missing.length,
+        firstId: missing[0],
+      });
     }
     return items.map((item) => {
       const id = outputRefOf(item)?.id;
@@ -257,7 +288,7 @@ interface BackfillSource {
     cursor: number,
     before: string,
     after: string,
-  ) => Effect.Effect<unknown, SqlError>;
+  ) => Effect.Effect<ReadonlyArray<unknown>, SqlError>;
   readonly maxCursor: (
     sql: SqlClient.SqlClient,
   ) => Effect.Effect<ReadonlyArray<{ readonly max: number | null }>, SqlError>;
@@ -284,6 +315,7 @@ const BACKFILL_SOURCES: ReadonlyArray<BackfillSource> = [
     update: (sql, cursor, before, after) => sql`
       UPDATE orchestration_v2_projection_turn_items SET payload_json = ${after}
       WHERE rowid = ${cursor} AND payload_json = ${before}
+      RETURNING 1 AS updated
     `,
     maxCursor: (sql) => sql`SELECT MAX(rowid) AS max FROM orchestration_v2_projection_turn_items`,
   },
@@ -304,6 +336,7 @@ const BACKFILL_SOURCES: ReadonlyArray<BackfillSource> = [
     update: (sql, cursor, before, after) => sql`
       UPDATE orchestration_events SET payload_json = ${after}
       WHERE sequence = ${cursor} AND payload_json = ${before}
+      RETURNING 1 AS updated
     `,
     maxCursor: (sql) => sql`SELECT MAX(sequence) AS max FROM orchestration_events`,
   },
@@ -357,27 +390,39 @@ export const backfillToolOutputs = (
         if (options.maxBatches !== undefined && batches >= options.maxBatches) {
           return { batches, rewritten, complete: false } satisfies ToolOutputBackfillResult;
         }
-        const done = yield* sql.withTransaction(
+        // Plan outside the transaction: parsing, hashing and the byte-exact
+        // check of a large row must not hold the only connection.
+        const progress = yield* sql<{ readonly last_cursor: number }>`
+          SELECT last_cursor FROM tool_output_backfill WHERE source = ${source.name}
+        `;
+        const after = progress[0]?.last_cursor ?? 0;
+        const max = (yield* source.maxCursor(sql))[0]?.max ?? 0;
+        const through = Math.min(max, after + scanWindow);
+        const candidates = yield* source.candidates(sql, after, through, batchRows);
+        let next = candidates.length === batchRows ? candidates.at(-1)!.cursor : through;
+        let bytes = 0;
+        const rewrites: Array<{
+          readonly cursor: number;
+          readonly before: string;
+          readonly payload: string;
+          readonly stored: StoredToolOutput;
+        }> = [];
+        for (const candidate of candidates) {
+          if (bytes > 0 && bytes + candidate.bytes > batchBytes) {
+            next = candidate.cursor - 1;
+            break;
+          }
+          bytes += candidate.bytes;
+          const row = (yield* source.payload(sql, candidate.cursor))[0];
+          const rewrite = row === undefined ? undefined : externalizePayloadJson(row.payload_json);
+          if (row !== undefined && rewrite !== undefined) {
+            rewrites.push({ cursor: candidate.cursor, before: row.payload_json, ...rewrite });
+          }
+        }
+        const complete = next >= max;
+        yield* sql.withTransaction(
           Effect.gen(function* () {
-            const progress = yield* sql<{ readonly last_cursor: number }>`
-              SELECT last_cursor FROM tool_output_backfill WHERE source = ${source.name}
-            `;
-            const after = progress[0]?.last_cursor ?? 0;
-            const max = (yield* source.maxCursor(sql))[0]?.max ?? 0;
-            const through = Math.min(max, after + scanWindow);
-            const candidates = yield* source.candidates(sql, after, through, batchRows);
-            let next = candidates.length === batchRows ? candidates.at(-1)!.cursor : through;
-            let bytes = 0;
-            for (const candidate of candidates) {
-              if (bytes > 0 && bytes + candidate.bytes > batchBytes) {
-                next = candidate.cursor - 1;
-                break;
-              }
-              bytes += candidate.bytes;
-              const row = (yield* source.payload(sql, candidate.cursor))[0];
-              const rewrite =
-                row === undefined ? undefined : externalizePayloadJson(row.payload_json);
-              if (row === undefined || rewrite === undefined) continue;
+            for (const rewrite of rewrites) {
               yield* saveToolOutput(sql, rewrite.stored);
               // Rewrite the row only once its full output reads back complete.
               const saved = yield* sql<{ readonly bytes: number }>`
@@ -385,10 +430,15 @@ export const backfillToolOutputs = (
                 WHERE output_id = ${rewrite.stored.id}
               `;
               if (saved[0]?.bytes !== Buffer.byteLength(rewrite.stored.json, "utf8")) continue;
-              yield* source.update(sql, candidate.cursor, row.payload_json, rewrite.payload);
-              rewritten += 1;
+              // A row changed since planning keeps its new content.
+              const updated = yield* source.update(
+                sql,
+                rewrite.cursor,
+                rewrite.before,
+                rewrite.payload,
+              );
+              rewritten += updated.length;
             }
-            const complete = next >= max;
             const now = DateTime.formatIso(yield* DateTime.now);
             yield* sql`
               INSERT INTO tool_output_backfill (source, last_cursor, completed_at)
@@ -397,9 +447,9 @@ export const backfillToolOutputs = (
                 last_cursor = excluded.last_cursor,
                 completed_at = excluded.completed_at
             `;
-            return complete;
           }),
         );
+        const done = complete;
         batches += 1;
         if (done) break;
         yield* Effect.sleep(pause);

@@ -417,20 +417,27 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           if (stored.event.payload.type !== "dynamic_tool") return;
           assert.notProperty(stored.event.payload, "output");
         }
+        // The log and the projection reference the output stored once; the
+        // detail read restores it in full.
         const persisted = yield* store.read({ threadId: thread.id }).pipe(Stream.runCollect);
-        const fullEvent = persisted.find(
+        const storedEvent = persisted.find(
           (stored) => stored.sequence === completed!.sequence,
         )!.event;
-        assert.equal(fullEvent.type, "turn-item.updated");
-        if (fullEvent.type !== "turn-item.updated") return;
-        assert.equal(fullEvent.payload.type, "dynamic_tool");
-        if (fullEvent.payload.type !== "dynamic_tool") return;
-        assert.deepEqual(fullEvent.payload.output, output);
-        const detail = (yield* projections.getThreadProjection(thread.id)).turnItems.find(
+        assert.equal(storedEvent.type, "turn-item.updated");
+        if (storedEvent.type !== "turn-item.updated") return;
+        assert.equal(storedEvent.payload.type, "dynamic_tool");
+        if (storedEvent.payload.type !== "dynamic_tool") return;
+        assert.isDefined(storedEvent.payload.outputRef);
+        const window = (yield* projections.getThreadProjection(thread.id)).turnItems.find(
           (item) => item.id === tool.id,
         )!;
-        assert.equal(detail.type, "dynamic_tool");
-        if (detail.type === "dynamic_tool") assert.deepEqual(detail.output, output);
+        assert.equal(window.type, "dynamic_tool");
+        if (window.type === "dynamic_tool") {
+          assert.deepEqual(window.outputRef, storedEvent.payload.outputRef);
+        }
+        const detail = yield* projections.getTurnItem({ threadId: thread.id, itemId: tool.id });
+        assert.equal(detail?.type, "dynamic_tool");
+        if (detail?.type === "dynamic_tool") assert.deepEqual(detail.output, output);
       }),
     ),
   );

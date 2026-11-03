@@ -1279,6 +1279,8 @@ export const OrchestrationV2ToolOutputRef = Schema.Struct({
   bytes: NonNegativeInt,
   /** Whether the full command output reads as a failure (preview scans are partial). */
   indicatesFailure: Schema.optional(Schema.Boolean),
+  /** SHA-256 of the preview's JSON. An item whose output no longer matches it drops the reference. */
+  previewId: TrimmedNonEmptyString,
 });
 export type OrchestrationV2ToolOutputRef = typeof OrchestrationV2ToolOutputRef.Type;
 

@@ -67,6 +67,7 @@ describe("tool output payload rewriting", () => {
     assert.isUndefined(
       externalizePayloadJson(commandPayload("edge", "x".repeat(TOOL_OUTPUT_INLINE_CHARS))),
     );
+    assert.isUndefined(externalizePayloadJson(commandPayload("blank", " \n".repeat(5_000))));
     const stored = externalizePayloadJson(commandPayload("big", bigCommandOutput("b")));
     assert.isUndefined(externalizePayloadJson(stored!.payload));
     const spaced = commandPayload("spaced", bigCommandOutput("c")).replace('{"id"', '{ "id"');

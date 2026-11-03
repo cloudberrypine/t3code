@@ -135,7 +135,8 @@ const seed = Effect.gen(function* () {
   return { stored, command, dynamic };
 });
 
-const containsFullOutput = (value: unknown) => JSON.stringify(value).includes(MIDDLE);
+const contains = (value: unknown, text: string) => JSON.stringify(value).includes(text);
+const containsFullOutput = (value: unknown) => contains(value, MIDDLE);
 
 describe("stored tool output", () => {
   it.effect("keeps one copy and previews in rows, events and window reads", () =>
@@ -188,7 +189,72 @@ describe("stored tool output", () => {
       const persisted = yield* Stream.runCollect(eventStore.read({ threadId }));
       const wireEvents = Array.from(persisted, (event) => projectDomainEventForWire(event.event));
       assert.isFalse(containsFullOutput(wireEvents));
-      assert.notInclude(JSON.stringify(wireEvents), "outputRef");
+      assert.isFalse(contains(wireEvents, "outputRef"));
+    }).pipe(Effect.provide(stores)),
+  );
+
+  it.effect("re-emitted copies keep a valid reference and never a stale one", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const { command } = yield* seed;
+      const read = (yield* projectionStore.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.id === command.id,
+      )!;
+      assert.strictEqual(read.type, "command_execution");
+      if (read.type !== "command_execution") return;
+      const apply = (payload: OrchestrationV2TurnItem, id: string) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          yield* projectionStore.apply({
+            id: EventId.make(id),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload,
+          });
+          return yield* projectionStore.getTurnItem({ threadId, itemId: command.id });
+        });
+
+      // A status change of a read copy keeps the stored output.
+      const interrupted = yield* apply({ ...read, status: "interrupted" }, "event:status");
+      assert.deepStrictEqual(interrupted, { ...command, status: "interrupted" });
+      // A replaced output wins over the old reference, small or bulky.
+      const small = yield* apply({ ...read, output: "rerun ok" }, "event:small");
+      assert.deepStrictEqual(small, { ...command, output: "rerun ok" });
+      const bulky = `${"new\n".repeat(2_000)}done`;
+      const replaced = yield* apply({ ...read, output: bulky }, "event:bulky");
+      assert.deepStrictEqual(replaced, { ...command, output: bulky });
+      const dropped = yield* apply(
+        { ...read, output: undefined, exitCode: undefined } as OrchestrationV2TurnItem,
+        "event:dropped",
+      );
+      assert.notProperty(dropped, "outputRef");
+      assert.isUndefined(dropped?.type === "command_execution" ? dropped.output : "not command");
+    }).pipe(Effect.provide(stores)),
+  );
+
+  it.effect("keeps blank output inline", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const { command } = yield* seed;
+      const now = yield* DateTime.now;
+      const blank = { ...command, output: "\n".repeat(10_000) };
+      yield* projectionStore.apply({
+        id: EventId.make("event:blank"),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: blank,
+      });
+      const window = (yield* projectionStore.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.id === command.id,
+      );
+      assert.deepStrictEqual(window, blank);
+      assert.notProperty(
+        projectThreadProjectionForWire(yield* projectionStore.getThreadProjection(threadId))
+          .turnItems[0],
+        "outputOmitted",
+      );
     }).pipe(Effect.provide(stores)),
   );
 
