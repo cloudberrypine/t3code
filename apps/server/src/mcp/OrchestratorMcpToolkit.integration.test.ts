@@ -72,6 +72,7 @@ import {
 } from "../orchestration-v2/testkit/ReplayTranscriptNdjson.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as SettleAfterRunService from "../settleAfterRun/SettleAfterRunService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { delegatedTaskRun, hasPendingChildRuns } from "./OrchestratorMcpService.ts";
@@ -622,6 +623,24 @@ describe("orchestrator MCP toolkit", () => {
               runNow: () => Effect.die("ScheduledTaskService.runNow is unused in this test"),
             }),
           );
+          // Fork: records settle-after-run calls; the service has its own tests.
+          const settleAfterRunCalls = yield* Ref.make<ReadonlyArray<unknown>>([]);
+          const settleAfterRunStubLayer = Layer.succeed(
+            SettleAfterRunService.SettleAfterRunService,
+            SettleAfterRunService.SettleAfterRunService.of({
+              request: (input) =>
+                Ref.update(settleAfterRunCalls, (calls) => [...calls, input]).pipe(
+                  Effect.as({ settleAfterRun: "pending", waitingFor: "the current run" } as const),
+                ),
+              cancel: (threadId) =>
+                Ref.update(settleAfterRunCalls, (calls) => [...calls, { cancel: threadId }]).pipe(
+                  Effect.as({ settleAfterRun: "cancelled" } as const),
+                ),
+              list: () => Effect.succeed([]),
+              evaluate: () => Effect.die("SettleAfterRunService.evaluate is unused in this test"),
+              start: () => Effect.void,
+            }),
+          );
           const testLayer = Layer.merge(
             McpHttpServer.OrchestratorToolkitRegistrationLive,
             McpHttpServer.ThreadToolkitRegistrationLive,
@@ -631,6 +650,7 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provide(registryLayer),
             Layer.provide(providerRegistryLayer),
             Layer.provide(scheduledTaskStubLayer),
+            Layer.provide(settleAfterRunStubLayer),
             Layer.provide(NodeServices.layer),
           );
 
@@ -708,6 +728,22 @@ describe("orchestrator MCP toolkit", () => {
             expect((yield* orchestrator.getThreadShell(parentThreadId))?.pinnedAt).not.toBeNull();
             yield* invoke("t3_thread_organize", { action: "unpin" });
             expect((yield* orchestrator.getThreadShell(parentThreadId))?.pinnedAt).toBeNull();
+            // Fork: a thread asks to be settled after its own run.
+            const settleAfterRun = yield* invoke("t3_thread_organize", {
+              action: "settle_after_run",
+            });
+            expect(settleAfterRun.structuredContent).toEqual({
+              settleAfterRun: "pending",
+              waitingFor: "the current run",
+            });
+            const cancelSettleAfterRun = yield* invoke("t3_thread_organize", {
+              action: "cancel_settle_after_run",
+            });
+            expect(cancelSettleAfterRun.structuredContent).toEqual({ settleAfterRun: "cancelled" });
+            expect(yield* Ref.get(settleAfterRunCalls)).toEqual([
+              { threadId: parentThreadId, requestedByThreadId: parentThreadId },
+              { cancel: parentThreadId },
+            ]);
 
             if (parentRun === undefined || parentRun.rootNodeId === null) {
               return yield* Effect.die(new Error("Parent run missing."));
