@@ -192,6 +192,27 @@ view and Android keep theirs.
   watches (`ThreadCommandWatchesPanel`) with a stop button, through the `commandWatches.subscribe`
   and `commandWatches.stop` RPCs. Mobile shows nothing yet.
 
+## Tool output store
+
+Command and dynamic tool output over 4,096 characters is stored once, as JSON keyed by its
+SHA-256, in the `tool_outputs` table (`apps/server/src/persistence/ToolOutputStore.ts`). Turn
+item rows and `turn-item.updated` events keep a short preview in `output` plus an `outputRef`, so
+the event log and the projection share one copy and thread window, shell and snapshot reads stay
+small. Reads that use the full text restore it: `getTurnItem` (the clients' on-demand detail),
+`getThreadRecords` with turn items and `getTurnStartHistory` (handoff history), and
+`getTimelinePage` (agents' `t3_thread_read`). The wire never carries `outputRef`, and clients get
+the same items as before.
+
+- The tables are created in the SQLite setup, not by a numbered migration (fork ids would collide
+  with upstream's).
+- Rows written before the store are moved by a background backfill once the server is active:
+  short transactions with recorded progress (`tool_output_backfill`), so it resumes after a
+  restart. A row is rewritten only when restoring it reproduces the original JSON byte for byte
+  and its stored output reads back complete. Nothing is deleted. The file shrinks only after a
+  VACUUM, which needs T3 stopped.
+- Stored outputs of deleted threads stay in the table. `migrate-dev-db` keeps only the outputs its
+  kept rows reference.
+
 ## Verification
 
 - Focused behavioral tests, scoped lint, and typechecks for affected packages. No repository-wide

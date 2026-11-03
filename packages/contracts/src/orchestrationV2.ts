@@ -1267,6 +1267,21 @@ export const OrchestrationV2UserMessageInputIntent = Schema.Literals([
 export type OrchestrationV2UserMessageInputIntent =
   typeof OrchestrationV2UserMessageInputIntent.Type;
 
+/**
+ * Server storage detail: the full output of a bulky tool item is stored once in
+ * the server's tool output table, and the item keeps a preview in `output`. The
+ * server restores the full output for detail reads and strips this from the wire.
+ */
+export const OrchestrationV2ToolOutputRef = Schema.Struct({
+  /** SHA-256 of the stored output's JSON, in hex. */
+  id: TrimmedNonEmptyString,
+  /** UTF-8 size of the stored output's JSON. */
+  bytes: NonNegativeInt,
+  /** Whether the full command output reads as a failure (preview scans are partial). */
+  indicatesFailure: Schema.optional(Schema.Boolean),
+});
+export type OrchestrationV2ToolOutputRef = typeof OrchestrationV2ToolOutputRef.Type;
+
 const OrchestrationV2TurnItemBaseFields = {
   toolNonExecutionKind: Schema.optional(Schema.String),
   toolSurface: Schema.optional(ToolActivitySurface),
@@ -1377,6 +1392,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     outputOmitted: Schema.optional(Schema.Boolean),
     outputIndicatesFailure: Schema.optional(Schema.Boolean),
     exitCode: Schema.optional(Schema.Int),
+    outputRef: Schema.optional(OrchestrationV2ToolOutputRef),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1503,6 +1519,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     output: Schema.optional(Schema.Unknown),
     /** Set on the wire when output was withheld; fetch it with getTurnItem. */
     outputOmitted: Schema.optional(Schema.Boolean),
+    outputRef: Schema.optional(OrchestrationV2ToolOutputRef),
   }),
 ]);
 export type OrchestrationV2TurnItem = typeof OrchestrationV2TurnItem.Type;
@@ -2125,6 +2142,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     outputOmitted: Schema.optional(Schema.Boolean),
     outputIndicatesFailure: Schema.optional(Schema.Boolean),
     exitCode: Schema.optional(Schema.Int),
+    outputRef: Schema.optional(OrchestrationV2ToolOutputRef),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2248,6 +2266,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     output: Schema.optional(Schema.Unknown),
     /** Set on the wire when output was withheld; fetch it with getTurnItem. */
     outputOmitted: Schema.optional(Schema.Boolean),
+    outputRef: Schema.optional(OrchestrationV2ToolOutputRef),
   }),
 ]);
 export type OrchestrationV2TurnItemJson = typeof OrchestrationV2TurnItemJson.Type;

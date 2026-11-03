@@ -71,6 +71,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type * as Statement from "effect/unstable/sql/Statement";
 
+import { restoreToolOutputs, storeToolOutput } from "../persistence/ToolOutputStore.ts";
 import {
   isThreadHistoryUserTurn,
   isThreadHistoryTurnStart,
@@ -2305,7 +2306,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             break;
           }
           case "turn-item.updated": {
-            const payloadJson = yield* encodeTurnItemPayload(event.payload);
+            const payloadJson = yield* encodeTurnItemPayload(
+              yield* storeToolOutput(sql, event.payload),
+            );
             const payload = parseEncodedPayload(payloadJson);
             yield* sql`
               INSERT INTO orchestration_v2_projection_turn_items (
@@ -3811,7 +3814,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             AND ${runIds === undefined ? sql`1` : sql`run_id IN ${sql.in(runIds)}`}
           ORDER BY ordinal ASC, turn_item_id ASC
         `;
-        return yield* decodeRows(decodeTurnItemPayload, threadId)(rows);
+        // Handoff history carries full command output.
+        return yield* restoreToolOutputs(
+          sql,
+          yield* decodeRows(decodeTurnItemPayload, threadId)(rows),
+        );
       }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
@@ -4542,7 +4549,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.flatMap((rows) =>
           rows[0] === undefined
             ? Effect.succeed(null)
-            : decodeTurnItemPayload(rows[0].payload_json),
+            : decodeTurnItemPayload(rows[0].payload_json).pipe(
+                Effect.flatMap((item) => restoreToolOutputs(sql, [item])),
+                Effect.map((items) => items[0] ?? null),
+              ),
         ),
         Effect.mapError(controlReadError(threadId)),
       );
@@ -4563,7 +4573,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       fields,
       filter,
     ) =>
-      withReadTransaction(sql)(readCanonicalProjection(threadId, undefined, fields, filter)).pipe(
+      withReadTransaction(sql)(
+        readCanonicalProjection(threadId, undefined, fields, filter).pipe(
+          // Records feed handoff history and agent reads, which use full output.
+          Effect.flatMap((projection) =>
+            (fields as ReadonlyArray<ProjectionRecordField>).includes("turnItems")
+              ? restoreToolOutputs(sql, projection.turnItems).pipe(
+                  Effect.map((turnItems) => ({ ...projection, turnItems })),
+                )
+              : Effect.succeed(projection),
+          ),
+        ),
+      ).pipe(
         Effect.map(
           (projection) =>
             Object.fromEntries([
@@ -4744,7 +4765,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 decodeTurnItemPayload,
                 row.sourceThreadId,
               )(payloads);
-              const item = decoded[0];
+              // Agents page through the full text of a timeline item.
+              const item = (yield* restoreToolOutputs(sql, decoded))[0];
               if (item === undefined)
                 return yield* new ProjectionStoreReadError({
                   threadId,

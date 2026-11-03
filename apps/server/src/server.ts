@@ -6,6 +6,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as CommandWatchService from "./commandWatch/CommandWatchService.ts";
+import * as ToolOutputStore from "./persistence/ToolOutputStore.ts";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -540,6 +541,9 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
       yield* ServerActivation.forkParked(service.start());
     }),
   ),
+  // Fork: moves bulky tool output of older rows into the tool output store
+  // once the server is active.
+  Layer.effectDiscard(ServerActivation.forkParked(ToolOutputStore.runToolOutputBackfill)),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   ProviderUsageLimitsIngestionLive,

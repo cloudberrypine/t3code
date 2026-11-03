@@ -8,6 +8,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
 import { initializeV2Database } from "../initializeV2Database.ts";
+import { ensureToolOutputSchema } from "../ToolOutputStore.ts";
 import * as ServerConfig from "../../config.ts";
 
 // Size the -wal file is cut back to on the first commit after a WAL reset.
@@ -53,6 +54,7 @@ const setup = Layer.effectDiscard(
     // largest size until the last connection closes.
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
     yield* runMigrations();
+    yield* ensureToolOutputSchema(sql);
     yield* sql.unsafe(`PRAGMA analysis_limit = ${ANALYSIS_LIMIT};`);
     yield* refreshPlannerStatistics(sql, "PRAGMA optimize = 0x10002;");
     yield* refreshPlannerStatistics(sql, "PRAGMA optimize;").pipe(

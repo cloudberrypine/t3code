@@ -356,6 +356,22 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
       yield* sql`DELETE FROM provider_session_runtime`;
       yield* sql`DELETE FROM auth_sessions`;
       yield* sql`DELETE FROM auth_pairing_links`;
+      // Stored tool output is keyed by content; keep what the kept rows reference.
+      const toolOutputs = yield* sql<{ present: number }>`
+        SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_outputs')
+          AS present`;
+      if (toolOutputs[0]?.present === 1) {
+        yield* sql`DELETE FROM tool_outputs WHERE output_id NOT IN (
+          SELECT json_extract(payload_json, '$.outputRef.id')
+          FROM orchestration_v2_projection_turn_items
+          WHERE json_extract(payload_json, '$.outputRef.id') IS NOT NULL
+          UNION
+          SELECT json_extract(payload_json, '$.outputRef.id')
+          FROM orchestration_events
+          WHERE event_type = 'turn-item.updated'
+            AND json_extract(payload_json, '$.outputRef.id') IS NOT NULL
+        )`;
+      }
     }),
   );
 

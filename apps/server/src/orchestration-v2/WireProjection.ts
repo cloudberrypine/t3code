@@ -75,18 +75,21 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       return projected;
     }
     case "command_execution": {
-      const { output, ...projected } = item;
+      const { output, outputRef, ...projected } = item;
       // Clients used this preview to recognize provider-reported failures. Keep
       // the outcome without retaining or serializing the output that proved it.
+      // Stored output was judged by the same scan when it was stored.
       const failed =
         item.outputIndicatesFailure === true ||
         (item.exitCode !== undefined && item.exitCode !== 0) ||
-        (output !== undefined &&
-          toolOutputIndicatesFailure(output.slice(0, MAX_DETAIL_STRING_BYTES)));
+        (outputRef === undefined
+          ? output !== undefined &&
+            toolOutputIndicatesFailure(output.slice(0, MAX_DETAIL_STRING_BYTES))
+          : outputRef.indicatesFailure === true);
       return {
         ...projected,
         ...(failed ? { outputIndicatesFailure: true } : {}),
-        ...(output?.trim() ? { outputOmitted: true } : {}),
+        ...(outputRef !== undefined || output?.trim() ? { outputOmitted: true } : {}),
       };
     }
     case "file_change": {
@@ -106,13 +109,14 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
         result: item.result === null ? null : (truncateDetail(item.result) ?? null),
       };
     case "dynamic_tool": {
-      const { output: rawOutput, ...projected } = item;
+      // A stored output's preview is already its compact form.
+      const { output: rawOutput, outputRef, ...projected } = item;
       const output = compactDynamicToolOutput(rawOutput);
       return {
         ...projected,
         input: summarizeDynamicValue(item.input),
         ...(output === undefined ? {} : { output }),
-        ...(hasDynamicValue(rawOutput) ? { outputOmitted: true } : {}),
+        ...(outputRef !== undefined || hasDynamicValue(rawOutput) ? { outputOmitted: true } : {}),
       };
     }
     default:
@@ -148,18 +152,23 @@ function boundDynamicValue(value: unknown): unknown {
  */
 export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   switch (item.type) {
-    case "command_execution":
+    case "command_execution": {
+      // Detail reads restore stored output; a missing one leaves its preview.
+      const { outputRef: _outputRef, ...detail } = item;
       return {
-        ...item,
+        ...detail,
         input: truncateDetail(item.input, MAX_ON_DEMAND_BYTES) ?? "",
         output: truncateDetail(item.output, MAX_ON_DEMAND_BYTES),
       };
-    case "dynamic_tool":
+    }
+    case "dynamic_tool": {
+      const { outputRef: _outputRef, ...detail } = item;
       return {
-        ...item,
+        ...detail,
         input: boundDynamicValue(item.input),
         output: boundDynamicValue(item.output),
       };
+    }
     case "subagent":
       return {
         ...item,

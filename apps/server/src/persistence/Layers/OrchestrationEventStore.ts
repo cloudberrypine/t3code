@@ -30,6 +30,7 @@ import {
   type OrchestrationEventStoreError,
 } from "../Errors.ts";
 import * as OrchestrationEventStore from "../Services/OrchestrationEventStore.ts";
+import { storeToolOutput } from "../ToolOutputStore.ts";
 
 const encodeProjectIcon = Schema.encodeSync(ProjectIconOverride);
 const decodeProjectEvent = Schema.decodeUnknownEffect(ApplicationProjectEvent);
@@ -329,7 +330,13 @@ const makeEventStore = Effect.gen(function* () {
         input.events,
         (event) =>
           Effect.gen(function* () {
-            const encoded = yield* encodeV2EventJson(event);
+            // The log keeps a preview of bulky tool output; subscribers still
+            // get the event as it was decided.
+            const encoded = yield* encodeV2EventJson(
+              event.type === "turn-item.updated"
+                ? { ...event, payload: yield* storeToolOutput(sql, event.payload) }
+                : event,
+            );
             const rows = yield* sql<{ readonly sequence: number }>`
             INSERT INTO orchestration_events (
               event_id,

@@ -460,7 +460,13 @@ const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
 function withoutPreparationResult(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }>,
 ) {
-  const { output: _output, exitCode: _exitCode, outputIndicatesFailure: _failure, ...rest } = item;
+  const {
+    output: _output,
+    outputRef: _outputRef,
+    exitCode: _exitCode,
+    outputIndicatesFailure: _failure,
+    ...rest
+  } = item;
   return rest;
 }
 
