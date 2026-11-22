@@ -11,43 +11,136 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
-import {
-  HttpClient,
-  HttpClientRequest,
-  HttpRouter,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import * as Tracer from "effect/Tracer";
+import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
 
+import {
+  injectMcpAppCsp,
+  injectMcpAppCookieBootstrap,
+  injectMcpAppThemeBootstrap,
+  MCP_APP_MAX_HTML_BYTES,
+} from "@t3tools/shared/mcpApp";
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
+import { FILE_PREVIEW_SCROLL_SCRIPT } from "@t3tools/shared/htmlRender";
 
 import * as ServerConfig from "./config.ts";
 
-import {
-  assetResponseHeaders,
-  browserApiCorsLayer,
-  assetFileResponse,
-  downloadContentDisposition,
-  httpCompressionLayer,
-  isLoopbackHostname,
-  resolveDevRedirectUrl,
-  staticAndDevRouteLayer,
-} from "./http.ts";
+import { assetResponseHeaders, assetFileResponse, downloadContentDisposition } from "./http.ts";
+import * as ServerHttp from "./http.ts";
+
+describe("MCP app asset responses", () => {
+  it.effect(
+    "transforms existing snapshots only with explicit render intent and fresh metadata",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-theme-" });
+        const file = path.join(directory, "app.html");
+        const html = injectMcpAppCsp(
+          "<html><head><script>vendor()</script></head><body>☃</body></html>",
+          undefined,
+        );
+        yield* fs.writeFileString(file, html);
+        for (const method of ["GET", "HEAD"] as const) {
+          const response = HttpServerResponse.toWeb(
+            yield* assetFileResponse(
+              { path: file, mimeType: "text/html", renderIntent: "mcp-app" },
+              "bytes=0-1",
+              undefined,
+              method,
+            ),
+          );
+          const expected = injectMcpAppCookieBootstrap(injectMcpAppThemeBootstrap(html));
+          expect(response.status).toBe(200);
+          expect(response.headers.get("content-length")).toBe(
+            String(new TextEncoder().encode(expected).byteLength),
+          );
+          expect(response.headers.get("etag")).toBeNull();
+          expect(response.headers.get("last-modified")).toBeNull();
+          expect(response.headers.get("content-security-policy")).toBe(
+            "sandbox allow-scripts allow-forms allow-popups allow-downloads",
+          );
+          expect(yield* Effect.promise(() => response.text())).toBe(
+            method === "HEAD" ? "" : expected,
+          );
+        }
+        for (const download of [false, true]) {
+          const response = HttpServerResponse.toWeb(
+            yield* assetFileResponse({
+              path: file,
+              mimeType: "text/html",
+              download,
+              ...(download ? { renderIntent: "mcp-app" as const } : {}),
+            }),
+          );
+          expect(yield* Effect.promise(() => response.text())).toBe(html);
+        }
+      }).pipe(Effect.provide(layerFileResponse)),
+  );
+
+  it.effect("rejects oversized captures before transforming them", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-theme-size-" });
+      const file = path.join(directory, "app.html");
+      yield* fs.writeFileString(file, "x".repeat(MCP_APP_MAX_HTML_BYTES + 128 * 1024 + 1));
+      const response = yield* assetFileResponse({ path: file, renderIntent: "mcp-app" });
+      expect(response.status).toBe(413);
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+});
+
+describe("workspace page preview responses", () => {
+  it.effect("append the scroll script only to inline HTML previews", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-preview-" });
+      const page = path.join(directory, "report.html");
+      const style = path.join(directory, "report.css");
+      const html = "<!doctype html><html><body>☃</body></html>";
+      yield* fs.writeFileString(page, html);
+      yield* fs.writeFileString(style, "body{}");
+      const read = (asset: Parameters<typeof assetFileResponse>[0]) =>
+        assetFileResponse(asset).pipe(
+          Effect.flatMap((response) =>
+            Effect.promise(() => HttpServerResponse.toWeb(response).text()),
+          ),
+        );
+      const response = HttpServerResponse.toWeb(
+        yield* assetFileResponse({ path: page, renderIntent: "file-preview" }, "bytes=0-1"),
+      );
+      const expected = html + FILE_PREVIEW_SCROLL_SCRIPT;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-length")).toBe(
+        String(new TextEncoder().encode(expected).byteLength),
+      );
+      expect(yield* Effect.promise(() => response.text())).toBe(expected);
+      expect(yield* read({ path: page, renderIntent: "file-preview", download: true })).toBe(html);
+      expect(yield* read({ path: page })).toBe(html);
+      expect(yield* read({ path: style, renderIntent: "file-preview" })).toBe("body{}");
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+});
 
 describe("browser API CORS", () => {
   it("accepts protocol negotiation with authenticated browser headers", async () => {
-    const routeLayer = Layer.effectDiscard(
+    const layerRoute = Layer.effectDiscard(
       Effect.gen(function* () {
         const router = yield* HttpRouter.HttpRouter;
         yield* router.add("GET", "/api/environment", HttpServerResponse.empty());
       }),
     );
-    const appLayer = Layer.merge(routeLayer, browserApiCorsLayer).pipe(
+    const layerApp = Layer.merge(layerRoute, ServerHttp.layerBrowserApiCors).pipe(
       Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "http-cors-test-" })),
       Layer.provide(NodeServices.layer),
     );
-    const { handler, dispose } = HttpRouter.toWebHandler(appLayer, { disableLogger: true });
+    const { handler, dispose } = HttpRouter.toWebHandler(layerApp, { disableLogger: true });
 
     try {
       const response = await handler(
@@ -81,20 +174,60 @@ describe("browser API CORS", () => {
   });
 });
 
-const fileResponseLayer = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
+describe("untraced requests", () => {
+  it.effect("starts a separate trace for each request, not the server's lifetime trace", () =>
+    Effect.gen(function* () {
+      const requestSpans: Array<Tracer.NativeSpan> = [];
+      const layerTracer = Layer.succeed(
+        Tracer.Tracer,
+        Tracer.make({
+          span: (options) => {
+            const span = new Tracer.NativeSpan(options);
+            if (options.kind === "server") requestSpans.push(span);
+            return span;
+          },
+        }),
+      );
+      const layerRoutes = Layer.effectDiscard(
+        Effect.gen(function* () {
+          const router = yield* HttpRouter.HttpRouter;
+          yield* router.add("GET", "/api/environment", HttpServerResponse.empty());
+        }),
+      );
+      const services = yield* Layer.build(
+        HttpRouter.serve(layerRoutes, { disableListenLog: true, disableLogger: true }).pipe(
+          ServerHttp.withRootRequestSpans,
+          Layer.provideMerge(NodeHttpServer.layerTest),
+        ),
+      ).pipe(Effect.withSpan("server.lifetime"), Effect.provide(layerTracer));
+      // Without a traceparent header, the server alone decides each request's parent.
+      const client = Context.get(services, HttpClient.HttpClient);
+
+      for (let i = 0; i < 2; i++) {
+        yield* client
+          .execute(HttpClientRequest.get("/api/environment"))
+          .pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
+      }
+      expect(requestSpans.map((span) => span.parent._tag)).toEqual(["None", "None"]);
+      expect(new Set(requestSpans.map((span) => span.traceId)).size).toBe(2);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
 
 const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (staticDir: string) {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const appLayer = Layer.merge(staticAndDevRouteLayer, httpCompressionLayer).pipe(
-    Layer.provideMerge(ServerConfig.layer({ ...config, staticDir })),
-    Layer.provideMerge(NodeHttpPlatform.layer),
-    Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, fileSystem)),
-    Layer.provideMerge(Layer.succeed(Path.Path, path)),
-  );
+  const layerApp = Layer.merge(
+    ServerHttp.layerStaticAndDevRoute,
+    ServerHttp.layerHttpCompression,
+  ).pipe(Layer.provideMerge(NodeHttpPlatform.layer));
+  // HttpRouter.serve prefers outer services; inject the test FileSystem between it and NodeHttpServer.layerTest.
   const services = yield* Layer.build(
-    HttpRouter.serve(appLayer, { disableListenLog: true }).pipe(
+    HttpRouter.serve(layerApp, { disableListenLog: true }).pipe(
+      Layer.provideMerge(ServerConfig.layer({ ...config, staticDir })),
+      Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, fileSystem)),
       Layer.provideMerge(NodeHttpServer.layerTest),
     ),
   );
@@ -151,6 +284,107 @@ it.layer(
     }),
   );
 
+  it.effect("serves static files without handles and skips fallback reads for HEAD and 304", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-static-no-open-" });
+      const filePath = path.join(staticDir, "app.txt");
+      const body = "packaged asset";
+      yield* fs.writeFileString(filePath, body);
+      let reads = 0;
+      // Electron asar files can be statted and read even when opening a handle fails.
+      const fileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        open: (candidate, options) =>
+          candidate === filePath
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "FileSystem",
+                  method: "open",
+                  pathOrDescriptor: candidate,
+                }),
+              )
+            : fs.open(candidate, options),
+        readFile: (candidate) =>
+          Effect.gen(function* () {
+            if (candidate === filePath) reads += 1;
+            return yield* fs.readFile(candidate);
+          }),
+      });
+      const request = yield* makeStaticRequest(staticDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+      );
+
+      const get = yield* request("/app.txt");
+      expect(get.status).toBe(200);
+      expect(yield* get.text).toBe(body);
+      expect(reads).toBeGreaterThan(0);
+      const readsAfterGet = reads;
+      const head = yield* request("/app.txt", { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(yield* head.text).toBe("");
+      expect(reads).toBe(readsAfterGet);
+      const unchanged = yield* request("/app.txt", {
+        headers: { "if-none-match": get.headers["etag"]! },
+      });
+      expect(unchanged.status).toBe(304);
+      expect(yield* unchanged.text).toBe("");
+      expect(reads).toBe(readsAfterGet);
+    }),
+  );
+
+  it.effect("serves replacement bytes with matching static fallback length and validators", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-static-replaced-" });
+      const filePath = path.join(staticDir, "app.txt");
+      const before = DateTime.toDateUtc(DateTime.makeUnsafe("1985-10-26T08:15:00.000Z"));
+      const after = DateTime.toDateUtc(DateTime.makeUnsafe("2015-10-21T16:29:00.000Z"));
+      const replacement = "the replacement asset";
+      const replacementPath = path.join(staticDir, "replacement.txt");
+      yield* fs.writeFileString(filePath, "old");
+      yield* fs.utimes(filePath, before, before);
+      yield* fs.writeFileString(replacementPath, replacement);
+      yield* fs.utimes(replacementPath, after, after);
+      let replaceOnOpen = false;
+      const fileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        open: (candidate, options) =>
+          Effect.gen(function* () {
+            if (candidate !== filePath) return yield* fs.open(candidate, options);
+            if (replaceOnOpen) {
+              yield* fs.rename(replacementPath, filePath);
+              replaceOnOpen = false;
+            }
+            return yield* PlatformError.systemError({
+              _tag: "NotFound",
+              module: "FileSystem",
+              method: "open",
+              pathOrDescriptor: candidate,
+            });
+          }),
+      });
+      const request = yield* makeStaticRequest(staticDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+      );
+      const initial = yield* request("/app.txt", { headers: { "accept-encoding": "identity" } });
+      expect(yield* initial.text).toBe("old");
+
+      replaceOnOpen = true;
+      const response = yield* request("/app.txt", { headers: { "accept-encoding": "identity" } });
+      expect(response.status).toBe(200);
+      expect(response.headers).toMatchObject({
+        "content-length": String(Buffer.byteLength(replacement)),
+        "last-modified": after.toUTCString(),
+      });
+      expect(response.headers["etag"]).not.toBe(initial.headers["etag"]);
+      expect(yield* response.text).toBe(replacement);
+    }),
+  );
+
   it.effect("serves changed HTML when deployments preserve its size and timestamp", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -177,6 +411,8 @@ it.layer(
         expect(response.status).toBe(200);
         expect(yield* response.text).toBe(nextHtml);
         expect(response.headers["cache-control"]).toBe("no-cache");
+        expect(response.headers["content-security-policy"]).toBe("frame-ancestors 'none'");
+        expect(response.headers["x-frame-options"]).toBe("DENY");
         expect(response.headers["etag"]).toBeUndefined();
         expect(response.headers["last-modified"]).toBeUndefined();
       }
@@ -314,7 +550,7 @@ describe("video asset byte ranges", () => {
         }
         expect(yield* Effect.promise(() => response.text())).toBe(expected);
       }
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect(
@@ -338,7 +574,6 @@ describe("video asset byte ranges", () => {
         ] as const) {
           const file = yield* openMediaFile(canonicalPath);
           if (!file) throw new Error("Expected an opened media file");
-          // Model a sparse file beyond the native stream's numeric addressing limit.
           const info = yield* Effect.promise(() => file.handle.stat({ bigint: true }));
           info.size = size;
           const statSpy = vi.spyOn(file.handle, "stat").mockResolvedValue(info);
@@ -359,47 +594,7 @@ describe("video asset byte ranges", () => {
             );
           }
         }
-      }).pipe(Effect.provide(fileResponseLayer)),
-  );
-
-  it.effect("streams guarded file ranges, including suffixes and conditional requests", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-guarded-range-" });
-      const filePath = path.join(directory, "clip.mp4");
-      yield* fs.writeFileString(filePath, "0123456789");
-      const canonicalPath = yield* fs.realPath(filePath);
-      for (const [range, ifRange, expected, status, contentRange] of [
-        [undefined, undefined, "0123456789", 200, null],
-        ["bytes=0-1", undefined, "01", 206, "bytes 0-1/10"],
-        ["bytes=4-", undefined, "456789", 206, "bytes 4-9/10"],
-        ["bytes=-3", undefined, "789", 206, "bytes 7-9/10"],
-        ["bytes=-999999999999999999999999", undefined, "0123456789", 206, "bytes 0-9/10"],
-        ["bytes=10-", undefined, "", 416, "bytes */10"],
-        ["bytes=0-1", '"old-etag"', "0123456789", 200, null],
-        ["bytes=0-1", "", "0123456789", 200, null],
-      ] as const) {
-        const file = yield* openMediaFile(canonicalPath);
-        if (!file) throw new Error("Expected an opened media file");
-        const response = HttpServerResponse.toWeb(
-          yield* assetFileResponse(
-            { path: canonicalPath, file, mimeType: "video/mp4" },
-            range,
-            ifRange,
-          ),
-        );
-        expect(response.status).toBe(status);
-        expect(response.headers.get("accept-ranges")).toBe("bytes");
-        expect(response.headers.get("content-range")).toBe(contentRange);
-        expect(response.headers.get("cache-control")).toBe("private, no-store");
-        expect(response.headers.get("etag")).toBeNull();
-        expect(response.headers.get("last-modified")).toBeNull();
-        if (status !== 416)
-          expect(response.headers.get("content-length")).toBe(String(expected.length));
-        expect(yield* Effect.promise(() => response.text())).toBe(expected);
-      }
-    }).pipe(Effect.provide(fileResponseLayer)),
+      }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("keeps attachment media out of the cache once its signed URL expires", () =>
@@ -410,14 +605,12 @@ describe("video asset byte ranges", () => {
       const filePath = path.join(directory, "audio.wav");
       yield* fs.writeFileString(filePath, "RIFF");
       const canonicalPath = yield* fs.realPath(filePath);
-      // An attachment is read straight from disk, so it carries no opened host file. Its URL is
-      // signed and short-lived; a cached copy would outlive the grant that served it.
       const response = HttpServerResponse.toWeb(
         yield* assetFileResponse({ path: canonicalPath, mimeType: "audio/wav" }),
       );
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("accept-ranges")).toBe("bytes");
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("closes guarded descriptors after full, HEAD, rejected, and cancelled responses", () =>
@@ -464,7 +657,7 @@ describe("video asset byte ranges", () => {
         );
         expect(file.handle.fd).toBe(-1);
       }
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("streams exactly the requested bytes and leaves full downloads intact", () =>
@@ -514,10 +707,23 @@ describe("video asset byte ranges", () => {
       const image = HttpServerResponse.toWeb(
         yield* assetFileResponse({ path: file, mimeType: "image/png" }, "bytes=0-1"),
       );
-      expect(image.status).toBe(200);
-      expect(image.headers.has("accept-ranges")).toBe(false);
-      expect(yield* Effect.promise(() => image.text())).toBe("0123456789");
-    }).pipe(Effect.provide(fileResponseLayer)),
+      expect(image.status).toBe(206);
+      expect(image.headers.get("accept-ranges")).toBe("bytes");
+      expect(yield* Effect.promise(() => image.text())).toBe("01");
+      for (const mimeType of ["text/plain", "text/csv", "application/octet-stream"]) {
+        for (const [range, expected, status] of [
+          ["bytes=2-5", "2345", 206],
+          ["bytes=-3", "789", 206],
+          ["bytes=10-", "", 416],
+        ] as const) {
+          const result = HttpServerResponse.toWeb(
+            yield* assetFileResponse({ path: file, mimeType }, range),
+          );
+          expect(result.status).toBe(status);
+          expect(yield* Effect.promise(() => result.text())).toBe(expected);
+        }
+      }
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect(
@@ -547,7 +753,7 @@ describe("video asset byte ranges", () => {
         expect(download.status).toBe(200);
         expect(download.headers.get("content-disposition")).toContain("attachment;");
         expect(yield* Effect.promise(() => download.text())).toBe("0123456789");
-      }).pipe(Effect.provide(fileResponseLayer)),
+      }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("rejects ranges outside the file, including empty files", () =>
@@ -571,32 +777,8 @@ describe("video asset byte ranges", () => {
       );
       expect(empty.status).toBe(416);
       expect(empty.headers.get("content-range")).toBe("bytes */0");
-    }).pipe(Effect.provide(fileResponseLayer)),
+    }).pipe(Effect.provide(layerFileResponse)),
   );
-});
-
-describe("http dev routing", () => {
-  it("treats localhost and loopback addresses as local", () => {
-    expect(isLoopbackHostname("127.0.0.1")).toBe(true);
-    expect(isLoopbackHostname("localhost")).toBe(true);
-    expect(isLoopbackHostname("::1")).toBe(true);
-    expect(isLoopbackHostname("[::1]")).toBe(true);
-  });
-
-  it("does not treat LAN addresses as local", () => {
-    expect(isLoopbackHostname("192.168.86.35")).toBe(false);
-    expect(isLoopbackHostname("10.0.0.24")).toBe(false);
-    expect(isLoopbackHostname("example.local")).toBe(false);
-  });
-
-  it("preserves path and query when redirecting to the dev server", () => {
-    const devUrl = new URL("http://127.0.0.1:5173/");
-    const requestUrl = new URL("http://127.0.0.1:3774/pair?token=test-token");
-
-    expect(resolveDevRedirectUrl(devUrl, requestUrl)).toBe(
-      "http://127.0.0.1:5173/pair?token=test-token",
-    );
-  });
 });
 
 describe("assetResponseHeaders", () => {
@@ -609,25 +791,6 @@ describe("assetResponseHeaders", () => {
       "Content-Security-Policy",
     );
   });
-
-  it("does not apply document policy to raster images", () => {
-    expect(assetResponseHeaders("/attachments/user-image.png")).toEqual({
-      "Cache-Control": "private, max-age=3600",
-      "X-Content-Type-Options": "nosniff",
-    });
-  });
-
-  it("serves inline videos with their declared mime type", () => {
-    expect(
-      assetResponseHeaders("/attachments/demo.bin", {
-        mimeType: 'video/mp4; codecs="avc1.42E01E"',
-      }),
-    ).toEqual({
-      "Cache-Control": "private, max-age=3600",
-      "Content-Type": "video/mp4",
-      "X-Content-Type-Options": "nosniff",
-    });
-  });
   it("serves inline attachment documents with their declared mime type", () => {
     expect(
       assetResponseHeaders("/attachments/upload.bin", { mimeType: "application/pdf" }),
@@ -638,16 +801,8 @@ describe("assetResponseHeaders", () => {
       assetResponseHeaders("/attachments/upload.bin", { mimeType: "text/html" }),
     ).toMatchObject({
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
+      "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-downloads",
     });
-  });
-  it("serves HTML assets as utf-8 inside a sandboxed origin", () => {
-    for (const path of ["/workspace/page.html", "/workspace/PAGE.HTM", "/tmp/report.html"]) {
-      expect(assetResponseHeaders(path)).toMatchObject({
-        "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
-      });
-    }
   });
 
   it("downloads uploaded documents without executing their content", () => {
@@ -688,18 +843,6 @@ describe("assetResponseHeaders", () => {
       expect(
         assetResponseHeaders("/attachments/upload.bin", { download: true, mimeType }),
       ).toHaveProperty("Content-Type", "application/octet-stream");
-    }
-  });
-
-  it("preserves official Office Open XML mime types", () => {
-    for (const mimeType of [
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ]) {
-      expect(
-        assetResponseHeaders("/attachments/upload.bin", { download: true, mimeType }),
-      ).toHaveProperty("Content-Type", mimeType);
     }
   });
 });

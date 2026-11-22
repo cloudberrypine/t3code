@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -9,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
@@ -131,7 +133,7 @@ const start = (
   threadId = threadA,
 ) => h.service.watch({ threadId, label, command: `watch-${label}`, cwd: h.cwd });
 
-it.layer(NodeServices.layer)("CommandWatchService", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("CommandWatchService", (it) => {
   it.effect("combines lines that arrive together into one labelled wake", () =>
     Effect.gen(function* () {
       const h = yield* harness();
@@ -387,9 +389,17 @@ it("wakes steer an active run and otherwise start a turn", () => {
   const providerThreadId = ProviderThreadId.make("command-watch-provider-thread");
   const providerSessionId = ProviderSessionId.make("command-watch-provider-session");
   const runId = RunId.make("command-watch-run");
-  const idle = { runs: [], providerThreads: [], providerSessions: [] };
+  const idle = {
+    runs: [],
+    messages: [],
+    providerTurns: [],
+    providerThreads: [],
+    providerSessions: [],
+  };
   const running = {
-    runs: [{ id: runId, status: "running", providerThreadId }],
+    runs: [{ id: runId, status: "running", providerThreadId, activeAttemptId: "attempt" }],
+    messages: [],
+    providerTurns: [{ runAttemptId: "attempt", status: "running" }],
     providerThreads: [{ id: providerThreadId, providerSessionId }],
     providerSessions: [{ id: providerSessionId, capabilities: CodexProviderCapabilitiesV2 }],
   };

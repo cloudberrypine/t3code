@@ -1,35 +1,59 @@
-import type { PullRequestAction } from "@t3tools/contracts";
-import { Effect } from "effect";
-import { AtomRegistry } from "effect/unstable/reactivity";
-import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { pullRequestEnvironment, pullRequestStackAtom } from "~/state/pullRequests";
+import { useAtomValue } from "@effect/atom-react";
+import type { PullRequestAction, PullRequestSummary } from "@t3tools/contracts";
+import { msg, useGT, useMessages } from "gt-react";
+import { createContext, use, type ReactNode } from "react";
+import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
+
+import { m } from "~/i18n/messages";
+import { useShortcutModifierState } from "~/shortcutModifierState";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useUiStateStore } from "~/uiStateStore";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { resolvePullRequestMergeMethod } from "./pullRequestDetail.logic";
 import { PullRequestGlyph } from "./pullRequestIcons";
-import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
+import { pullRequestQuickActions, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import {
   usePullRequestActionRunner,
   usePullRequestDefaultMergeMethodResolver,
 } from "./usePullRequestActions";
 
-export interface PullRequestSpeedActionResult {
-  readonly entry: EnvironmentPullRequestEntry;
+import { changeRequestTermKind } from "./changeRequestTerm";
+
+type PullRequestSpeedActionEntry = Pick<
+  EnvironmentPullRequestEntry,
+  "environmentId" | "projectId" | "host" | "repository" | "number" | "state" | "isDraft"
+> & { readonly stack?: object | undefined };
+
+export interface PullRequestSpeedActionResult<Entry = EnvironmentPullRequestEntry> {
+  readonly entry: Entry;
   readonly action: PullRequestAction;
+  readonly reply?: PullRequestSummary | undefined;
 }
 
-/** No detail or stack reads until a merge is clicked, even on a long list. */
-export function PullRequestSpeedActions({
+export function PullRequestSpeedActions<Entry extends PullRequestSpeedActionEntry>({
   entry,
-  visible,
+  hostActions,
+  terminology,
   onActed,
+  closing = false,
+  sweeping = false,
+  onCloseSweepStart,
 }: {
-  entry: EnvironmentPullRequestEntry;
-  visible: boolean;
-  onActed: (result: PullRequestSpeedActionResult) => void;
+  entry: Entry;
+  hostActions: ReadonlySet<PullRequestAction>;
+  terminology: ChangeRequestTerminology;
+  onActed?: (result: PullRequestSpeedActionResult<Entry>) => void;
+  closing?: boolean;
+  sweeping?: boolean;
+  onCloseSweepStart?: (entry: Entry, event: PointerEvent) => void;
 }) {
+  const gt = useGT();
+  const resolve = useMessages();
+  const canWrite = useAtomValue(
+    pullRequestEnvironment.runAction.permissionAtom(entry.environmentId),
+  );
   const resolveProjectDefault = usePullRequestDefaultMergeMethodResolver(
     entry.environmentId,
     entry.projectId,
@@ -43,38 +67,14 @@ export function PullRequestSpeedActions({
   const { actionPending, perform } = usePullRequestActionRunner({
     environmentId: entry.environmentId,
     reference,
-    onSuccess: (action) => onActed({ entry, action }),
-    resolveMergeMethod: async () => {
-      const target = { environmentId: entry.environmentId, input: reference };
-      const detailAtom = pullRequestEnvironment.detail({
-        ...target,
-        input: { ...reference, allowStale: false },
-      });
-      appAtomRegistry.refresh(detailAtom);
-      const detail = await Effect.runPromise(
-        AtomRegistry.getResult(appAtomRegistry, detailAtom, { suspendOnWaiting: true }),
-      );
-      if (
-        detail.state !== "open" ||
-        detail.isDraft ||
-        !detail.capabilities.actions.includes("merge") ||
-        !detail.viewerPermissions.actions.includes("merge")
-      ) {
-        throw new Error("This pull request cannot be merged.");
-      }
-      if (detail.capabilities.stackActions) {
-        const stackAtom = pullRequestStackAtom(target);
-        appAtomRegistry.refresh(stackAtom);
-        const stack = await Effect.runPromise(
-          AtomRegistry.getResult(appAtomRegistry, stackAtom, { suspendOnWaiting: true }),
-        );
-        if (stack !== null) throw new Error("Open this pull request to merge its stack.");
-      }
+    terminology,
+    onSuccess: (action, reply) => onActed?.({ entry, action, reply }),
+    resolveMergeMethod: (detail) => {
       const allowed = detail.capabilities.mergeMethods.filter(
         (method) => detail.mergeCapabilities[method],
       );
       if (allowed.length === 0)
-        throw new Error("No merge method is available for this repository.");
+        throw new Error(m(msg("No merge method is available for this repository.")));
       return resolvePullRequestMergeMethod(
         allowed,
         null,
@@ -83,21 +83,23 @@ export function PullRequestSpeedActions({
       );
     },
   });
-  const actions =
-    entry.state === "closed"
-      ? (["reopen"] as const)
-      : entry.isDraft
-        ? (["close", "ready"] as const)
-        : (["close", "merge"] as const);
+  const actions = pullRequestQuickActions(entry, hostActions);
+  const busy = actionPending || closing || sweeping;
+  if (actions.length === 0) return null;
   return (
-    <div
-      className="shrink-0 items-center gap-1 pr-3"
-      style={{ display: visible || actionPending ? "flex" : "none" }}
-      role="group"
-      aria-label={`Quick actions for pull request #${entry.number}`}
+    <SpeedModeGroup
+      busy={busy}
+      pending={actionPending || closing}
+      label={gt(
+        "Quick actions for {term, select, mr {merge request} cr {change request} other {pull request}} #{number}",
+        {
+          term: changeRequestTermKind(terminology),
+          number: entry.number,
+        },
+      )}
     >
       {actions.map((action) => {
-        const label = ACTIONS[action].label;
+        const label = resolve(ACTIONS[action].label);
         const Icon = ACTIONS[action].Icon;
         return (
           <Tooltip key={action}>
@@ -106,30 +108,99 @@ export function PullRequestSpeedActions({
                 <Button
                   variant={action === "close" ? "destructive-outline" : "outline"}
                   size="xs"
-                  disabled={actionPending || (action === "merge" && entry.stack !== undefined)}
-                  aria-label={`${label} #${entry.number}`}
+                  disabled={!canWrite || busy || (action === "merge" && entry.stack !== undefined)}
+                  aria-label={resolve(ACTIONS[action].numbered, { number: entry.number })}
                   onClick={() => void perform(action)}
+                  onPointerDown={(event) => {
+                    if (action !== "close" || !event.isPrimary || event.button !== 0) return;
+                    event.stopPropagation();
+                    onCloseSweepStart?.(entry, event.nativeEvent);
+                  }}
                 />
               }
             >
-              {actionPending ? <Spinner size="xs" /> : <Icon aria-hidden className="size-3" />}
+              {busy ? <Spinner size="xs" /> : <Icon aria-hidden className="size-3" />}
               {label}
             </TooltipTrigger>
             <TooltipPopup>
               {action === "merge" && entry.stack
-                ? "Open this pull request to merge its stack"
-                : `${label} immediately`}
+                ? gt(
+                    "Open this {term, select, mr {merge request} cr {change request} other {pull request}} to merge its stack",
+                    { term: changeRequestTermKind(terminology) },
+                  )
+                : action === "close" && onCloseSweepStart
+                  ? gt("Close immediately, or drag across rows to close several")
+                  : resolve(ACTIONS[action].immediate)}
             </TooltipPopup>
           </Tooltip>
         );
       })}
+    </SpeedModeGroup>
+  );
+}
+
+/**
+ * Whether Shift is held, as context rather than a row prop: a Shift press then re-renders each
+ * row's action group, not the rows or their buttons, in one commit.
+ */
+export const PullRequestSpeedModeContext = createContext(false);
+
+/** Tracks Shift for the quick actions below it. */
+export function PullRequestSpeedModeProvider({ children }: { children: ReactNode }) {
+  const modifiers = useShortcutModifierState(true);
+  const speedMode =
+    modifiers.shiftKey && !modifiers.metaKey && !modifiers.ctrlKey && !modifiers.altKey;
+  return <PullRequestSpeedModeContext value={speedMode}>{children}</PullRequestSpeedModeContext>;
+}
+
+function SpeedModeGroup({
+  busy,
+  pending,
+  label,
+  children,
+}: {
+  busy: boolean;
+  pending: boolean;
+  label: string;
+  children: ReactNode;
+}) {
+  const speedMode = use(PullRequestSpeedModeContext);
+  return (
+    <div
+      className="shrink-0 items-center gap-1 pr-3"
+      style={{ display: speedMode || busy ? "flex" : "none" }}
+      role="group"
+      aria-label={label}
+      data-pull-request-action-pending={pending}
+    >
+      {children}
     </div>
   );
 }
 
 const ACTIONS = {
-  close: { label: "Close", Icon: PullRequestGlyph.closed },
-  merge: { label: "Merge", Icon: PullRequestGlyph.merged },
-  ready: { label: "Ready for review", Icon: PullRequestGlyph.pullRequest },
-  reopen: { label: "Reopen", Icon: PullRequestGlyph.reopen },
+  close: {
+    label: msg("Close", { $context: "verb, close a pull request" }),
+    numbered: msg("Close #{number}"),
+    immediate: msg("Close immediately"),
+    Icon: PullRequestGlyph.closed,
+  },
+  merge: {
+    label: msg("Merge", { $context: "verb, merge a pull request" }),
+    numbered: msg("Merge #{number}"),
+    immediate: msg("Merge immediately"),
+    Icon: PullRequestGlyph.merged,
+  },
+  ready: {
+    label: msg("Ready for review"),
+    numbered: msg("Ready for review #{number}"),
+    immediate: msg("Ready for review immediately"),
+    Icon: PullRequestGlyph.pullRequest,
+  },
+  reopen: {
+    label: msg("Reopen"),
+    numbered: msg("Reopen #{number}"),
+    immediate: msg("Reopen immediately"),
+    Icon: PullRequestGlyph.reopen,
+  },
 } as const;

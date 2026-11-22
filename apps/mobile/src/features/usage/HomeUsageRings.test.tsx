@@ -26,9 +26,9 @@ vi.mock("react-native-svg", () => ({ default: "svg", Circle: "circle" }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 50, bottom: 34 }),
 }));
-vi.mock("../../components/AppText", () => ({ AppText: "text" }));
+vi.mock("../../components/ui/AppText", () => ({ AppText: "text" }));
 vi.mock("../../state/presentation", () => ({
-  environmentPresentations: { presentationsAtom: null },
+  environmentPresentations: { presentationsWithProvidersAtom: null },
 }));
 vi.mock("./UsageLimitsSection", () => ({ AccountLimits: "account" }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({

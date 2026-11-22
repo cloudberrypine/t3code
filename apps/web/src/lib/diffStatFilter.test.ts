@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { getDiffStatTotals } from "./diffStatFilter";
+import { getDiffStatTotals, getFilteredDiffStat } from "./diffStatFilter";
 
 const files = Object.freeze([
   Object.freeze({ path: "src/app.ts", additions: 300, deletions: 200 }),
@@ -104,5 +104,30 @@ describe("getDiffStatTotals", () => {
       full: { additions: 3, deletions: 6 },
       filtered: undefined,
     });
+  });
+});
+
+describe("getFilteredDiffStat", () => {
+  it("subtracts only matched listed files from totals that include unlisted ones", () => {
+    expect(
+      getFilteredDiffStat(
+        { additions: 100, deletions: 20 },
+        [
+          { path: "assets/meshes/a.json", additions: 30, deletions: 5 },
+          { path: "src/a.ts", additions: 10, deletions: 1 },
+        ],
+        "assets/meshes/\n",
+      ),
+    ).toEqual({ additions: 70, deletions: 15 });
+  });
+
+  it("is absent when nothing matches", () => {
+    expect(
+      getFilteredDiffStat(
+        { additions: 1, deletions: 0 },
+        [{ path: "src/a.ts", additions: 1, deletions: 0 }],
+        "assets/\n",
+      ),
+    ).toBeUndefined();
   });
 });

@@ -17,8 +17,8 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 /** Output up to this many UTF-16 code units stays inline in the item. */
 export const TOOL_OUTPUT_INLINE_CHARS = 4_096;
@@ -28,23 +28,24 @@ export const TOOL_OUTPUT_PREVIEW_TAIL_CHARS = 512;
 export const TOOL_OUTPUT_FAILURE_SCAN_CHARS = 32_768;
 const RESTORE_CHUNK = 500;
 
-export const ensureToolOutputSchema = (sql: SqlClient.SqlClient) =>
-  Effect.gen(function* () {
-    // Not a numbered migration: fork migration ids would collide with upstream's.
-    yield* sql`
+export const ensureToolOutputSchema = Effect.fn("ensureToolOutputSchema")(function* (
+  sql: SqlClient.SqlClient,
+) {
+  // Not a numbered migration: fork migration ids would collide with upstream's.
+  yield* sql`
       CREATE TABLE IF NOT EXISTS tool_outputs (
         output_id TEXT PRIMARY KEY,
         output_json TEXT NOT NULL
       )
     `;
-    yield* sql`
+  yield* sql`
       CREATE TABLE IF NOT EXISTS tool_output_backfill (
         source TEXT PRIMARY KEY,
         last_cursor INTEGER NOT NULL,
         completed_at TEXT
       )
     `;
-  });
+});
 
 /** An output as stored: its JSON, which keeps NULs and lone surrogates intact. */
 interface StoredToolOutput {
@@ -201,35 +202,33 @@ function outputRefOf(item: OrchestrationV2TurnItem): OrchestrationV2ToolOutputRe
  * Restores the full output of items that reference one. An item whose output
  * is missing (a database copied without the table) keeps its preview.
  */
-export const restoreToolOutputs = <T extends OrchestrationV2TurnItem>(
-  sql: SqlClient.SqlClient,
-  items: ReadonlyArray<T>,
-) =>
-  Effect.gen(function* () {
-    const ids = [...new Set(items.flatMap((item) => outputRefOf(item)?.id ?? []))];
-    if (ids.length === 0) return items;
-    const outputs = new Map<string, string>();
-    for (let start = 0; start < ids.length; start += RESTORE_CHUNK) {
-      const rows = yield* sql<{ readonly output_id: string; readonly output_json: string }>`
+export const restoreToolOutputs = Effect.fn("restoreToolOutputs")(function* <
+  T extends OrchestrationV2TurnItem,
+>(sql: SqlClient.SqlClient, items: ReadonlyArray<T>) {
+  const ids = [...new Set(items.flatMap((item) => outputRefOf(item)?.id ?? []))];
+  if (ids.length === 0) return items;
+  const outputs = new Map<string, string>();
+  for (let start = 0; start < ids.length; start += RESTORE_CHUNK) {
+    const rows = yield* sql<{ readonly output_id: string; readonly output_json: string }>`
         SELECT output_id, output_json FROM tool_outputs
         WHERE output_id IN ${sql.in(ids.slice(start, start + RESTORE_CHUNK))}
       `;
-      for (const row of rows) outputs.set(row.output_id, row.output_json);
-    }
-    const missing = ids.filter((id) => !outputs.has(id));
-    if (missing.length > 0) {
-      yield* Effect.logWarning("Stored tool output is missing; items keep their previews", {
-        missing: missing.length,
-        firstId: missing[0],
-      });
-    }
-    return items.map((item) => {
-      const id = outputRefOf(item)?.id;
-      const json = id === undefined ? undefined : outputs.get(id);
-      // withOutput keeps the item's variant, so the element type is unchanged.
-      return json === undefined ? item : (withOutput(item, json) as T);
+    for (const row of rows) outputs.set(row.output_id, row.output_json);
+  }
+  const missing = ids.filter((id) => !outputs.has(id));
+  if (missing.length > 0) {
+    yield* Effect.logWarning("Stored tool output is missing; items keep their previews", {
+      missing: missing.length,
+      firstId: missing[0],
     });
+  }
+  return items.map((item) => {
+    const id = outputRefOf(item)?.id;
+    const json = id === undefined ? undefined : outputs.get(id);
+    // withOutput keeps the item's variant, so the element type is unchanged.
+    return json === undefined ? item : (withOutput(item, json) as T);
   });
+});
 
 // ---------------------------------------------------------------------------
 // Backfill of rows written before the store existed.
@@ -367,96 +366,95 @@ export interface ToolOutputBackfillResult {
  * the work resumes where it stopped after a restart. Rows written by this
  * build already hold references and are skipped.
  */
-export const backfillToolOutputs = (
+export const backfillToolOutputs = Effect.fn("backfillToolOutputs")(function* (
   sql: SqlClient.SqlClient,
   options: ToolOutputBackfillOptions = {},
-) =>
-  Effect.gen(function* () {
-    const batchRows = options.batchRows ?? 32;
-    const batchBytes = options.batchBytes ?? 2 * 1024 * 1024;
-    const scanWindow = options.scanWindow ?? 5_000;
-    const pause = options.pause ?? Duration.millis(25);
-    let batches = 0;
-    let rewritten = 0;
-    for (const source of BACKFILL_SOURCES) {
-      const state = yield* sql<{
-        readonly last_cursor: number;
-        readonly completed_at: string | null;
-      }>`
+) {
+  const batchRows = options.batchRows ?? 32;
+  const batchBytes = options.batchBytes ?? 2 * 1024 * 1024;
+  const scanWindow = options.scanWindow ?? 5_000;
+  const pause = options.pause ?? Duration.millis(25);
+  let batches = 0;
+  let rewritten = 0;
+  for (const source of BACKFILL_SOURCES) {
+    const state = yield* sql<{
+      readonly last_cursor: number;
+      readonly completed_at: string | null;
+    }>`
         SELECT last_cursor, completed_at FROM tool_output_backfill WHERE source = ${source.name}
       `;
-      if (state[0]?.completed_at != null) continue;
-      while (true) {
-        if (options.maxBatches !== undefined && batches >= options.maxBatches) {
-          return { batches, rewritten, complete: false } satisfies ToolOutputBackfillResult;
-        }
-        // Plan outside the transaction: parsing, hashing and the byte-exact
-        // check of a large row must not hold the only connection.
-        const progress = yield* sql<{ readonly last_cursor: number }>`
+    if (state[0]?.completed_at != null) continue;
+    while (true) {
+      if (options.maxBatches !== undefined && batches >= options.maxBatches) {
+        return { batches, rewritten, complete: false } satisfies ToolOutputBackfillResult;
+      }
+      // Plan outside the transaction: parsing, hashing and the byte-exact
+      // check of a large row must not hold the only connection.
+      const progress = yield* sql<{ readonly last_cursor: number }>`
           SELECT last_cursor FROM tool_output_backfill WHERE source = ${source.name}
         `;
-        const after = progress[0]?.last_cursor ?? 0;
-        const max = (yield* source.maxCursor(sql))[0]?.max ?? 0;
-        const through = Math.min(max, after + scanWindow);
-        const candidates = yield* source.candidates(sql, after, through, batchRows);
-        let next = candidates.length === batchRows ? candidates.at(-1)!.cursor : through;
-        let bytes = 0;
-        const rewrites: Array<{
-          readonly cursor: number;
-          readonly before: string;
-          readonly payload: string;
-          readonly stored: StoredToolOutput;
-        }> = [];
-        for (const candidate of candidates) {
-          if (bytes > 0 && bytes + candidate.bytes > batchBytes) {
-            next = candidate.cursor - 1;
-            break;
-          }
-          bytes += candidate.bytes;
-          const row = (yield* source.payload(sql, candidate.cursor))[0];
-          const rewrite = row === undefined ? undefined : externalizePayloadJson(row.payload_json);
-          if (row !== undefined && rewrite !== undefined) {
-            rewrites.push({ cursor: candidate.cursor, before: row.payload_json, ...rewrite });
-          }
+      const after = progress[0]?.last_cursor ?? 0;
+      const max = (yield* source.maxCursor(sql))[0]?.max ?? 0;
+      const through = Math.min(max, after + scanWindow);
+      const candidates = yield* source.candidates(sql, after, through, batchRows);
+      let next = candidates.length === batchRows ? candidates.at(-1)!.cursor : through;
+      let bytes = 0;
+      const rewrites: Array<{
+        readonly cursor: number;
+        readonly before: string;
+        readonly payload: string;
+        readonly stored: StoredToolOutput;
+      }> = [];
+      for (const candidate of candidates) {
+        if (bytes > 0 && bytes + candidate.bytes > batchBytes) {
+          next = candidate.cursor - 1;
+          break;
         }
-        const complete = next >= max;
-        yield* sql.withTransaction(
-          Effect.gen(function* () {
-            for (const rewrite of rewrites) {
-              yield* saveToolOutput(sql, rewrite.stored);
-              // Rewrite the row only once its full output reads back complete.
-              const saved = yield* sql<{ readonly bytes: number }>`
+        bytes += candidate.bytes;
+        const row = (yield* source.payload(sql, candidate.cursor))[0];
+        const rewrite = row === undefined ? undefined : externalizePayloadJson(row.payload_json);
+        if (row !== undefined && rewrite !== undefined) {
+          rewrites.push({ cursor: candidate.cursor, before: row.payload_json, ...rewrite });
+        }
+      }
+      const complete = next >= max;
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          for (const rewrite of rewrites) {
+            yield* saveToolOutput(sql, rewrite.stored);
+            // Rewrite the row only once its full output reads back complete.
+            const saved = yield* sql<{ readonly bytes: number }>`
                 SELECT octet_length(output_json) AS bytes FROM tool_outputs
                 WHERE output_id = ${rewrite.stored.id}
               `;
-              if (saved[0]?.bytes !== Buffer.byteLength(rewrite.stored.json, "utf8")) continue;
-              // A row changed since planning keeps its new content.
-              const updated = yield* source.update(
-                sql,
-                rewrite.cursor,
-                rewrite.before,
-                rewrite.payload,
-              );
-              rewritten += updated.length;
-            }
-            const now = DateTime.formatIso(yield* DateTime.now);
-            yield* sql`
+            if (saved[0]?.bytes !== Buffer.byteLength(rewrite.stored.json, "utf8")) continue;
+            // A row changed since planning keeps its new content.
+            const updated = yield* source.update(
+              sql,
+              rewrite.cursor,
+              rewrite.before,
+              rewrite.payload,
+            );
+            rewritten += updated.length;
+          }
+          const now = DateTime.formatIso(yield* DateTime.now);
+          yield* sql`
               INSERT INTO tool_output_backfill (source, last_cursor, completed_at)
               VALUES (${source.name}, ${next}, ${complete ? now : null})
               ON CONFLICT(source) DO UPDATE SET
                 last_cursor = excluded.last_cursor,
                 completed_at = excluded.completed_at
             `;
-          }),
-        );
-        const done = complete;
-        batches += 1;
-        if (done) break;
-        yield* Effect.sleep(pause);
-      }
+        }),
+      );
+      const done = complete;
+      batches += 1;
+      if (done) break;
+      yield* Effect.sleep(pause);
     }
-    return { batches, rewritten, complete: true } satisfies ToolOutputBackfillResult;
-  });
+  }
+  return { batches, rewritten, complete: true } satisfies ToolOutputBackfillResult;
+});
 
 /** The server's background backfill. A failed pass (a busy database) retries later. */
 export const runToolOutputBackfill = Effect.gen(function* () {

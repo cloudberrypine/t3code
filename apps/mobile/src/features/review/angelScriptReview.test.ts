@@ -8,9 +8,7 @@ it.each([
   { name: "deadline waits", old: "WaitUntil(1);", next: "WaitUntil(2);" },
 ])("marks $name on both diff sides while preserving add/delete markers", ({ old, next }) => {
   const data: NativeReviewDiffData = {
-    files: [
-      { id: "script", path: "test.as", language: "diff", additions: 1, deletions: 1, loaded: true },
-    ],
+    files: [{ id: "script", path: "test.as", language: "diff", additions: 1, deletions: 1 }],
     rows: [
       {
         kind: "line",
@@ -45,13 +43,13 @@ it.each([
   };
   const api = parseAngelScriptApi("class Shot { void wait(float); /** await */ }");
   const result = prepareAngelScriptReview(data, api, "dark");
-  expect(result.data.files[0]!.language).toBe("angelscript");
+  expect(result.data.files[0]!.language).toBe("cpp");
   expect(result.data.rows.slice(1).map((row) => [row.change, row.awaitBackground])).toEqual([
     ["delete", "#343225"],
     ["add", "#343225"],
   ]);
   const withoutApi = prepareAngelScriptReview(data, null, "dark");
-  expect(withoutApi.data.files[0]!.language).toBe("angelscript");
+  expect(withoutApi.data.files[0]!.language).toBe("cpp");
   expect(withoutApi.data.rows).toBe(data.rows);
   expect(withoutApi.semantics.size).toBe(0);
 });
@@ -71,7 +69,6 @@ it("uses implicit native getters and HSM calls in mobile diff highlighting", () 
         language: "diff",
         additions: 0,
         deletions: 0,
-        loaded: true,
       },
     ],
     rows: contents.map((content, i) => ({
@@ -116,7 +113,6 @@ it("highlights sparse native diff rows using their own complete revisions", asyn
         language: "diff",
         additions: 1,
         deletions: 1,
-        loaded: true,
       },
     ],
     rows: [

@@ -1,11 +1,13 @@
 import Constants from "expo-constants";
-import { PolyWordmark } from "./PolyWordmark";
-import { resolveMobileStageLabel } from "../lib/mobileBranding";
+import { T } from "gt-react-native";
 import { View } from "react-native";
 
-import { AppText as Text } from "./AppText";
+import { PolyWordmark } from "./PolyWordmark";
+import { resolveMobileStageLabel } from "../lib/mobileBranding";
+import { AppText as Text } from "./ui/AppText";
 
 const appVariant = Constants.expoConfig?.extra?.appVariant;
+// PolyCode: production builds show no stage badge; Dev and Nightly keep theirs.
 const DEFAULT_STAGE_LABEL = resolveMobileStageLabel(appVariant);
 
 export function BrandMark(props: { readonly compact?: boolean; readonly stageLabel?: string }) {
@@ -27,7 +29,7 @@ export function BrandMark(props: { readonly compact?: boolean; readonly stageLab
         </View>
         {!compact ? (
           <Text className="text-xs font-medium text-foreground-muted">
-            Mobile control surface for your live coding environments
+            <T>Mobile control surface for your live coding environments</T>
           </Text>
         ) : null}
       </View>

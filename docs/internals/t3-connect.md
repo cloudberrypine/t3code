@@ -4,6 +4,39 @@ T3 Connect uses Clerk for cloud identity. The relay manages environment links,
 credentials for reaching environments, and managed tunnel allocations. After
 bootstrap, clients send application traffic through the environment's tunnel
 hostname; the relay Worker does not proxy their HTTP or WebSocket sessions.
+The one exception is automation webhooks: the relay forwards
+`/v1/hooks/:endpointKey/:hookId/:token` to the environment's tunnel so
+senders get a stable URL. `endpointKey` is the 16-hex hash suffix of the
+managed tunnel's name, not the environment id. It keeps bodies and tokens out
+of its traces and leaves token and signature verification to the environment
+([forwarder](../../infra/relay/src/hooks/HookForwarder.ts)).
+
+By default the forwarder stores nothing. An environment can opt in to having
+the relay hold requests while it is offline
+(`hold_webhooks_while_offline` on its links). Only then does the relay store the
+raw request, including the hook token in the path, in a Durable Object with
+SQLite storage. There is one object per managed link, keyed by its endpoint
+key: each account that links the environment gets its own held requests,
+order, and caps. The object pushes held requests back through the tunnel from
+its alarm, oldest first within each hook, and backs off while the environment
+stays away. A hook that answers busy is skipped for the rest of that run, so
+other hooks on the link can overtake it. When
+the tunnel reconnects, the environment asks the relay to deliver right away to
+each of its links. Requests are deleted once the environment answers, after 24
+hours, when their link is unlinked, or when the environment turns holding off,
+which clears every link it proved. Both clears are best effort: unlinking logs a
+failed clear and continues, and turning holding off stops at the first link it
+cannot clear, so those requests wait for the 24-hour expiry. The relay still
+never checks the token;
+delivery goes through the same environment route.
+Every forward carries `x-t3-relay-delivery-id`, so a request that reached the
+environment before a timeout and is delivered again later runs once
+([inbox object](../../infra/relay/src/hooks/HookInboxObject.ts)).
+
+A Durable Object, not Postgres or Queues, because held requests are write-once,
+read-once bodies of up to 1 MiB that need per-link order, caps, and retry
+timing. Queues cap messages at 128 KB and cannot hold one link's requests back
+while its environment is away.
 
 Clerk, deployment, and native authentication setup live in the
 [Connect setup runbook](../operations/connect-setup.md).
@@ -24,16 +57,41 @@ mint responses also bind the credential to the client proof key. The relay
 verifies those bindings before returning a credential. This prevents a different
 process behind the tunnel from impersonating the linked environment. The checks
 meet in the
-[environment cloud handlers](../../apps/server/src/cloud/http.ts) and
+[environment link service](../../apps/server/src/cloud/CloudLink.ts) and
 [relay connector](../../infra/relay/src/environments/EnvironmentConnector.ts).
 
 The relay holds the signing authority for mint requests. DPoP protects an honest
 exchange from credential reuse; it does not make a compromised relay signing
 key harmless. Keep that trust assumption explicit when changing the protocol.
 
-Managed tunnels expose only a validated loopback HTTP origin. Link proof checks
-reject forwarded authority headers, and the relay resolves endpoints from its
-own managed allocations rather than a caller-supplied URL. Health and mint
+Device approval, off by default, limits what that authority buys. With
+`requireConnectDeviceApproval` on, the environment trusts T3 Connect device
+keys, meaning DPoP thumbprints, and not the relay. A mint for an untrusted key
+still succeeds, so the relay protocol does not change. The credential it returns
+cannot be spent until someone with `access:write` on the environment approves
+that key, so a forged mint yields a request that waits for approval, never a
+session. The waiting device retries the whole mint, and the environment hands
+back the same open request, so approvers see one entry with a stable code
+derived from the thumbprint. Approval is per key and does not expire. It ends
+only when the key is revoked. Revoking a session bound to a key revokes the key,
+all its sessions, and its unspent credentials, unless the caller's own session
+holds the same key; otherwise the device would mint itself a new session within
+seconds. While approval is off, every key that completes an
+exchange is recorded as trusted. Turning approval on therefore keeps current
+devices working and lists them for review, including any that got in before.
+See `issueConnectCredential` in the
+[environment auth service](../../apps/server/src/auth/EnvironmentAuth.ts).
+
+Managed tunnels expose only this server's own loopback HTTP origin. The link
+proof signs that origin from the server's listening address and ignores the
+caller's, so any client holding `relay:configure`, local or remote, can link
+without being able to point the tunnel at another service on the host. The
+relay refuses to relink an active environment id under a different key: an
+account bearer alone would otherwise take over that environment's tunnel and
+trusted key with an origin it signed itself. Unlinking first releases the
+tunnel. The
+relay resolves endpoints from its own managed allocations rather than a
+caller-supplied URL. Health and mint
 requests must not follow redirects. These restrictions keep endpoint discovery
 from turning into arbitrary relay egress or exposing another service on the
 environment host.
@@ -56,7 +114,7 @@ Two cases must retain the tunnel across shutdown. A link installed through a
 client has no startup provisioning path and depends on its stored connector
 token. An update handoff immediately starts a replacement server, and replacing
 the tunnel would add routing propagation delay to every update. These exceptions
-belong to [shutdown handling](../../apps/server/src/cloud/http.ts).
+belong to [shutdown handling](../../apps/server/src/cloud/CloudLink.ts).
 
 Release and unlink claim the allocation generation before deleting external
 resources. A delayed cleanup must not delete a tunnel reused by a concurrent
@@ -105,6 +163,48 @@ provisions under the same allocation, so the hostname and DNS record survive
 and clients keep their bindings. Every mutation on an allocation bumps its
 `generation`, and deletion locks the row at the generation it claimed, so a
 host that reconnects mid-sweep wins.
+
+## A paid T3 Chat plan raises the tunnel cap
+
+T3 Chat uses WorkOS, not Clerk, so the two accounts are linked by consent
+rather than by a shared identity. The relay and T3 Chat share one secret
+(`T3CHAT_LINK_SECRET` here, `T3CODE_LINK_SECRET` there). The relay signs a
+short-lived token naming the Clerk user and email; the user confirms it while
+signed in to T3 Chat, and T3 Chat stores the link. T3 Chat owns the link and the
+plan, so the relay keeps no copy. It asks T3 Chat only when an account reaches
+its normal cap for a new environment, and any failure keeps the normal cap.
+An environment that already holds a counted slot restarts without asking, so a
+downgrade or a T3 Chat outage only blocks new environments. A manual override
+row replaces the default for new environments, and a T3 Chat plan does not
+raise it
+([limits](../../infra/relay/src/environments/ManagedTunnelLimits.ts)).
+
+## The relay client follows the server's pin
+
+The host runs `cloudflared` pinned by `CLOUDFLARED_VERSION` in
+[`relayClient.ts`](../../packages/shared/src/relayClient.ts), and bumping it there
+(version, URLs, and checksums) is the whole release step. A linked host that
+starts a server with a new pin keeps its connector up on the newest older managed
+release, installs the pinned one in the background, then starts a second
+connector on it for the same tunnel. The old connector stops only after the new
+one registers, so the swap never takes the host off the relay. If the new one
+fails to spawn, the old one keeps serving and the install retries later. A host
+with no relay client installs one first. A `cloudflared` on `PATH` or an explicit `T3CODE_CLOUDFLARED_PATH` is the
+user's choice and is never replaced, since linking asks before downloading.
+
+Once the pinned release registers a connection, managed releases older than the
+pin are deleted except the newest of them. That one, and any newer release, can
+belong to another server sharing the same T3 home, such as a rollback after a
+failed update, which could not run again without it.
+
+The version comes from running `cloudflared version`, not from the folder name.
+Connectors from before `--no-autoupdate` replaced themselves in place, so a
+managed folder can hold another release. Such a binary still runs as a fallback
+while the pin installs. Every binary needs `CLOUDFLARED_MIN_VERSION`, the oldest
+release that accepts every flag the connector is started with and rejects the
+compromised eMudhra intermediates. No binary below it runs, even as a fallback,
+so a host without an eligible one stays off the relay until it has one. Raise it
+whenever a new flag or security fix needs it.
 
 ## OAuth traps
 

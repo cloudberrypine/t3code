@@ -114,6 +114,7 @@ describe("sidebar limit accessible tooltip summary", () => {
         {
           entry: { target: { label: "Primary" } },
           serverConfig: {
+            providers: [],
             usageLimitSources: [
               {
                 id: UsageLimitSourceId.make("hub"),

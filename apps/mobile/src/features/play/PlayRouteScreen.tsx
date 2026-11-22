@@ -17,8 +17,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { WebView } from "react-native-webview";
 
-import { SymbolView } from "../../components/AppSymbol";
-import { AppText } from "../../components/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { AppText } from "../../components/ui/AppText";
 import { environmentSession, usePreparedConnection } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { mintPlayTicketCommand, usePlayEnvironments } from "./playEnvironments";

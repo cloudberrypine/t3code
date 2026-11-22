@@ -3,7 +3,7 @@ import { parsePolyzoniaMesh } from "@t3tools/client-runtime/polyzonia-mesh";
 import { useMemo } from "react";
 import { ActivityIndicator, Pressable, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironmentQuery } from "../../state/query";
 import { projectEnvironment } from "../../state/projects";
 import { PolyzoniaMeshPreview } from "../files/PolyzoniaMeshPreview";

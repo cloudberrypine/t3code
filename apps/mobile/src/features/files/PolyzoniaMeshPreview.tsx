@@ -16,7 +16,7 @@ import {
   type MeshPoint,
   type PolyzoniaMesh,
 } from "@t3tools/client-runtime/polyzonia-mesh";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 
 export function PolyzoniaMeshPreview({ mesh }: { mesh: PolyzoniaMesh }) {
   const animation = useMeshAnimation(mesh);

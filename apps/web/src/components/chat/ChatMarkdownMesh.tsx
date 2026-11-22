@@ -1,7 +1,7 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { parsePolyzoniaMesh } from "@t3tools/client-runtime/polyzonia-mesh";
 import { ExternalLinkIcon, TriangleAlertIcon } from "lucide-react";
-import { useMemo } from "react";
+import { T, useGT } from "gt-react";
 
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
@@ -46,6 +46,11 @@ export function markMeshEmbeds(node: HastNode) {
   node.children?.forEach(markMeshEmbeds);
 }
 
+/** The rehype step that runs `markMeshEmbeds` over a message. */
+export function rehypeMarkMeshEmbeds() {
+  return (tree: HastNode) => markMeshEmbeds(tree);
+}
+
 /**
  * Fork: a markdown image that points at a Polyzonia mesh JSON shows the file
  * preview's mesh viewer in the message. The file is read when shown, so the
@@ -60,13 +65,12 @@ export function ChatMarkdownMesh(props: {
   readonly copyMarkdown: string;
 }) {
   const file = useProjectFileQuery(props.threadRef.environmentId, props.cwd, props.path);
-  const mesh = useMemo(
-    () =>
-      file.data ? parsePolyzoniaMesh(props.path, file.data.contents, file.data.truncated) : null,
-    [file.data, props.path],
-  );
+  const gt = useGT();
+  const mesh = file.data
+    ? parsePolyzoniaMesh(props.path, file.data.contents, file.data.truncated)
+    : null;
   const loading = file.data === null && file.error === null;
-  const name = props.alt.trim() || props.path.split(/[\\/]/).pop() || "Mesh";
+  const name = props.alt.trim() || props.path.split(/[\\/]/).pop() || gt("Mesh");
   const openFile = () => useRightPanelStore.getState().openFile(props.threadRef, props.path);
 
   return (
@@ -78,7 +82,7 @@ export function ChatMarkdownMesh(props: {
         <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
         <Button size="xs" variant="ghost" onClick={openFile}>
           <ExternalLinkIcon />
-          Open
+          <T>Open</T>
         </Button>
       </div>
       {mesh ? (
@@ -95,12 +99,12 @@ export function ChatMarkdownMesh(props: {
           )}
         >
           {loading ? (
-            "Loading mesh…"
+            gt("Loading mesh…")
           ) : (
             <>
               <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
               {file.error ??
-                (file.data?.truncated ? "Mesh file is over 4 MB" : "Not a Polyzonia mesh")}
+                (file.data?.truncated ? gt("Mesh file is over 4 MB") : gt("Not a Polyzonia mesh"))}
             </>
           )}
         </div>

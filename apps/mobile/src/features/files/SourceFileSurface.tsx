@@ -1,35 +1,40 @@
 import {
   isAngelScriptPath,
-  usesAngelScript,
   angelScriptLineSemantics,
   colorAngelScriptTokens,
   angelScriptColors,
   type AngelScriptSemanticToken,
 } from "@t3tools/shared/angelscript";
 import { useAngelScript, type AngelScriptWorkspace } from "../../lib/useAngelScript";
+import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
+import { T, useGT } from "gt-react-native";
+import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import type { ComponentType } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
-  FlatList,
   Platform,
-  RefreshControl,
+  Pressable,
   ScrollView,
   Text as NativeText,
   useWindowDimensions,
   View,
 } from "react-native";
-
-import { AppText as Text } from "../../components/AppText";
-import { LoadingStrip } from "../../components/LoadingStrip";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
+import { RefreshControl } from "../../components/ui/RefreshControl";
+import { WebView } from "react-native-webview";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppText as Text } from "../../components/ui/AppText";
+import { LoadingStrip } from "../../components/ui/LoadingStrip";
+import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import {
   type NativeReviewDiffViewProps,
   resolveNativeReviewDiffView,
 } from "../diffs/nativeReviewDiffSurface";
 import { createNativeReviewDiffTheme } from "../review/nativeReviewDiffAdapter";
 import { REVIEW_MONO_FONT_FAMILY, renderVisibleWhitespace } from "../review/reviewDiffRendering";
-import type { ReviewHighlightedToken } from "../review/shikiReviewHighlighter";
+import type { HighlightedToken } from "../../lib/highlights";
 import { cn } from "../../lib/cn";
 import type { ResolvedMobileCodeSurface } from "../../lib/appearancePreferences";
 import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
@@ -41,7 +46,7 @@ import {
   NATIVE_SOURCE_CONTENT_WIDTH,
   nativeSourceRowId,
 } from "./nativeSourceFileAdapter";
-import { MarkdownTextPrimitive } from "@t3tools/mobile-markdown-text/primitive";
+import { SourceText } from "@t3tools/mobile-source-text";
 
 import type { ThreadId } from "@t3tools/contracts";
 import {
@@ -55,7 +60,12 @@ import {
   useSourceCodeNavigation,
   type SymbolHighlight,
 } from "../code-navigation/useSourceCodeNavigation";
-import { boundedSelectableSourceTokens, prepareSourceFileDocument } from "./source-file-document";
+
+import {
+  boundedSelectableSourceTokens,
+  prepareSourceFileDocument,
+  selectableSourceHtml,
+} from "./source-file-document";
 import { sourceHighlightAtom } from "./sourceHighlightingState";
 
 interface SourceFileSurfaceProps {
@@ -64,22 +74,24 @@ interface SourceFileSurfaceProps {
   readonly threadId?: ThreadId | null;
   readonly contents: string;
   readonly path: string;
+  readonly embedded?: boolean;
   readonly initialLine?: number | null;
-  /** Keep the entire document in one native text-selection scope. */
+  readonly headerInsetTop?: number;
   readonly selectable?: boolean;
-  /** Enables native pull-to-refresh on the source surface. */
+  readonly onLongPressLine?: (line: number) => void;
   readonly onRefresh?: () => Promise<void> | void;
 }
 
 type SourceHighlightStatus = "highlighting" | "ready" | "error";
 
-const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
+const HighlightedSourceLine = function HighlightedSourceLine(props: {
   readonly codeSurface: ResolvedMobileCodeSurface;
   readonly index: number;
   readonly line: string;
-  readonly tokens: ReadonlyArray<ReviewHighlightedToken> | null;
+  readonly tokens: ReadonlyArray<HighlightedToken> | null;
   readonly highlighted: boolean;
   readonly wordBreak: boolean;
+  readonly onLongPress?: () => void;
   readonly awaitBackground?: string | undefined;
   /** Followable symbols on this line; long-pressing one calls onLongPressSymbol. */
   readonly symbols?: ReadonlyArray<LineRange> | undefined;
@@ -88,8 +100,10 @@ const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
   readonly onLongPressSymbol?: ((index: number, offset: number) => void) | undefined;
   readonly onLongPressLineNumber?: ((index: number) => void) | undefined;
 }) {
+  const gt = useGT();
   const { index, onLongPressSymbol } = props;
-  return (
+  const selectable = props.onLongPress === undefined;
+  const row = (
     <View
       className={cn("flex-row", props.highlighted && "bg-primary/10")}
       style={{ minHeight: props.codeSurface.rowHeight, backgroundColor: props.awaitBackground }}
@@ -109,7 +123,7 @@ const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
         {props.index + 1}
       </NativeText>
       <NativeText
-        selectable
+        selectable={selectable}
         selectionColorClassName={Platform.OS === "android" ? "accent-focus/32" : undefined}
         numberOfLines={props.wordBreak ? undefined : 1}
         className="flex-1 font-normal text-foreground"
@@ -139,7 +153,7 @@ const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
               return (
                 <NativeText
                   key={`${start}:${token.content.length}`}
-                  selectable={range === null}
+                  selectable={selectable && range === null}
                   suppressHighlighting
                   onLongPress={range ? () => onLongPressSymbol(index, range.start) : undefined}
                   style={{
@@ -173,7 +187,7 @@ const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
                   return (
                     <NativeText
                       key={`${start}:${token.content.length}:${token.color ?? ""}`}
-                      selectable
+                      selectable={selectable}
                       selectionColorClassName={
                         Platform.OS === "android" ? "accent-focus/32" : undefined
                       }
@@ -193,67 +207,63 @@ const HighlightedSourceLine = memo(function HighlightedSourceLine(props: {
       </NativeText>
     </View>
   );
-});
+  const onLongPress = props.onLongPress;
+  return onLongPress ? (
+    <Pressable
+      onLongPress={onLongPress}
+      accessibilityActions={[{ name: "longpress", label: gt("Select text") }]}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === "longpress") onLongPress();
+      }}
+    >
+      {row}
+    </Pressable>
+  ) : (
+    row
+  );
+};
 
 function useSourceFileModel(props: SourceFileSurfaceProps) {
   const { themeAppearance: theme } = useAppearancePreferences();
-  const document = useMemo(() => prepareSourceFileDocument(props.contents), [props.contents]);
+  const document = prepareSourceFileDocument(props.contents);
   const { contents: normalizedContents, lines } = document;
+  // AngelScript tokenizes with the C++ lexer (resolveHighlightLanguage); its semantic colours,
+  // from the workspace's ScriptingAPI.as, are laid over those tokens.
   const api = useAngelScript(isAngelScriptPath(props.path) ? props.workspace : undefined);
-  const semantics = useMemo(
-    () =>
-      api
-        ? angelScriptLineSemantics(normalizedContents, api)
-        : new Map<number, AngelScriptSemanticToken[]>(),
-    [api, normalizedContents],
+  const semantics = api
+    ? angelScriptLineSemantics(normalizedContents, api)
+    : new Map<number, AngelScriptSemanticToken[]>();
+  const awaitLines = new Set(
+    [...semantics]
+      .filter(([, tokens]) => tokens.some((token) => token.kind === "await"))
+      .map(([line]) => line),
   );
-  const awaitLines = useMemo(
-    () =>
-      new Set(
-        [...semantics]
-          .filter(([, tokens]) => tokens.some((token) => token.kind === "await"))
-          .map(([line]) => line),
-      ),
-    [semantics],
-  );
-  const rowsJson = useMemo(
-    () =>
-      api
-        ? JSON.stringify(
-            buildNativeSourceRows(lines).map((row, index) =>
-              awaitLines.has(index + 1)
-                ? { ...row, awaitBackground: angelScriptColors[theme].background }
-                : row,
-            ),
-          )
-        : document.rowsJson,
-    [api, awaitLines, document.rowsJson, lines, theme],
-  );
+  const rowsJson = api
+    ? JSON.stringify(
+        buildNativeSourceRows(lines).map((row, index) =>
+          awaitLines.has(index + 1)
+            ? { ...row, awaitBackground: angelScriptColors[theme].background }
+            : row,
+        ),
+      )
+    : document.rowsJson;
   const targetIndex =
     props.initialLine !== null && props.initialLine !== undefined && props.initialLine > 0
       ? Math.min(Math.floor(props.initialLine) - 1, Math.max(0, lines.length - 1))
       : null;
-  const highlightAtom = useMemo(
-    () =>
-      sourceHighlightAtom({
-        path: props.path,
-        contents: normalizedContents,
-        theme,
-        ...(usesAngelScript(props.path, normalizedContents, api)
-          ? { language: "angelscript" }
-          : {}),
-      }),
-    [normalizedContents, props.path, theme, api],
-  );
+  const highlightAtom = sourceHighlightAtom({
+    path: props.path,
+    contents: normalizedContents,
+    theme,
+  });
   const highlightResult = useAtomValue(highlightAtom);
   const rawTokens = AsyncResult.isSuccess(highlightResult) ? highlightResult.value : null;
-  const tokens = useMemo(
-    () =>
-      rawTokens?.map((line, index) =>
-        colorAngelScriptTokens(line, semantics.get(index + 1) ?? [], theme),
-      ) ?? null,
-    [rawTokens, semantics, theme],
-  );
+  const tokens =
+    rawTokens && semantics.size > 0
+      ? rawTokens.map((line, index) =>
+          colorAngelScriptTokens(line, semantics.get(index + 1) ?? [], theme),
+        )
+      : rawTokens;
   const status: SourceHighlightStatus = AsyncResult.isFailure(highlightResult)
     ? "error"
     : AsyncResult.isSuccess(highlightResult)
@@ -262,6 +272,7 @@ function useSourceFileModel(props: SourceFileSurfaceProps) {
 
   return {
     api,
+    awaitLines,
     normalizedContents,
     lines,
     rowsJson,
@@ -269,7 +280,6 @@ function useSourceFileModel(props: SourceFileSurfaceProps) {
     targetIndex,
     theme,
     tokens,
-    awaitLines,
   };
 }
 
@@ -280,7 +290,9 @@ function SourceHighlightStatusView(props: { readonly status: SourceHighlightStat
   if (props.status === "error") {
     return (
       <View className="border-b border-border bg-card px-4 py-2">
-        <Text className="text-2xs font-t3-medium uppercase text-foreground-muted">Plain text</Text>
+        <Text className="text-2xs font-t3-medium uppercase text-foreground-muted">
+          <T>Plain text</T>
+        </Text>
       </View>
     );
   }
@@ -289,17 +301,15 @@ function SourceHighlightStatusView(props: { readonly status: SourceHighlightStat
 
 function useSourceFileRefresh(onRefresh: SourceFileSurfaceProps["onRefresh"]) {
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
-  const handlePullToRefresh = useCallback(async () => {
+  const handlePullToRefresh = async () => {
     if (!onRefresh) {
       return;
     }
     setIsPullRefreshing(true);
-    try {
-      await onRefresh();
-    } finally {
-      setIsPullRefreshing(false);
-    }
-  }, [onRefresh]);
+    // RefreshControl only needs the spinner cleared; the caller surfaces its own errors.
+    await settlePromise(async () => onRefresh());
+    setIsPullRefreshing(false);
+  };
   return { isPullRefreshing, handlePullToRefresh };
 }
 
@@ -308,7 +318,10 @@ function NativeSourceFileSurface(
     readonly NativeView: ComponentType<NativeReviewDiffViewProps>;
   },
 ) {
-  const { NativeView, onRefresh } = props;
+  const { NativeView, onLongPressLine, onRefresh } = props;
+  const insets = useSafeAreaInsets();
+  const columnMetrics = useNativeColumnLayoutMetrics();
+  const safeArea = columnMetrics?.safeArea ?? insets;
   const { codeSurface, codeWordBreak, nativeSourceStyle } = useAppearanceCodeSurface();
   const { themeAppearance, themeId } = useAppearancePreferences();
   const appTheme = useUniwindTheme();
@@ -323,33 +336,20 @@ function NativeSourceFileSurface(
     lines,
     api,
   });
-  const { highlight: symbolHighlight, pressLineNumber, pressSymbol } = codeNavigation;
-  const symbolHighlightJson = useMemo(
-    () => nativeSymbolHighlightJson(symbolHighlight, lines),
-    [lines, symbolHighlight],
-  );
-  const handlePressLine = useCallback<NonNullable<NativeReviewDiffViewProps["onPressLine"]>>(
-    (event) => {
-      const { gesture, region, column, rowId } = event.nativeEvent;
-      const index = rowId?.startsWith("source-line:") ? Number(rowId.slice(12)) : NaN;
-      if (gesture !== "longPress" || !Number.isInteger(index)) return;
-      if (region === "gutter") pressLineNumber(index);
-      else if (region === "code" && column !== undefined)
-        pressSymbol(index, expandedColumnToOffset(lines[index] ?? "", column));
-    },
-    [lines, pressLineNumber, pressSymbol],
-  );
+  const {
+    commentsEnabled,
+    highlight: symbolHighlight,
+    pressLineNumber,
+    pressSymbol,
+  } = codeNavigation;
+  const symbolHighlightJson = nativeSymbolHighlightJson(symbolHighlight, lines);
   const { isPullRefreshing, handlePullToRefresh } = useSourceFileRefresh(onRefresh);
-  const tokensJson = useMemo(() => JSON.stringify(buildNativeSourceTokens(tokens)), [tokens]);
-  const selectedRowIdsJson = useMemo(
-    () => JSON.stringify(targetIndex === null ? [] : [nativeSourceRowId(targetIndex)]),
-    [targetIndex],
+  const tokensJson = JSON.stringify(buildNativeSourceTokens(tokens));
+  const selectedRowIdsJson = JSON.stringify(
+    targetIndex === null ? [] : [nativeSourceRowId(targetIndex)],
   );
-  const themeJson = useMemo(
-    () => JSON.stringify(createNativeReviewDiffTheme(themeAppearance, themeId, appTheme)),
-    [appTheme, themeAppearance, themeId],
-  );
-  const styleJson = useMemo(() => JSON.stringify(nativeSourceStyle), [nativeSourceStyle]);
+  const themeJson = JSON.stringify(createNativeReviewDiffTheme(themeAppearance, themeId, appTheme));
+  const styleJson = JSON.stringify(nativeSourceStyle);
   const contentWidth = codeWordBreak
     ? Math.max(240, viewportWidth - codeSurface.gutterWidth - 24)
     : NATIVE_SOURCE_CONTENT_WIDTH;
@@ -364,15 +364,38 @@ function NativeSourceFileSurface(
         appearanceScheme={themeAppearance}
         contentResetKey={props.path}
         contentWidth={contentWidth}
+        contentInsetTop={props.embedded ? 0 : (props.headerInsetTop ?? safeArea.top)}
+        contentInsetBottom={props.embedded ? 0 : safeArea.bottom + 8}
         initialRowIndex={targetIndex ?? -1}
         rowHeight={nativeSourceStyle.rowHeight ?? codeSurface.rowHeight}
         rowsJson={rowsJson}
         selectedRowIdsJson={selectedRowIdsJson}
-        symbolHighlightJson={symbolHighlightJson}
-        onPressLine={handlePressLine}
         styleJson={styleJson}
         themeJson={themeJson}
         tokensJson={tokensJson}
+        symbolHighlightJson={symbolHighlightJson}
+        onPressLine={({ nativeEvent }) => {
+          if (nativeEvent.gesture !== "longPress") return;
+          // A line number opens a line comment and a symbol its definition; any other long
+          // press keeps upstream's behaviour.
+          const { region, column, rowId } = nativeEvent;
+          const index = rowId?.startsWith("source-line:") ? Number(rowId.slice(12)) : NaN;
+          if (Number.isInteger(index)) {
+            if (region === "gutter" && commentsEnabled) {
+              pressLineNumber(index);
+              return;
+            }
+            if (
+              region === "code" &&
+              column !== undefined &&
+              pressSymbol(index, expandedColumnToOffset(lines[index] ?? "", column))
+            )
+              return;
+          }
+          if (nativeEvent.newLineNumber !== undefined) {
+            onLongPressLine?.(nativeEvent.newLineNumber);
+          }
+        }}
         {...(onRefresh
           ? {
               refreshing: isPullRefreshing,
@@ -399,7 +422,9 @@ function nativeSymbolHighlightJson(
 }
 
 function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
-  const foreground = useUniwindTheme()["--color-foreground"];
+  const usesAutomaticInsets = Platform.OS === "ios" && !props.embedded;
+  const appTheme = useUniwindTheme();
+  const foreground = appTheme["--color-foreground"];
   const { codeSurface, codeWordBreak } = useAppearanceCodeSurface();
   const { api, normalizedContents, lines, status, targetIndex, tokens, awaitLines, theme } =
     useSourceFileModel(props);
@@ -414,83 +439,67 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   });
   const { definitionsEnabled, commentsEnabled, highlight, pressLineNumber, pressSymbol } =
     codeNavigation;
-  const symbolsByLine = useMemo(
-    () => (definitionsEnabled ? lineNavigationTargets(props.path, normalizedContents) : null),
-    [definitionsEnabled, normalizedContents, props.path],
-  );
-  const symbolHighlightColor = useUniwindTheme()["--color-subtle-strong"];
-  const handleLongPressSymbol = useCallback(
-    (index: number, offset: number) => {
-      pressSymbol(index, offset);
-    },
-    [pressSymbol],
-  );
-  const selectableTokens = useMemo(
-    () => (props.selectable ? boundedSelectableSourceTokens(tokens) : null),
-    [props.selectable, tokens],
-  );
-  const listRef = useRef<FlatList<string>>(null);
+  const symbolsByLine = definitionsEnabled
+    ? lineNavigationTargets(props.path, normalizedContents)
+    : null;
+  const symbolHighlightColor = appTheme["--color-subtle-strong"];
+  const selectableTokens = props.selectable ? boundedSelectableSourceTokens(tokens) : null;
+  const listRef = useRef<LegendListRef>(null);
   const { isPullRefreshing, handlePullToRefresh } = useSourceFileRefresh(props.onRefresh);
   const refreshControl = props.onRefresh ? (
     <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullToRefresh()} />
   ) : undefined;
 
-  useEffect(() => {
-    if (targetIndex === null) {
+  const usesLineList = !props.selectable;
+  // Android lays out a full selectable TextView on the UI thread, which can stall large files.
+  const usesWebSelection = props.selectable === true && Platform.OS === "android";
+  const usesTextSelection = props.selectable === true && !usesWebSelection;
+
+  // Layout effect so a pending jump is cancelled in the commit that swaps the file.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the list to the target line and cancels a pending jump when the file changes
+  useLayoutEffect(() => {
+    if (targetIndex === null || !usesLineList) {
       return;
     }
     const frame = requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex({ index: targetIndex, animated: false, viewPosition: 0.3 });
+      void listRef.current?.scrollToIndex({
+        index: targetIndex,
+        animated: false,
+        viewPosition: 0.3,
+      });
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.path, targetIndex]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Opening another file at the same line index, or leaving selection mode, scrolls the remounted list to it.
+  }, [props.path, targetIndex, usesLineList]);
 
-  const renderLine = useCallback(
-    ({ item, index }: { item: string; index: number }) => (
-      <HighlightedSourceLine
-        codeSurface={codeSurface}
-        index={index}
-        line={item}
-        tokens={tokens?.[index] ?? null}
-        awaitBackground={
-          // Half strength like desktop and the native canvas, which tint this row at 50% alpha.
-          awaitLines.has(index + 1) ? `${angelScriptColors[theme].background}80` : undefined
-        }
-        highlighted={index === targetIndex}
-        wordBreak={codeWordBreak}
-        symbols={symbolsByLine?.get(index)}
-        symbolHighlight={highlight?.lineIndex === index ? highlight : null}
-        symbolHighlightColor={symbolHighlightColor}
-        onLongPressSymbol={symbolsByLine ? handleLongPressSymbol : undefined}
-        onLongPressLineNumber={commentsEnabled ? pressLineNumber : undefined}
-      />
-    ),
-    [
-      codeSurface,
-      codeWordBreak,
-      targetIndex,
-      tokens,
-      awaitLines,
-      theme,
-      symbolsByLine,
-      highlight,
-      symbolHighlightColor,
-      handleLongPressSymbol,
-      commentsEnabled,
-      pressLineNumber,
-    ],
+  const { onLongPressLine } = props;
+  const renderLine = ({ item, index }: { item: string; index: number }) => (
+    <HighlightedSourceLine
+      codeSurface={codeSurface}
+      index={index}
+      line={item}
+      tokens={tokens?.[index] ?? null}
+      highlighted={index === targetIndex}
+      wordBreak={codeWordBreak}
+      onLongPress={onLongPressLine ? () => onLongPressLine(index + 1) : undefined}
+      awaitBackground={
+        // Half strength like desktop and the native canvas, which tint this row at 50% alpha.
+        awaitLines.has(index + 1) ? `${angelScriptColors[theme].background}80` : undefined
+      }
+      symbols={symbolsByLine?.get(index)}
+      symbolHighlight={highlight?.lineIndex === index ? highlight : null}
+      symbolHighlightColor={symbolHighlightColor}
+      onLongPressSymbol={
+        symbolsByLine ? (line, offset) => void pressSymbol(line, offset) : undefined
+      }
+      onLongPressLineNumber={commentsEnabled ? pressLineNumber : undefined}
+    />
   );
 
-  // One selectable text for the whole file. On iOS `uiTextView` renders a real `UITextView`,
-  // which selects across every line, wraps, and lays out long documents through TextKit; on
-  // Android the primitive is an RN `Text`, which selects across its nested children. Either
-  // way "select all" takes the file rather than a line, which a `FlatList` row can never do
-  // because each row is its own selection scope.
-  const selectableBlock = props.selectable ? (
-    <MarkdownTextPrimitive
-      uiTextView
+  // One native text view permits document-wide selection; virtualized rows cannot.
+  const selectableBlock = usesTextSelection ? (
+    <SourceText
       selectable
-      selectionColorClassName={Platform.OS === "android" ? "accent-focus/32" : undefined}
       style={{
         color: foreground,
         fontFamily: REVIEW_MONO_FONT_FAMILY,
@@ -499,56 +508,96 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
       }}
     >
       {selectableTokens
-        ? lines.map((line, index) => {
-            const lineTokens = selectableTokens[index] ?? null;
-            const body =
-              lineTokens && lineTokens.length > 0
-                ? lineTokens.map((token, tokenIndex) => (
-                    <MarkdownTextPrimitive
-                      key={`${index}:${tokenIndex}`}
-                      style={{
-                        color: token.color ?? foreground,
-                        fontWeight:
-                          token.fontStyle !== null && (token.fontStyle & 2) === 2 ? "700" : "400",
-                        fontStyle:
-                          token.fontStyle !== null && (token.fontStyle & 1) === 1
-                            ? "italic"
-                            : "normal",
-                      }}
-                    >
-                      {token.content}
-                    </MarkdownTextPrimitive>
-                  ))
-                : line;
-            return (
-              <MarkdownTextPrimitive key={index}>
-                {body}
-                {index < lines.length - 1 ? "\n" : ""}
-              </MarkdownTextPrimitive>
-            );
-          })
+        ? lines.map(
+            (
+              line,
+              index,
+            ) => /* oxlint-disable react/no-array-index-key -- Source lines and highlight tokens are stateless positions within the loaded file. */ {
+                const lineTokens = selectableTokens[index] ?? null;
+                const body =
+                  lineTokens && lineTokens.length > 0
+                    ? lineTokens.map((token, tokenIndex) => (
+                        <SourceText
+                          key={`${index}:${tokenIndex}`}
+                          style={{
+                            color: token.color ?? foreground,
+                            fontWeight:
+                              token.fontStyle !== null && (token.fontStyle & 2) === 2
+                                ? "700"
+                                : "400",
+                            fontStyle:
+                              token.fontStyle !== null && (token.fontStyle & 1) === 1
+                                ? "italic"
+                                : "normal",
+                          }}
+                        >
+                          {token.content}
+                        </SourceText>
+                      ))
+                    : line;
+                return (
+                  <SourceText key={index}>
+                    {body}
+                    {index < lines.length - 1 ? "\n" : ""}
+                  </SourceText>
+                );
+              } /* oxlint-enable react/no-array-index-key */,
+          )
         : normalizedContents}
-    </MarkdownTextPrimitive>
+    </SourceText>
+  ) : null;
+
+  const webSelection = usesWebSelection ? (
+    <WebView
+      source={{
+        html: selectableSourceHtml(normalizedContents, {
+          foreground,
+          selection: appTheme["--color-focus"],
+          fontSize: codeSurface.fontSize,
+          rowHeight: codeSurface.rowHeight,
+          wordBreak: codeWordBreak,
+        }),
+      }}
+      originWhitelist={["*"]}
+      // Android pastes copied HTML as styled text with collapsed whitespace, so copy plain text.
+      // Wrapped text reflows once the WebView reaches its final width, so scroll again then.
+      injectedJavaScript={`addEventListener("copy",(event)=>{event.clipboardData.setData("text/plain",getSelection().toString());event.preventDefault();});${
+        targetIndex === null
+          ? ""
+          : `const line=document.getElementById("L${targetIndex + 1}");const reveal=()=>line?.scrollIntoView({block:"center"});reveal();addEventListener("resize",reveal,{once:true});`
+      }true;`}
+      domStorageEnabled={false}
+      cacheEnabled={false}
+      setSupportMultipleWindows={false}
+      onShouldStartLoadWithRequest={(request) => request.url === "about:blank"}
+      style={{ flex: 1, backgroundColor: "transparent" }}
+    />
   ) : null;
 
   const list = (
-    <FlatList
+    <LegendList
       ref={listRef}
+      // An embedded viewer sits inside another screen's scroll surface.
+      renderScrollComponent={props.embedded ? undefined : NativeScrollView}
+      contentInsetAdjustmentBehavior={usesAutomaticInsets ? "automatic" : "never"}
+      automaticallyAdjustsScrollIndicatorInsets={usesAutomaticInsets}
       refreshControl={refreshControl}
       data={lines}
       keyExtractor={(_line, index) => String(index)}
-      initialNumToRender={80}
-      maxToRenderPerBatch={80}
-      windowSize={12}
-      {...(codeWordBreak
-        ? {}
-        : {
-            getItemLayout: (_data, index) => ({
-              length: codeSurface.rowHeight,
-              offset: codeSurface.rowHeight * index,
-              index,
-            }),
-          })}
+      extraData={{
+        tokens,
+        targetIndex,
+        codeSurface,
+        codeWordBreak,
+        onLongPressLine,
+        highlight,
+        symbolsByLine,
+        commentsEnabled,
+      }}
+      estimatedItemSize={codeSurface.rowHeight}
+      getFixedItemSize={codeWordBreak ? undefined : () => codeSurface.rowHeight}
+      drawDistance={codeSurface.rowHeight * 40}
+      recycleItems
       contentContainerStyle={{
         minWidth: codeWordBreak ? undefined : "100%",
         paddingBottom: codeSurface.rowHeight,
@@ -558,13 +607,12 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
     />
   );
 
-  // Workspace files retain their numbered, virtualized rows, with or without a line target.
-  // Attachments opt into one selection scope for the entire document.
-  const usesLineList = !props.selectable;
   const padded = (
     <ScrollView
       refreshControl={refreshControl}
       className="flex-1"
+      contentInsetAdjustmentBehavior={usesAutomaticInsets ? "automatic" : "never"}
+      automaticallyAdjustsScrollIndicatorInsets={usesAutomaticInsets}
       contentContainerStyle={{
         paddingBottom: codeSurface.rowHeight,
         paddingHorizontal: 12,
@@ -577,7 +625,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
 
   return (
     <View className="relative flex-1 bg-sheet">
-      <SourceHighlightStatusView status={status} />
+      {usesWebSelection ? null : <SourceHighlightStatusView status={status} />}
       {usesLineList ? (
         codeWordBreak ? (
           list
@@ -586,10 +634,11 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
             {list}
           </ScrollView>
         )
+      ) : usesWebSelection ? (
+        webSelection
       ) : codeWordBreak ? (
         padded
       ) : (
-        // Without wrapping the text keeps its natural width and the reader pans to it.
         <ScrollView horizontal bounces={false} className="flex-1">
           {padded}
         </ScrollView>
@@ -602,12 +651,11 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
 export function SourceFileSurface(props: SourceFileSurfaceProps) {
   const NativeView = resolveNativeReviewDiffView();
   const { codeWordBreak } = useAppearanceCodeSurface();
-  // The native canvas draws source lines without text selection or wrapping. Attachments
-  // need one selectable text view in either wrap mode; workspace line navigation can still
-  // use the canvas when wrapping is disabled.
-  return NativeView && !codeWordBreak && !props.selectable ? (
-    <NativeSourceFileSurface {...props} NativeView={NativeView} />
-  ) : (
-    <JavaScriptSourceFileSurface {...props} />
-  );
+  const surface =
+    NativeView && !codeWordBreak && !props.selectable ? (
+      <NativeSourceFileSurface {...props} NativeView={NativeView} />
+    ) : (
+      <JavaScriptSourceFileSurface {...props} />
+    );
+  return surface;
 }

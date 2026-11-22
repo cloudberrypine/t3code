@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "./Layers/Sqlite.ts";
+import * as SqlitePersistence from "./Sqlite.ts";
 import {
   TOOL_OUTPUT_INLINE_CHARS,
   TOOL_OUTPUT_PREVIEW_HEAD_CHARS,
@@ -169,7 +169,7 @@ describe("tool output backfill", () => {
         (yield* readPayloads).map((row) => row.payload_json),
         after.map((row) => row.payload_json),
       );
-    }).pipe(Effect.provide(SqlitePersistenceMemory)),
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
   );
 
   it.effect("resumes from its recorded progress", () =>
@@ -201,6 +201,6 @@ describe("tool output backfill", () => {
         SELECT COUNT(*) AS completed FROM tool_output_backfill WHERE completed_at IS NOT NULL
       `;
       assert.strictEqual(done[0]?.completed, 2);
-    }).pipe(Effect.provide(SqlitePersistenceMemory)),
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
   );
 });

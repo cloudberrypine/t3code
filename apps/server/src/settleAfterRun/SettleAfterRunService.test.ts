@@ -1,8 +1,10 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { type OrchestrationV2DomainEvent, RunId, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
@@ -230,7 +232,7 @@ const harness = Effect.fn("settleAfterRunHarness")(function* (options?: {
   };
 });
 
-it.layer(NodeServices.layer)("SettleAfterRunService", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("SettleAfterRunService", (it) => {
   it.effect("settles the thread once its run completes", () =>
     Effect.gen(function* () {
       const h = yield* harness();

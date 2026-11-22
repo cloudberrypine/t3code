@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -6,45 +7,42 @@ import {
   ProviderSessionId,
   ThreadId,
   ProviderSetupError,
-  type ProviderInstanceConfigMap,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
-import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
-import * as ProviderAuthFlow from "../provider/ProviderAuthFlow.ts";
-import type { ProviderAuthController } from "../provider/Services/ProviderAuthService.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
-import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
-import { ProviderAdapterOpenSessionError, type ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
-import {
-  ProviderAdapterDriverCreateError,
-  type ProviderAdapterDriver,
-} from "./ProviderAdapterDriver.ts";
+import * as ProviderAuthFlow from "@t3tools/provider-core/server/providerAuthFlow";
+import type { ProviderAuthController } from "../provider/ProviderAuthService.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
+import * as ModelManifest from "../provider/ModelManifest.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const driver = ProviderDriverKind.make("codex");
 const personalId = ProviderInstanceId.make("codex_personal");
 const workId = ProviderInstanceId.make("codex_work");
 
-const makeAdapter = (instanceId: ProviderInstanceId): ProviderAdapterV2Shape =>
+const makeAdapter = (
+  instanceId: ProviderInstanceId,
+): ProviderAdapter.ProviderAdapterV2["Service"] =>
   ({
     instanceId,
     driver,
     getCapabilities: () => Effect.die("capabilities are not used by this registry test"),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: () => Effect.die("sessions are not used by this registry test"),
-  }) as ProviderAdapterV2Shape;
+  }) as ProviderAdapter.ProviderAdapterV2["Service"];
 
 const makeInstance = (
   instanceId: ProviderInstanceId,
-  orchestrationAdapter: ProviderAdapterV2Shape,
+  orchestrationAdapter: ProviderAdapter.ProviderAdapterV2["Service"],
+  version: string | null = null,
+  refreshedVersion = version,
 ): ProviderInstance => ({
   instanceId,
   driverKind: driver,
@@ -54,7 +52,10 @@ const makeInstance = (
   },
   displayName: String(instanceId),
   enabled: true,
-  snapshot: {} as ProviderInstance["snapshot"],
+  snapshot: {
+    getSnapshot: Effect.succeed({ version }),
+    refresh: Effect.succeed({ version: refreshedVersion }),
+  } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
   textGeneration: {} as ProviderInstance["textGeneration"],
 });
@@ -65,7 +66,7 @@ const instances = [
   makeInstance(personalId, personalAdapter),
   makeInstance(workId, workAdapter),
 ] as const;
-const instanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+const layerInstanceRegistry = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
   getInstance: (instanceId) =>
     Effect.succeed(instances.find((instance) => instance.instanceId === instanceId)),
   listInstances: Effect.succeed(instances),
@@ -73,144 +74,55 @@ const instanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry.ProviderIns
   streamChanges: Stream.empty,
   subscribeChanges: Effect.never,
 });
-const TestLayer = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
-  Layer.provide(instanceRegistryLayer),
+const layerRegistry = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
+  Layer.provide(ModelManifest.layerTest),
 );
+const layerTest = layerRegistry.pipe(Layer.provide(layerInstanceRegistry));
 
 it.effect("routes two configured instances of the same driver independently", () =>
   Effect.gen(function* () {
     const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
 
-    assert.strictEqual(yield* registry.get(personalId), personalAdapter);
-    assert.strictEqual(yield* registry.get(workId), workAdapter);
+    assert.strictEqual((yield* registry.get(personalId)).instanceId, personalId);
+    assert.strictEqual((yield* registry.get(workId)).instanceId, workId);
     assert.deepEqual(yield* registry.list(), [personalId, workId]);
-  }).pipe(Effect.provide(TestLayer)),
+  }).pipe(Effect.provide(layerTest)),
 );
 
-const lifecycleDriver = ProviderDriverKind.make("lifecycle-test");
-const lifecycleInstanceId = ProviderInstanceId.make("lifecycle-test");
-const lifecycleConfigMap: ProviderInstanceConfigMap = {
-  [lifecycleInstanceId]: {
-    driver: lifecycleDriver,
-    config: {},
-  },
-};
-const lifecycleAdapter = makeAdapter(lifecycleInstanceId);
-
-const makeLifecycleDriver = (
-  create: Effect.Effect<ProviderAdapterV2Shape, ProviderAdapterDriverCreateError, Scope.Scope>,
-): ProviderAdapterDriver<Record<string, never>> => ({
-  driverKind: lifecycleDriver,
-  configSchema: Schema.Struct({}),
-  defaultConfig: () => ({}),
-  create: () => create,
+const openOn = Effect.fn("openOn")(function* (instance: ProviderInstance) {
+  const registry = yield* Effect.service(ProviderAdapterRegistry.ProviderAdapterRegistryV2).pipe(
+    Effect.provide(
+      layerRegistry.pipe(
+        Layer.provide(
+          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+            getInstance: () => Effect.succeed(instance),
+          }),
+        ),
+      ),
+    ),
+  );
+  return yield* (yield* registry.get(instance.instanceId))
+    .openSession({
+      threadId: ThreadId.make("gated-thread"),
+      providerSessionId: ProviderSessionId.make("gated-session"),
+      modelSelection: { instanceId: instance.instanceId, model: "test-model" },
+      runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: "/workspace" },
+    })
+    .pipe(Effect.exit);
 });
 
-const trackedCreate = <A, E, R>(
-  releases: Ref.Ref<number>,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R | Scope.Scope> =>
+it.effect("refuses a session only when a fresh probe still rates the version broken", () =>
   Effect.gen(function* () {
-    yield* Effect.addFinalizer(() => Ref.update(releases, (count) => count + 1));
-    return yield* effect;
-  });
-
-it.effect("closes a partially-created adapter scope immediately on typed failure", () =>
-  Effect.gen(function* () {
-    const releases = yield* Ref.make(0);
-    const createError = new ProviderAdapterDriverCreateError({
-      driver: lifecycleDriver,
-      instanceId: lifecycleInstanceId,
-      detail: "expected test failure",
-    });
-
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const exit = yield* ProviderAdapterRegistry.makeRegistryFromConfigMap({
-          drivers: [makeLifecycleDriver(trackedCreate(releases, Effect.fail(createError)))],
-          configMap: lifecycleConfigMap,
-        }).pipe(Effect.exit);
-
-        assert.isTrue(Exit.isFailure(exit));
-        assert.strictEqual(yield* Ref.get(releases), 1);
-      }),
+    const opened = { ...personalAdapter, openSession: () => Effect.succeed({} as never) };
+    const refused = yield* openOn(makeInstance(personalId, opened, "0.100.0"));
+    assert.include(JSON.stringify(refused), "0.100.0 does not work with this T3 Code release");
+    // Updated since the last probe.
+    assert.isTrue(
+      Exit.isSuccess(yield* openOn(makeInstance(personalId, opened, "0.100.0", "0.200.0"))),
     );
-
-    assert.strictEqual(yield* Ref.get(releases), 1);
-  }),
-);
-
-it.effect("closes a partially-created adapter scope immediately on defect", () =>
-  Effect.gen(function* () {
-    const releases = yield* Ref.make(0);
-
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const exit = yield* ProviderAdapterRegistry.makeRegistryFromConfigMap({
-          drivers: [
-            makeLifecycleDriver(trackedCreate(releases, Effect.die("expected test defect"))),
-          ],
-          configMap: lifecycleConfigMap,
-        }).pipe(Effect.exit);
-
-        assert.isTrue(Exit.hasDies(exit));
-        assert.strictEqual(yield* Ref.get(releases), 1);
-      }),
-    );
-
-    assert.strictEqual(yield* Ref.get(releases), 1);
-  }),
-);
-
-it.effect("closes a partially-created adapter scope immediately on interruption", () =>
-  Effect.gen(function* () {
-    const releases = yield* Ref.make(0);
-    const createStarted = yield* Deferred.make<void>();
-
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const fiber = yield* ProviderAdapterRegistry.makeRegistryFromConfigMap({
-          drivers: [
-            makeLifecycleDriver(
-              trackedCreate(
-                releases,
-                Deferred.succeed(createStarted, undefined).pipe(Effect.andThen(Effect.never)),
-              ),
-            ),
-          ],
-          configMap: lifecycleConfigMap,
-        }).pipe(Effect.forkChild({ startImmediately: true }));
-
-        yield* Deferred.await(createStarted);
-        yield* Fiber.interrupt(fiber);
-        const exit = yield* Fiber.await(fiber);
-
-        assert.isTrue(Exit.hasInterrupts(exit));
-        assert.strictEqual(yield* Ref.get(releases), 1);
-      }),
-    );
-
-    assert.strictEqual(yield* Ref.get(releases), 1);
-  }),
-);
-
-it.effect("keeps a successfully-created adapter scope open until normal release", () =>
-  Effect.gen(function* () {
-    const releases = yield* Ref.make(0);
-
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* ProviderAdapterRegistry.makeRegistryFromConfigMap({
-          drivers: [makeLifecycleDriver(trackedCreate(releases, Effect.succeed(lifecycleAdapter)))],
-          configMap: lifecycleConfigMap,
-        });
-
-        assert.strictEqual(yield* registry.get(lifecycleInstanceId), lifecycleAdapter);
-        assert.strictEqual(yield* Ref.get(releases), 0);
-      }),
-    );
-
-    assert.strictEqual(yield* Ref.get(releases), 1);
+    // An adapter that rates the handshake version is not judged on the probe.
+    const handshake = { ...opened, checksVersionAtHandshake: true };
+    assert.isTrue(Exit.isSuccess(yield* openOn(makeInstance(personalId, handshake, "0.100.0"))));
   }),
 );
 
@@ -236,7 +148,7 @@ it.effect(
         ProviderAdapterRegistry.ProviderAdapterRegistryV2,
       ).pipe(
         Effect.provide(
-          ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
+          layerRegistry.pipe(
             Layer.provide(
               Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
                 getInstance: (id) =>
@@ -260,7 +172,7 @@ it.effect(
           },
         })
         .pipe(Effect.flip);
-      assert.instanceOf(error, ProviderAdapterOpenSessionError);
+      assert.instanceOf(error, ProviderAdapter.ProviderAdapterOpenSessionError);
       assert.instanceOf(error.cause, ProviderSetupError);
     }),
 );
@@ -284,7 +196,7 @@ it.effect("interrupts admitted session startup when a shared peer signs out", ()
       authenticate: () => Effect.void,
       logout: Effect.void,
     });
-    const adapter: ProviderAdapterV2Shape = {
+    const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
       ...workAdapter,
       openSession: () =>
         Effect.gen(function* () {
@@ -298,7 +210,7 @@ it.effect("interrupts admitted session startup when a shared peer signs out", ()
     ];
     const registry = yield* Effect.service(ProviderAdapterRegistry.ProviderAdapterRegistryV2).pipe(
       Effect.provide(
-        ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
+        layerRegistry.pipe(
           Layer.provide(
             Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
               getInstance: (id) =>
@@ -326,5 +238,5 @@ it.effect("interrupts admitted session startup when a shared peer signs out", ()
     yield* auth.logout(Effect.void);
     yield* Deferred.await(stopped);
     assert.isTrue(Exit.isFailure(yield* Fiber.await(startup)));
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

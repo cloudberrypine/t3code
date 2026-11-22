@@ -14,6 +14,7 @@ function EnvironmentAgentNotifications({ environmentId }: { environmentId: Envir
   const hydrated = useClientSettingsHydrated();
   const [track] = useState(createCompletionTracker);
   const [trackQuestions] = useState(createQuestionTracker);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- shows native desktop notifications as the shell's turns finish or ask questions
   useEffect(() => {
     const threads =
       shell.status === "live" && Option.isSome(shell.snapshot)
@@ -49,6 +50,7 @@ function EnvironmentAgentNotifications({ environmentId }: { environmentId: Envir
 export function AgentNotifications() {
   const { environments } = useEnvironments();
   const navigate = useNavigate();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the desktop bridge's notification clicks while mounted
   useEffect(
     () =>
       window.desktopBridge?.onAgentNotificationClick?.((input) => {

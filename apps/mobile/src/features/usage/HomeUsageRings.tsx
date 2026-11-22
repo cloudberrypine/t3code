@@ -7,7 +7,7 @@ import { Modal, Pressable, ScrollView, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { environmentPresentations } from "../../state/presentation";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { AccountLimits } from "./UsageLimitsSection";
@@ -15,7 +15,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 
 /** Reads the same live config snapshots as the desktop sidebar, including hub accounts. */
 export function HomeUsageRings() {
-  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const accounts = collectLimitAccounts(presentations);
   const [selection, setSelection] = useState<{
     driver: "codex" | "claudeAgent";

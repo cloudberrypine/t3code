@@ -1,12 +1,18 @@
-import { getFiletypeFromFileName } from "@pierre/diffs/utils/getFiletypeFromFileName";
+import { isAngelScriptPath } from "@t3tools/shared/angelscript";
 import { isCppPath } from "@t3tools/shared/cppNavigation";
 
 /**
- * The grammar desktop picks for a path (Pierre's mapping, so `.h` is objective-cpp, a C++
- * superset). C/C++ extensions Pierre does not know (`.hxx`, `.inl`, `.ipp`, ...) read as C++,
- * as go-to-definition already treats them, instead of plain text.
+ * The C++ lexer for paths @pierre/highlights leaves as plain text: C/C++ extensions Pierre does not
+ * know (`.hxx`, `.inl`, `.ipp`, ...), as go-to-definition already treats them, and AngelScript,
+ * which has no lexer of its own. AngelScript's semantic colours are laid over these tokens.
  */
-export function desktopCodeLanguage(path: string): string {
-  const language = getFiletypeFromFileName(path);
-  return (!language || language === "text") && isCppPath(path) ? "cpp" : language;
+export function localHighlightLanguage(
+  hint: string | undefined,
+  path: string | undefined,
+): string | null {
+  if (hint === "angelscript") return ANGELSCRIPT_HIGHLIGHT_LANGUAGE;
+  return path && (isCppPath(path) || isAngelScriptPath(path)) ? "cpp" : null;
 }
+
+/** The lexer an AngelScript file tokenizes with before its semantic colours are applied. */
+export const ANGELSCRIPT_HIGHLIGHT_LANGUAGE = "cpp";

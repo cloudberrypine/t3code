@@ -1,12 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - signing is synchronous HMAC from node:crypto.
 /**
- * Play links and the play cookie (fork-only, see PlayProxy.ts).
- *
- * Both are HMAC-signed with the environment's `play-proxy` secret, so
- * replacing that secret revokes every link and cookie at once.
- *
- * - A ticket signs one browser in: `v1.<exp>.<nonce>.<sig>`. It travels in a
- *   URL fragment and is redeemed once (PlayProxy keeps redeemed nonces).
- * - The cookie is `v1.<exp>.<id>.<sig>`, scoped to `/play`.
+ * Play tickets (`v1.<exp>.<nonce>.<sig>`, redeemed once) and the `/play` cookie
+ * (`v1.<exp>.<id>.<sig>`), HMAC-signed with the `play-proxy` secret: replacing it revokes both.
  */
 import * as NodeCrypto from "node:crypto";
 

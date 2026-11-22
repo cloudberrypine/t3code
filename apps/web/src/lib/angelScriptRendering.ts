@@ -8,6 +8,7 @@ import {
   type AngelScriptSemanticToken,
 } from "@t3tools/shared/angelscript";
 import { textRange } from "~/components/diffs/diffSearch";
+import { ANGELSCRIPT_SYNTAX_LANGUAGE } from "./angelScriptSyntax";
 
 export const ANGELSCRIPT_CSS = `
 [data-code] [data-line][data-angelscript-await] {
@@ -32,7 +33,7 @@ export function angelScriptCacheKey(key: string): string {
 export function withAngelScriptLanguage<T extends FileContents | FileDiffMetadata>(file: T): T {
   return {
     ...file,
-    lang: "angelscript",
+    lang: ANGELSCRIPT_SYNTAX_LANGUAGE,
     ...(file.cacheKey ? { cacheKey: angelScriptCacheKey(file.cacheKey) } : {}),
   };
 }

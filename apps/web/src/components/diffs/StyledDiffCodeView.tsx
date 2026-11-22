@@ -1,9 +1,3 @@
-import { diffJumpExpansion } from "~/lib/diffJumpReveal";
-import { useAtomValue } from "@effect/atom-react";
-import { primaryServerKeybindingsAtom } from "~/state/server";
-import { fileNavigationAction } from "~/lib/fileJumpHistory";
-import { useRightPanelStore } from "~/rightPanelStore";
-import type { DiffPanelSelection, DiffJumpReveal } from "~/diffPanelStore";
 /* oxlint-disable eslint/no-restricted-imports -- This is the single styled adapter around Pierre's raw viewer. */
 import {
   CodeView,
@@ -13,58 +7,35 @@ import {
   type UncontrolledCodeViewProps,
 } from "@pierre/diffs/react";
 /* oxlint-enable eslint/no-restricted-imports */
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useImperativeHandle,
-  useState,
-  type Ref,
-} from "react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { isCppPath } from "@t3tools/shared/cppNavigation";
-import { useDefinitionNavigation } from "~/hooks/useDefinitionNavigation";
-import { createDiffDefinitionNavigation } from "~/lib/diffDefinitionNavigation";
-import { stackedThreadToast, toastManager } from "~/components/ui/toast";
-import type { CodeViewItem } from "@pierre/diffs";
+import { useGT } from "gt-react";
+import type { Ref } from "react";
 
+import type { DiffJumpReveal, DiffPanelSelection } from "~/diffPanelStore";
+import type { AngelScriptWorkspace } from "~/hooks/useAngelScript";
+import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
-import { isAngelScriptPath, usesAngelScript } from "@t3tools/shared/angelscript";
-import { useAngelScript, type AngelScriptWorkspace } from "~/hooks/useAngelScript";
-import {
-  ANGELSCRIPT_CSS,
-  createAngelScriptPainter,
-  withAngelScriptLanguage,
-} from "~/lib/angelScriptRendering";
+import { renderDiffHeaderMetadata, useDiffCodeViewExtras } from "./useDiffCodeViewExtras";
 
-import { useDiffSearch } from "./useDiffSearch";
-import { findAnchoredDiffItem } from "./diffScrollAnchor";
-import { createDiffScrollMemory } from "./diffScrollMemory";
-
-import { createDiffContextController, DIFF_CONTEXT_LINES } from "~/lib/diffContext";
-
-import {
-  DIFF_SURFACE_THEME_UNSAFE_CSS,
-  getDiffLineStat,
-  resolveFileDiffPath,
-} from "~/lib/diffRendering";
-
-/** React owns counts because Pierre can retain cached header HTML when an item updates. */
-function renderDiffHeaderMetadata(item: CodeViewItem<unknown>) {
-  if (item.type !== "diff") return null;
-  const { additions, deletions } = getDiffLineStat([item.fileDiff]);
-  return (
-    <span className="inline-flex items-center gap-2 font-mono text-2xs leading-none tabular-nums">
-      {(deletions > 0 || additions === 0) && <span className="text-destructive">-{deletions}</span>}
-      {(additions > 0 || deletions === 0) && (
-        <span className="text-diff-addition">+{additions}</span>
-      )}
-    </span>
-  );
+export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
+/* A 1fr track's automatic minimum grows with the currently mounted lines. In split
+   wrap mode that shifts width between columns, rewraps rows and makes the virtualizer
+   repeatedly correct the scroll position. Keep both code columns at the same width. */
+[data-diff-type="split"][data-overflow="wrap"] {
+  --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);
 }
 
-const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
+/* Translucent find matches keep the syntax colours under them. */
+:host {
+  --diffs-bg-search-match-override: light-dark(#ff963288, #ff963266);
+  --diffs-bg-search-match-current-override: color-mix(
+    in lab,
+    var(--diffs-modified-base) 45%,
+    transparent
+  );
+  --diffs-fg-search-match-override: currentColor;
+}
+
 :is(
   [data-line],
   [data-line-annotation],
@@ -142,8 +113,11 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   font-family: var(--font-sans) !important;
   font-size: 12px !important;
   line-height: 1 !important;
+  /* Collapsed items are never remeasured: the painted header must match diffHeaderHeight.
+     Center controls in that height instead of adding padding to their intrinsic height. */
+  height: 32px !important;
   min-height: 32px !important;
-  padding-block: 6px !important;
+  padding-block: 0 !important;
   padding-inline: 8px 12px !important;
 }
 
@@ -154,102 +128,35 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   ) !important;
 }
 
+/* Hunk separators are the way to the unchanged lines between hunks. They keep the library's
+   layout, with the expand button in its own cell, but sit one step off the code surface so they
+   read as quiet controls; hover brings them forward. */
 :is([data-separator="line-info"], [data-separator="line-info-basic"]) {
-  --context-row-bg: color-mix(in srgb, var(--code-background) 91%, var(--primary));
-  --context-row-border: color-mix(in srgb, var(--code-background) 80%, var(--primary));
+  /* Exact and margin-free: the virtualizer places rows from hunkSeparatorHeight below. */
   height: 24px !important;
   margin-block: 0 !important;
-  background-color: var(--context-row-bg) !important;
+  --diffs-bg-separator: color-mix(in srgb, var(--code-background) 97%, var(--code-foreground));
 }
 
-:is([data-separator="line-info"], [data-separator="line-info-basic"]):is(:hover, :focus-within) {
-  --context-row-bg: color-mix(in srgb, var(--code-background) 86%, var(--primary));
-}
-
-:is([data-separator="line-info"], [data-separator="line-info-basic"])
-  [data-separator-wrapper] {
-  padding-inline: 8px 12px !important;
-  background-color: var(--context-row-bg) !important;
-  box-shadow:
-    inset 0 1px var(--context-row-border),
-    inset 0 -1px var(--context-row-border);
-}
-
-:is([data-separator="line-info"], [data-separator="line-info-basic"])
-  [data-separator-content] {
-  gap: 8px;
-  padding-inline: 0 !important;
-  background-color: transparent !important;
-  color: color-mix(in srgb, var(--code-foreground) 78%, var(--code-background)) !important;
+:is([data-separator="line-info"], [data-separator="line-info-basic"]) [data-separator-content] {
+  color: color-mix(in srgb, var(--code-foreground) 50%, var(--code-background)) !important;
   font-family: var(--font-sans) !important;
   font-size: 11px !important;
   text-decoration: none !important;
 }
 
-:is([data-separator="line-info"], [data-separator="line-info-basic"])
-  [data-unmodified-lines] {
-  display: flex !important;
-  min-width: 0;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 8px;
+:is([data-separator="line-info"], [data-separator="line-info-basic"]) [data-expand-button] {
+  color: color-mix(in srgb, var(--code-foreground) 50%, var(--code-background)) !important;
 }
 
-[data-context-controls] {
-  grid-template-columns: auto minmax(0, 1fr) auto !important;
-  /* Pierre stacks its two expand buttons on fine pointers; our controls share one row. */
-  grid-template-rows: minmax(0, 1fr) !important;
-  align-items: center;
-  gap: 8px;
-  height: 24px;
-}
-
-[data-separator-first] [data-context-controls] {
-  grid-template-columns: minmax(0, 1fr) auto !important;
-}
-
-[data-separator-last] [data-context-controls] {
-  grid-template-columns: auto minmax(0, 1fr) !important;
-}
-
-[data-context-controls] button {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--code-foreground) 78%, var(--code-background));
-  font: 500 11px var(--font-sans);
-  border-radius: 3px;
-  white-space: nowrap;
-  padding: 2px 4px;
-  cursor: pointer;
-}
-
-[data-context-controls] button:hover:not(:disabled) {
-  color: var(--code-foreground);
-  background: color-mix(in srgb, var(--code-background) 78%, var(--primary));
-}
-
-[data-context-controls] button:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
-  border-radius: 3px;
-}
-
-[data-context-controls] button:disabled {
-  cursor: default;
-}
-
-[data-context-count] {
-  flex: 1;
-  min-width: 0;
-}
-
-[data-unmodified-lines]::before,
-[data-unmodified-lines]::after {
-  height: 1px;
-  flex: 1;
-  content: "";
-  background-color: var(--context-row-border);
+:is([data-separator="line-info"], [data-separator="line-info-basic"])[data-expand-index]
+  :is([data-separator-content], [data-expand-button]):hover {
+  color: var(--code-foreground) !important;
+  background-color: color-mix(
+    in srgb,
+    var(--code-background) 92%,
+    var(--code-foreground)
+  ) !important;
 }
 
 [data-diffs-header] [data-header-content] {
@@ -258,8 +165,7 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 }
 
 /* Pierre clips file names with overflow: hidden for its start ellipsis. A 1em line box cuts off
-   descenders. Only the clipped names get room: 16px plus the header's 12px of padding stays
-   inside its 32px min-height, which diffHeaderHeight assumes. */
+   descenders; give the clipped names room inside the fixed-height header. */
 [data-diffs-header] :is([data-title], [data-prev-name]) {
   line-height: 16px !important;
 }
@@ -292,7 +198,7 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 }
 
 /* Expanding a file mounts its body all at once; easing it in matches the 200ms the app's
-   collapsibles take. Appearance only — the viewer owns geometry, so height cannot animate.
+   collapsibles take. Appearance only: the viewer owns geometry, so height cannot animate.
    Departing content cuts, the same one-way rule the pull request chrome fold follows. */
 [data-diff],
 [data-file] {
@@ -315,229 +221,71 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 `;
 
 export type StyledDiffCodeViewOptions<LAnnotation> = Omit<
-  NonNullable<CodeViewProps<LAnnotation>["options"]>,
+  NonNullable<CodeViewProps<LAnnotation, undefined>["options"]>,
   "unsafeCSS" | "itemMetrics" | "layout"
 >;
 
 type StyledDiffCodeViewProps<LAnnotation> = (
-  | Omit<ControlledCodeViewProps<LAnnotation>, "options">
-  | Omit<UncontrolledCodeViewProps<LAnnotation>, "options">
+  | Omit<ControlledCodeViewProps<LAnnotation, undefined>, "options">
+  | Omit<UncontrolledCodeViewProps<LAnnotation, undefined>, "options">
 ) & {
   readonly options?: StyledDiffCodeViewOptions<LAnnotation>;
-  readonly viewerRef?: Ref<CodeViewHandle<LAnnotation>>;
-  readonly onRevealItem?: (id: string) => void;
-  readonly onActiveFileChange?: (path: string | null) => void;
-  /**
-   * Appended to the shared stylesheet inside the viewer's shadow root, for a surface that has
-   * to restyle chrome the viewer owns — such as replacing its per-file line counts.
-   */
+  readonly viewerRef?: Ref<CodeViewHandle<LAnnotation, undefined>>;
   readonly unsafeCSSExtra?: string;
+  // Local fork (useDiffCodeViewExtras): AngelScript, definition navigation and file jumps.
+  readonly onActiveFileChange?: (path: string | null) => void;
   readonly workspace?: AngelScriptWorkspace;
   readonly navigationThread?: ScopedThreadRef;
   readonly navigationSelection?: DiffPanelSelection;
   readonly navigationReveal?: DiffJumpReveal;
   readonly onNavigationRestored?: () => void;
-  readonly ignoreWhitespace?: boolean;
-  readonly scrollMemoryKey?: string;
 };
 
-/** The shared web CodeView surface: app styling and virtualized geometry stay paired here. */
 export function StyledDiffCodeView<LAnnotation = undefined>({
   options,
   viewerRef,
-  onRevealItem,
-  onActiveFileChange,
-  onScroll,
   className,
   unsafeCSSExtra,
+  onActiveFileChange,
+  onScroll,
   workspace,
   navigationThread,
   navigationSelection,
   navigationReveal,
   onNavigationRestored,
-  ignoreWhitespace = false,
-  scrollMemoryKey,
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
-  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const originalItems = props.items ?? props.initialItems ?? [];
-  const hasScripts = originalItems.some((item) =>
-    isAngelScriptPath(item.type === "file" ? item.file.name : item.fileDiff.name),
-  );
-  const api = useAngelScript(hasScripts ? workspace : undefined);
-  const painter = useMemo(
-    () => createAngelScriptPainter(api, options?.loadDiffFiles),
-    [api, options?.loadDiffFiles],
-  );
-  useEffect(() => () => painter.dispose(), [painter]);
-  const items = useMemo(
-    () =>
-      originalItems.map((item) => {
-        if (item.type === "file" && usesAngelScript(item.file.name, item.file.contents, api))
-          return {
-            ...item,
-            file: withAngelScriptLanguage(item.file),
-            version: (item.version ?? 0) + 1,
-          };
-        if (
-          item.type === "diff" &&
-          usesAngelScript(
-            item.fileDiff.name,
-            item.fileDiff.additionLines.slice(0, 100).join("") +
-              item.fileDiff.deletionLines.slice(0, 100).join(""),
-            api,
-          )
-        )
-          return {
-            ...item,
-            fileDiff: withAngelScriptLanguage(item.fileDiff),
-            version: (item.version ?? 0) + 1,
-          };
-        return item;
-      }),
-    [originalItems, api],
-  );
-  const context = useMemo(
-    () => createDiffContextController(options?.loadDiffFiles, ignoreWhitespace),
-    [options?.loadDiffFiles, ignoreWhitespace],
-  );
-  const navigate = useDefinitionNavigation(
-    workspace,
-    navigationThread,
-    api,
-    true,
-    navigationSelection,
-  );
-  const navigation = useMemo(
-    () =>
-      createDiffDefinitionNavigation(navigate, options?.loadDiffFiles, () =>
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Unable to load definition source. Refresh the diff and try again.",
-          }),
-        ),
-      ),
-    [navigate, options?.loadDiffFiles],
-  );
-  useEffect(() => () => navigation.dispose(), [navigation]);
-  const internalRef = useRef<CodeViewHandle<LAnnotation>>(null);
-  const [viewer, setViewer] = useState<CodeViewHandle<LAnnotation> | null>(null);
-  const attachViewer = useCallback((handle: CodeViewHandle<LAnnotation> | null) => {
-    internalRef.current = handle;
-    setViewer(handle);
-  }, []);
-  useImperativeHandle(viewerRef, () => viewer!, [viewer]);
-  const scrollMemory = useMemo(() => createDiffScrollMemory(scrollMemoryKey), [scrollMemoryKey]);
-  const restoreFrame = useRef<number | null>(null);
-  const restoreScroll = useCallback(() => {
-    if (navigationReveal) {
-      scrollMemory.cancel();
-      return;
-    }
-    if (restoreFrame.current !== null) return;
-    restoreFrame.current = requestAnimationFrame(() => {
-      restoreFrame.current = null;
-      const instance = internalRef.current?.getInstance();
-      if (instance) {
-        const restoring = scrollMemory.isRestoring();
-        scrollMemory.restore(instance, items, onRevealItem);
-        if (!restoring) scrollMemory.save(instance, items);
-      }
+  const gt = useGT();
+  // The change bars are colour alone; this names each changed line for screen readers.
+  const lineKindCss = `[data-indicators="bars"] [data-line][data-line-type="change-deletion"]::before {
+  content: "" / ${JSON.stringify(gt("Removed", { $context: "diff line, read by screen readers" }))};
+}
+[data-indicators="bars"] [data-line][data-line-type="change-addition"]::before {
+  content: "" / ${JSON.stringify(gt("Added", { $context: "diff line, read by screen readers" }))};
+}`;
+  const { paneRef, onItemPostRender, wrapperProps, items, attachViewer, updateActiveFile, css } =
+    useDiffCodeViewExtras<LAnnotation>({
+      items: props.items ?? props.initialItems ?? [],
+      loadDiffFiles: options?.loadDiffFiles,
+      viewerRef,
+      workspace,
+      navigationThread,
+      navigationSelection,
+      navigationReveal,
+      onNavigationRestored,
+      onActiveFileChange,
     });
-  }, [scrollMemory, navigationReveal, items, onRevealItem]);
-  useEffect(() => {
-    if (viewer) restoreScroll();
-    return () => {
-      if (restoreFrame.current !== null) cancelAnimationFrame(restoreFrame.current);
-      restoreFrame.current = null;
-    };
-  }, [restoreScroll, viewer]);
-  const activeFile = useRef<string | null | undefined>(undefined);
-  const activeFrame = useRef<number | null>(null);
-  const updateActiveFile = useCallback(() => {
-    if (!onActiveFileChange || activeFrame.current !== null) return;
-    activeFrame.current = requestAnimationFrame(() => {
-      activeFrame.current = null;
-      const viewer = internalRef.current?.getInstance();
-      if (!viewer) return;
-      const item = findAnchoredDiffItem(items, viewer.getScrollTop(), (id) =>
-        viewer.getTopForItem(id),
-      );
-      const path =
-        item?.type === "diff" ? resolveFileDiffPath(item.fileDiff) : (item?.file.name ?? null);
-      if (path === activeFile.current) return;
-      activeFile.current = path;
-      onActiveFileChange(path);
-    });
-  }, [items, onActiveFileChange]);
-  useEffect(() => {
-    updateActiveFile();
-    return () => {
-      if (activeFrame.current !== null) cancelAnimationFrame(activeFrame.current);
-      activeFrame.current = null;
-    };
-  }, [updateActiveFile]);
-  const { pane, findShortcut, popup, css, onPostRender } = useDiffSearch(
-    props.items ?? props.initialItems ?? [],
-    internalRef,
-    onRevealItem,
-  );
-  const revealFrame = useRef<number | null>(null);
-  const expandedJump = useRef<DiffJumpReveal | undefined>(undefined);
-  const handledJump = useRef<DiffJumpReveal | undefined>(undefined);
-  useEffect(() => {
-    if (!navigationReveal) return;
-    return () => {
-      if (revealFrame.current !== null) cancelAnimationFrame(revealFrame.current);
-      revealFrame.current = null;
-    };
-  }, [navigationReveal]);
-  useEffect(() => {
-    if (!navigationReveal || !viewer?.getInstance() || handledJump.current === navigationReveal)
-      return;
-    const item = items.find(
-      (entry) =>
-        entry.type === "diff" && resolveFileDiffPath(entry.fileDiff) === navigationReveal.path,
-    );
-    if (!item || item.collapsed) return;
-    viewer.scrollTo({ type: "item", id: item.id, align: "start" });
-  }, [items, navigationReveal, viewer]);
   return (
     <DiffWorkerPoolProvider>
-      <div
-        ref={pane}
-        {...findShortcut}
-        onWheelCapture={() => scrollMemory.cancel()}
-        onPointerDownCapture={() => scrollMemory.cancel()}
-        onKeyDownCapture={(event) => {
-          scrollMemory.cancel();
-          findShortcut.onKeyDownCapture(event);
-          if (event.defaultPrevented) return;
-          if (!navigationThread || !workspace) return;
-          const action = fileNavigationAction(event.nativeEvent, keybindings);
-          if (action !== "back" && action !== "forward") return;
-          event.preventDefault();
-          event.stopPropagation();
-          navigation.cancelPending();
-          useRightPanelStore
-            .getState()
-            .traverseFileJumpHistory(navigationThread, workspace.cwd, action);
-        }}
-        className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col outline-none"
-      >
-        {popup}
+      <div ref={paneRef} {...wrapperProps}>
         <CodeView<LAnnotation>
           {...(props.items !== undefined ? { ...props, items } : { ...props, initialItems: items })}
           renderHeaderMetadata={props.renderHeaderMetadata ?? renderDiffHeaderMetadata}
           onScroll={(scrollTop, viewer) => {
-            restoreScroll();
             updateActiveFile();
             onScroll?.(scrollTop, viewer);
           }}
           ref={attachViewer}
-          // The custom element itself is focusable for keyboard scrolling. Its native outline sits
-          // outside the panel clipping boundary; actual controls inside retain their own indicators.
           className={
             className
               ? `diff-render-surface [--code-background:var(--background)] outline-none ${className}`
@@ -546,101 +294,27 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
           options={{
             ...options,
             lineDiffType: "none",
-            expansionLineCount: DIFF_CONTEXT_LINES,
-            collapsedContextThreshold: 0,
-            ...(context.loadDiffFiles ? { loadDiffFiles: context.loadDiffFiles } : {}),
             onPostRender(node, instance, phase, itemContext) {
-              if (phase !== "unmount") restoreScroll();
-              updateActiveFile();
-              onPostRender();
-              painter.paint(
-                node,
-                itemContext.type === "diff"
-                  ? itemContext.instance.fileDiff
-                  : itemContext.instance.file,
-                phase,
-              );
               if (itemContext.type === "diff") {
-                const diff = itemContext.instance.fileDiff;
-                navigation.attach(
-                  node,
-                  workspace &&
-                    navigationThread &&
-                    diff &&
-                    (isCppPath(diff.name) ||
-                      usesAngelScript(
-                        diff.name,
-                        diff.additionLines.slice(0, 100).join("") +
-                          diff.deletionLines.slice(0, 100).join(""),
-                        api,
-                      ))
-                    ? diff
-                    : undefined,
-                  phase,
-                );
-                context.render(
-                  node,
-                  itemContext.instance,
-                  phase,
-                  itemContext.item.collapsed ?? false,
-                );
-                if (
-                  navigationReveal &&
-                  phase !== "unmount" &&
-                  diff &&
-                  !itemContext.item.collapsed &&
-                  resolveFileDiffPath(diff) === navigationReveal.path &&
-                  handledJump.current !== navigationReveal &&
-                  revealFrame.current === null
-                ) {
-                  const expansion = diffJumpExpansion(
-                    diff,
-                    navigationReveal.line,
-                    navigationReveal.side,
-                  );
-                  if (expansion && expandedJump.current !== navigationReveal) {
-                    expandedJump.current = navigationReveal;
-                    itemContext.instance.expandHunk(
-                      expansion.index,
-                      expansion.direction,
-                      expansion.count,
-                    );
-                  } else if (!expansion || !diff.isPartial) {
-                    const id = itemContext.item.id;
-                    revealFrame.current = requestAnimationFrame(() => {
-                      revealFrame.current = null;
-                      handledJump.current = navigationReveal;
-                      pane.current?.focus({ preventScroll: true });
-                      internalRef.current?.scrollTo({
-                        type: "line",
-                        id,
-                        lineNumber: navigationReveal.line,
-                        side: navigationReveal.side,
-                        align: "center",
-                      });
-                      onNavigationRestored?.();
-                    });
-                  }
-                }
+                onItemPostRender(node, phase, itemContext);
                 options?.onPostRender?.(node, itemContext.instance, phase, itemContext);
               } else {
+                onItemPostRender(node, phase, { type: "file", file: itemContext.instance.file });
                 options?.onPostRender?.(node, itemContext.instance, phase, itemContext);
               }
             },
-            unsafeCSS: `${DIFF_VIEW_UNSAFE_CSS}\n${ANGELSCRIPT_CSS}\n${css}\n${unsafeCSSExtra ?? ""}`,
+            unsafeCSS: `${DIFF_VIEW_UNSAFE_CSS}\n${lineKindCss}\n${css}${
+              unsafeCSSExtra ? `\n${unsafeCSSExtra}` : ""
+            }`,
             itemMetrics: {
               diffHeaderHeight: 32,
               hunkSeparatorHeight: 24,
-              // Pierre uses its general file spacing as a fallback in expanded-file layout paths.
-              // Keep it zero alongside the explicit paddingTop or expanding the first file can
-              // reintroduce the library's default 8px gap above its header.
+              // Zero both spacing and paddingTop; Pierre's expanded-file fallback otherwise adds an 8px header
+              // gap.
               spacing: 0,
               paddingTop: 0,
-              // Unlike the gap above, the 8px under a file's last line is painted
-              // unconditionally by Pierre's stylesheet (`--diffs-gap-fallback`), so the metric has
-              // to count it: at zero every expanded file's virtual height ran 8px short of its
-              // rendered height, and the end of the list sat past the reachable scroll range —
-              // one clipped file row per expanded file above it.
+              // Include Pierre's 8px --diffs-gap-fallback in metrics or each expanded file loses a scrollable
+              // row.
               paddingBottom: 8,
             },
             layout: { paddingTop: 0, paddingBottom: 0, gap: 0 },

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useCallback, type ComponentProps } from "react";
-import type { FileOptions } from "@pierre/diffs/react";
+import { useGT } from "gt-react";
+import { useEffect, useRef, type ComponentProps } from "react";
+import type { File as FileInstance, PostRenderPhase } from "@pierre/diffs";
 import type { EnvironmentId, ScopedThreadRef, ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { isAngelScriptPath, usesAngelScript } from "@t3tools/shared/angelscript";
 import { isCppPath } from "@t3tools/shared/cppNavigation";
@@ -14,7 +15,11 @@ import { projectEnvironment } from "~/state/projects";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 
-type FilePostRender = NonNullable<FileOptions<unknown>["onPostRender"]>;
+type FilePostRender = <LAnnotation>(
+  node: HTMLElement,
+  instance: FileInstance<LAnnotation, undefined>,
+  phase: PostRenderPhase,
+) => void;
 
 /** Add language navigation and reference coloring without coupling them to file-preview chrome. */
 export function useFileSourceNavigation({
@@ -42,7 +47,9 @@ export function useFileSourceNavigation({
   revealRequestId: number;
   revealFileLine: FilePostRender;
 }) {
+  const gt = useGT();
   const navigationRoot = useRef<HTMLDivElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the preview's DOM root after a line reveal so Back/Forward keys reach it
   useEffect(() => {
     if (relativePath !== null && revealLine !== null && revealRequestId > 0)
       navigationRoot.current?.focus({ preventScroll: true });
@@ -53,37 +60,33 @@ export function useFileSourceNavigation({
       : undefined,
   );
   const angelScript = relativePath !== null && usesAngelScript(relativePath, contents, api);
-  const painter = useMemo(() => createAngelScriptPainter(api), [api]);
+  const painter = createAngelScriptPainter(api);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the painter's CSS highlight ranges when it is replaced or unmounts
   useEffect(() => () => painter.dispose(), [painter]);
   const findDefinitionFiles = useAtomQueryRunner(projectEnvironment.searchEntries, {
     refresh: true,
     reportFailure: false,
   });
   const handleDefinitionClick = useDefinitionNavigation({ environmentId, cwd }, threadRef, api);
-  const navigation = useMemo(
-    () => createAngelScriptClickNavigation(handleDefinitionClick, api),
-    [handleDefinitionClick, api],
-  );
+  const navigation = createAngelScriptClickNavigation(handleDefinitionClick, api);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- detaches the navigation's DOM listeners and reference highlights when it is replaced or unmounts
   useEffect(
     () => () => {
       navigation.dispose();
     },
     [navigation],
   );
-  const onFilePostRender = useCallback<FilePostRender>(
-    (node, instance, phase) => {
-      painter.paint(node, instance.file, phase);
-      navigation.attach(
-        node,
-        (angelScript || (relativePath !== null && isCppPath(relativePath))) && !isHostFile
-          ? instance.file
-          : undefined,
-        phase,
-      );
-      revealFileLine(node, instance, phase);
-    },
-    [painter, navigation, angelScript, relativePath, isHostFile, revealFileLine],
-  );
+  const onFilePostRender: FilePostRender = (node, instance, phase) => {
+    painter.paint(node, instance.file, phase);
+    navigation.attach(
+      node,
+      (angelScript || (relativePath !== null && isCppPath(relativePath))) && !isHostFile
+        ? instance.file
+        : undefined,
+      phase,
+    );
+    revealFileLine(node, instance, phase);
+  };
   const containerProps = {
     ref: navigationRoot,
     tabIndex: -1,
@@ -131,7 +134,7 @@ export function useFileSourceNavigation({
               toastManager.add(
                 stackedThreadToast({
                   type: "info",
-                  title: "No unique source/header counterpart found",
+                  title: gt("No unique source/header counterpart found"),
                 }),
               );
           })
@@ -140,7 +143,7 @@ export function useFileSourceNavigation({
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: "Unable to open source/header counterpart",
+                  title: gt("Unable to open source/header counterpart"),
                 }),
               );
           });

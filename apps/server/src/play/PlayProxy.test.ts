@@ -21,19 +21,13 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import {
-  HttpBody,
-  HttpClient,
-  HttpClientRequest,
-  HttpRouter,
-  HttpServer,
-} from "effect/unstable/http";
+import { HttpBody, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CLOUD_ENDPOINT_RUNTIME_CONFIG } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
-import { httpCompressionLayer } from "../http.ts";
+import { layerHttpCompression } from "../http.ts";
 import {
   PLAY_REQUEST_TIMEOUT_MS,
   createPlayHttpServer,
@@ -162,14 +156,35 @@ const startProxy = Effect.fn("PlayProxyTest.start")(function* (options: {
 /** A tracer that keeps every span, as the server's trace file would. */
 const recordingTracer = () => {
   const spans: Array<Tracer.NativeSpan> = [];
+  let ended = 0;
+  const waiting: Array<{ readonly count: number; readonly resolve: () => void }> = [];
+  class RecordedSpan extends Tracer.NativeSpan {
+    override end(...args: Parameters<Tracer.NativeSpan["end"]>) {
+      super.end(...args);
+      ended += 1;
+      for (const waiter of waiting.filter((candidate) => candidate.count <= ended)) {
+        waiting.splice(waiting.indexOf(waiter), 1);
+        waiter.resolve();
+      }
+    }
+  }
   const tracer = Tracer.make({
     span: (options) => {
-      const span = new Tracer.NativeSpan(options);
+      const span = new RecordedSpan(options);
       spans.push(span);
       return span;
     },
   });
-  return { spans, tracer };
+  /** Waits until this many spans have ended. */
+  const ended$ = (count: number) =>
+    Effect.promise(
+      () =>
+        new Promise<void>((resolve) => {
+          if (ended >= count) resolve();
+          else waiting.push({ count, resolve });
+        }),
+    );
+  return { spans, tracer, untilEnded: ended$ };
 };
 
 const serveProxy = Effect.fn("PlayProxyTest.serve")(function* (
@@ -185,7 +200,7 @@ const serveProxy = Effect.fn("PlayProxyTest.serve")(function* (
         ? { managedTunnelName: Effect.succeed(managedTunnelName) }
         : {}),
     }),
-    httpCompressionLayer,
+    layerHttpCompression,
   ).pipe(
     Layer.provide(NodeHttpClient.layerNodeHttp),
     Layer.provideMerge(NodeHttpPlatform.layer),
@@ -389,7 +404,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
   it.effect("never writes the secret into the server's traces", () =>
     Effect.gen(function* () {
       const upstream = yield* fakePlayServer;
-      const { spans, tracer } = recordingTracer();
+      const { spans, tracer, untilEnded } = recordingTracer();
       const proxy = yield* startProxy({ upstreamPort: upstream.port, tracer });
       const fromBody = yield* proxy.request("/play/__auth/ticket", mintRequest());
       expect(fromBody.status).toBe(200);
@@ -404,22 +419,24 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("play proxy", (it) =
       });
       expect(fromOldHeader.status).toBe(200);
       // The server span is ended after the response is sent.
-      yield* Effect.sleep("50 millis");
-
-      const minted = spans.filter(
-        (span) => span.attributes.get("url.path") === "/play/__auth/ticket",
-      );
+      const serverSpans = () =>
+        spans.filter((span) => span.attributes.get("url.path") === "/play/__auth/ticket");
+      while (serverSpans().filter((span) => span.status._tag === "Ended").length < 3) {
+        yield* untilEnded(spans.filter((span) => span.status._tag === "Ended").length + 1);
+      }
+      const minted = serverSpans();
       expect(minted).toHaveLength(3);
       const recorded = minted.flatMap((span) => [...span.attributes.values()].map(String));
       expect(recorded.some((value) => value.includes(KEY_HEX))).toBe(false);
-      const oldHeaderSpan = minted.find((span) =>
-        span.attributes.has("http.request.header.x-t3-play-key"),
-      );
-      expect(oldHeaderSpan?.attributes.get("http.request.header.x-t3-play-key")).toBe("<redacted>");
-      const schemeSpan = minted.find((span) =>
-        span.attributes.has("http.request.header.authorization"),
-      );
-      expect(schemeSpan?.attributes.get("http.request.header.authorization")).toBe("<redacted>");
+      // Effect records no request headers unless a TracerHeaderFilter opts in; any it records
+      // for the key's headers are redacted.
+      for (const header of ["x-t3-play-key", "authorization"]) {
+        for (const span of minted) {
+          expect([undefined, "<redacted>"]).toContain(
+            span.attributes.get(`http.request.header.${header}`),
+          );
+        }
+      }
     }),
   );
 

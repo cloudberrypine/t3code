@@ -1,37 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - createPlayHttpServer configures the Node HTTP server.
 /**
- * Authenticated reverse proxy from `/play/*` to a loopback "play server" (fork-only).
- *
- * Polyzonia's play server (`scripts/web/play_server.py` in that repo) serves every
- * worktree's web build at `/play/<worktree>/` on 127.0.0.1. Reusing the T3 origin
- * is what lets a phone reach it over the connection it already has (T3 Connect,
- * Tailscale or LAN) without exposing anything else.
- *
- * Access is an environment session (read scope; operate for writes) or the play
- * cookie. A phone's browser has no T3 session, so an agent posts a one-time link
- * `https://<host>/play/<wt>/#ticket=<ticket>`: without access, page loads get a
- * small page that redeems the fragment's ticket (`POST /play/__auth/redeem`) for
- * an HttpOnly cookie on `Path=/play`. Tickets come from `POST /play/__auth/ticket`
- * with an operate session or the `play-proxy` secret (local scripts read it from
- * the secrets folder) as `{"key": "<hex>"}` in the JSON body, or in
- * `authorization: T3Play <hex>`. Secrets never go in query strings or in headers
- * the HTTP tracer records: request URLs and headers are traced (to
- * `server.trace.ndjson`), bodies are not. The old `x-t3-play-key` header still
- * works for scripts from before, and is redacted from traces like `authorization`.
- *
- * Every response is `Cache-Control: private` (Cloudflare caches public responses
- * on T3 Connect hostnames). The client is node:http, which never decompresses, so
- * precompressed files keep their Content-Encoding.
- *
- * Optional `<state dir>/play-proxy.json`: `{"enabled": false}` turns the route off,
- * `"upstream"` (loopback http, default http://127.0.0.1:8790), `"publicOrigin"`
- * for minted links.
- *
- * Minted links name the address the phone reaches T3 at: play-proxy.json's
- * `publicOrigin`, else the https address a signed-in play page was last opened
- * at (kept in `<state dir>/play-proxy-origin.json` across restarts), else the
- * T3 Connect address of this environment's managed tunnel (derived from its
- * tunnel name, the way the relay names both).
+ * Authenticated reverse proxy from `/play/*` to Polyzonia's loopback play server (fork-only).
+ * Access is a T3 session or the play cookie; secrets never go in URLs or traced headers.
+ * docs/local-fork.md ("Polyzonia play proxy") describes tickets, cookies, config and origins.
  */
 import * as NodeHttp from "node:http";
 import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
@@ -50,12 +21,13 @@ import {
   Headers,
   HttpClient,
   HttpClientRequest,
+  HttpMethod,
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
-import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CLOUD_ENDPOINT_RUNTIME_CONFIG, decodeRuntimeConfig } from "../cloud/config.ts";
@@ -346,17 +318,19 @@ const readJsonBody = (request: HttpServerRequest.HttpServerRequest) =>
     Effect.orElseSucceed((): Record<string, unknown> => ({})),
   );
 
-const sessionAllows = (request: HttpServerRequest.HttpServerRequest, write: boolean) =>
-  Effect.gen(function* () {
-    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-    const session = yield* serverAuth
-      .authenticateHttpRequest(request)
-      .pipe(Effect.orElseSucceed(() => null));
-    return (
-      session !== null &&
-      session.scopes.includes(write ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope)
-    );
-  });
+const sessionAllows = Effect.fn("PlayProxy.sessionAllows")(function* (
+  request: HttpServerRequest.HttpServerRequest,
+  write: boolean,
+) {
+  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const session = yield* serverAuth
+    .authenticateHttpRequest(request)
+    .pipe(Effect.orElseSucceed(() => null));
+  return (
+    session !== null &&
+    session.scopes.includes(write ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope)
+  );
+});
 
 /** The route's state: its secret, config file, redeemed tickets and HTTP client. */
 const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
@@ -399,24 +373,22 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
   });
 
   /** Kept across restarts: T3 Code may restart before the next link is minted. */
-  const keepOrigin = (origin: string) =>
-    Effect.gen(function* () {
-      if ((yield* learned) === origin) return;
-      yield* Ref.set(learnedOrigin, origin);
-      const learnedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-      const contents = yield* encodeOriginFile({ origin, learnedAt });
-      yield* writeFileStringAtomically({ filePath: originPath, contents }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("play proxy: could not keep the public origin", error),
-        ),
-      );
-    });
+  const keepOrigin = Effect.fn("PlayProxy.keepOrigin")(function* (origin: string) {
+    if ((yield* learned) === origin) return;
+    yield* Ref.set(learnedOrigin, origin);
+    const learnedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+    const contents = yield* encodeOriginFile({ origin, learnedAt });
+    yield* writeFileStringAtomically({ filePath: originPath, contents }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("play proxy: could not keep the public origin", error),
+      ),
+    );
+  });
   /** Every signed-in request names it: written only when it changes. */
-  const learn = (origin: string) =>
-    Effect.gen(function* () {
-      if ((yield* learned) === origin) return;
-      yield* originLock.withPermits(1)(keepOrigin(origin));
-    });
+  const learn = Effect.fn("PlayProxy.learn")(function* (origin: string) {
+    if ((yield* learned) === origin) return;
+    yield* originLock.withPermits(1)(keepOrigin(origin));
+  });
 
   /** Re-read when the file changes; no file means the defaults. */
   const config = Effect.gen(function* () {
@@ -495,69 +467,73 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
       PLAY_COOKIE_MAX_AGE_SECONDS,
     );
 
-  const redeem = (request: HttpServerRequest.HttpServerRequest) =>
-    Effect.gen(function* () {
-      if (request.method !== "POST") return textReply("Method Not Allowed", 405);
-      if (!sameOriginWrite(request)) return textReply("Forbidden", 403);
-      const body = yield* readJsonBody(request);
-      const now = yield* nowSeconds;
-      const verified =
-        input.key && typeof body.ticket === "string"
-          ? verifyTicket(input.key, body.ticket, now)
-          : null;
-      if (!input.key || !verified || !(yield* claimTicket(verified.id, verified.expiresAt, now))) {
-        return textReply("This play link was already used or has expired.", 401);
-      }
-      return HttpServerResponse.empty({
-        status: 204,
-        headers: { ...PAGE_HEADERS, "set-cookie": newCookie(input.key, request, now) },
-      });
+  const redeem = Effect.fn("PlayProxy.redeem")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+  ) {
+    if (request.method !== "POST") return textReply("Method Not Allowed", 405);
+    if (!sameOriginWrite(request)) return textReply("Forbidden", 403);
+    const body = yield* readJsonBody(request);
+    const now = yield* nowSeconds;
+    const verified =
+      input.key && typeof body.ticket === "string"
+        ? verifyTicket(input.key, body.ticket, now)
+        : null;
+    if (!input.key || !verified || !(yield* claimTicket(verified.id, verified.expiresAt, now))) {
+      return textReply("This play link was already used or has expired.", 401);
+    }
+    return HttpServerResponse.empty({
+      status: 204,
+      headers: { ...PAGE_HEADERS, "set-cookie": newCookie(input.key, request, now) },
     });
+  });
 
-  const mint = (request: HttpServerRequest.HttpServerRequest) =>
-    Effect.gen(function* () {
-      if (request.method !== "POST") return textReply("Method Not Allowed", 405);
-      const key = input.key;
-      const body = yield* readJsonBody(request);
-      const allowed =
-        key !== null &&
-        (keyMatches(key, offeredKey(request, body)) || (yield* sessionAllows(request, true)));
-      if (!allowed || key === null) return textReply("Unauthorized", 401);
-      const ttl =
-        typeof body.ttlSeconds === "number" ? body.ttlSeconds : PLAY_TICKET_DEFAULT_TTL_SECONDS;
-      const { ticket, expiresAt } = makeTicket(key, yield* nowSeconds, ttl);
-      const { origin, source } = yield* publicOrigin;
-      const json = yield* encodeTicketResponse({
-        ticket,
-        expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAt * 1000)),
-        publicOrigin: origin,
-        publicOriginSource: source,
-      });
-      return HttpServerResponse.text(json, {
-        status: 200,
-        headers: PAGE_HEADERS,
-        contentType: "application/json",
-      });
+  const mint = Effect.fn("PlayProxy.mint")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+  ) {
+    if (request.method !== "POST") return textReply("Method Not Allowed", 405);
+    const key = input.key;
+    const body = yield* readJsonBody(request);
+    const allowed =
+      key !== null &&
+      (keyMatches(key, offeredKey(request, body)) || (yield* sessionAllows(request, true)));
+    if (!allowed || key === null) return textReply("Unauthorized", 401);
+    const ttl =
+      typeof body.ttlSeconds === "number" ? body.ttlSeconds : PLAY_TICKET_DEFAULT_TTL_SECONDS;
+    const { ticket, expiresAt } = makeTicket(key, yield* nowSeconds, ttl);
+    const { origin, source } = yield* publicOrigin;
+    const json = yield* encodeTicketResponse({
+      ticket,
+      expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAt * 1000)),
+      publicOrigin: origin,
+      publicOriginSource: source,
     });
+    return HttpServerResponse.text(json, {
+      status: 200,
+      headers: PAGE_HEADERS,
+      contentType: "application/json",
+    });
+  });
 
   /** "cookie" (and whether to renew it), "session", or null. */
-  const access = (request: HttpServerRequest.HttpServerRequest, write: boolean) =>
-    Effect.gen(function* () {
-      const cookie = readCookie(request.headers.cookie, PLAY_COOKIE_NAME);
-      if (cookie && input.key) {
-        const now = yield* nowSeconds;
-        const verified = verifyCookieValue(input.key, cookie, now);
-        if (verified) {
-          return {
-            via: "cookie" as const,
-            renew: verified.expiresAt - now < PLAY_COOKIE_MAX_AGE_SECONDS / 2,
-          };
-        }
+  const access = Effect.fn("PlayProxy.access")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+    write: boolean,
+  ) {
+    const cookie = readCookie(request.headers.cookie, PLAY_COOKIE_NAME);
+    if (cookie && input.key) {
+      const now = yield* nowSeconds;
+      const verified = verifyCookieValue(input.key, cookie, now);
+      if (verified) {
+        return {
+          via: "cookie" as const,
+          renew: verified.expiresAt - now < PLAY_COOKIE_MAX_AGE_SECONDS / 2,
+        };
       }
-      return (yield* sessionAllows(request, write))
-        ? { via: "session" as const, renew: false }
-        : null;
-    });
+    }
+    return (yield* sessionAllows(request, write))
+      ? { via: "session" as const, renew: false }
+      : null;
+  });
 
   const forwardHeaders = (request: HttpServerRequest.HttpServerRequest, upstream: URL) => {
     const headers: Record<string, string> = {};
@@ -580,47 +556,47 @@ const makePlayProxy = Effect.fn("PlayProxy.make")(function* (input: {
         )
       : textReply("The Polyzonia play server is not running.", 502);
 
-  const proxy = (
+  const proxy = Effect.fn("PlayProxy.proxy")(function* (
     request: HttpServerRequest.HttpServerRequest,
     upstream: URL,
     pathAndQuery: string,
     setCookie: string | undefined,
-  ) =>
-    Effect.gen(function* () {
-      const write = request.method !== "GET" && request.method !== "HEAD";
-      const length = request.headers["content-length"];
-      const outgoing = HttpClientRequest.make(request.method)(
-        new URL(pathAndQuery, upstream).toString(),
-      ).pipe(
-        HttpClientRequest.setHeaders(forwardHeaders(request, upstream)),
-        write
-          ? HttpClientRequest.bodyStream(request.stream, {
-              contentType: request.headers["content-type"] ?? "application/octet-stream",
-              ...(length !== undefined ? { contentLength: Number(length) } : {}),
-            })
-          : (self) => self,
-      );
-      const response = yield* client.execute(outgoing).pipe(Effect.option);
-      if (Option.isNone(response)) return unavailable(request, upstream);
-      const headers: Record<string, string> = {};
-      for (const [name, value] of Object.entries(response.value.headers)) {
-        if (!DROPPED_RESPONSE_HEADERS.has(name)) headers[name] = value;
-      }
-      headers["cache-control"] = privateCacheControl(headers["cache-control"]);
-      if (setCookie) headers["set-cookie"] = setCookie;
-      const status = response.value.status;
-      if (request.method === "HEAD" || status === 204 || status === 304) {
-        return HttpServerResponse.empty({ status, headers });
-      }
-      return HttpServerResponse.stream(response.value.stream, {
-        status,
-        headers,
-        ...(headers["content-type"] ? { contentType: headers["content-type"] } : {}),
-      });
+  ) {
+    const method = request.method;
+    if (!HttpMethod.isHttpMethod(method)) return textReply("Method Not Allowed", 405);
+    const write = method !== "GET" && method !== "HEAD";
+    const length = request.headers["content-length"];
+    const outgoing = HttpClientRequest.make(method)(
+      new URL(pathAndQuery, upstream).toString(),
+    ).pipe(
+      HttpClientRequest.setHeaders(forwardHeaders(request, upstream)),
+      write
+        ? HttpClientRequest.bodyStream(request.stream, {
+            contentType: request.headers["content-type"] ?? "application/octet-stream",
+            ...(length !== undefined ? { contentLength: Number(length) } : {}),
+          })
+        : (self) => self,
+    );
+    const response = yield* client.execute(outgoing).pipe(Effect.option);
+    if (Option.isNone(response)) return unavailable(request, upstream);
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(response.value.headers)) {
+      if (!DROPPED_RESPONSE_HEADERS.has(name)) headers[name] = value;
+    }
+    headers["cache-control"] = privateCacheControl(headers["cache-control"]);
+    if (setCookie) headers["set-cookie"] = setCookie;
+    const status = response.value.status;
+    if (request.method === "HEAD" || status === 204 || status === 304) {
+      return HttpServerResponse.empty({ status, headers });
+    }
+    return HttpServerResponse.stream(response.value.stream, {
+      status,
+      headers,
+      ...(headers["content-type"] ? { contentType: headers["content-type"] } : {}),
     });
+  });
 
   // The route handler itself: an Effect run once per request.
-  // @effect-diagnostics-next-line returnEffectInGen:off
   return Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const current = yield* config;

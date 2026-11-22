@@ -1,23 +1,24 @@
-import { SymbolView } from "../../components/AppSymbol";
-import { useAtomValue, useAtomSet } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
 import { Pressable, View } from "react-native";
 import {
   orderSidebarEnvironments,
   moveSidebarEnvironment,
 } from "@t3tools/client-runtime/state/thread-nesting";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { workspaceConnections } from "../../state/workspace";
-import { AppText as Text } from "../../components/AppText";
-import { ControlPillMenu } from "../../components/ControlPillMenu";
+import { AppText as Text } from "../../components/ui/AppText";
+import { Menu } from "../../components/ui/Menu";
 import type { ThreadListV2ComputerItem } from "./threadListV2";
 
 const EMPTY: readonly string[] = [];
 export function useComputerSections() {
   const environments = useAtomValue(workspaceConnections.sidebarEnvironmentsAtom);
   const result = useAtomValue(mobilePreferencesAtom);
-  const save = useAtomSet(updateMobilePreferencesAtom);
+  const save = useAtomCommand(saveMobilePreferences);
   const loaded = AsyncResult.isSuccess(result);
   const order = loaded ? (result.value.computerSectionOrder ?? EMPTY) : EMPTY;
   const collapsed = loaded ? (result.value.collapsedComputerSections ?? EMPTY) : EMPTY;
@@ -26,7 +27,7 @@ export function useComputerSections() {
   const toggle = useCallback(
     (id: string) => {
       if (loaded)
-        save({
+        void save({
           transform: (current) => ({
             collapsedComputerSections: (current.collapsedComputerSections ?? []).includes(id)
               ? current.collapsedComputerSections?.filter((key) => key !== id)
@@ -39,7 +40,7 @@ export function useComputerSections() {
   const move = useCallback(
     (id: string, direction: -1 | 1) => {
       if (loaded)
-        save({
+        void save({
           transform: (current) => ({
             computerSectionOrder: moveSidebarEnvironment(
               orderSidebarEnvironments(
@@ -69,7 +70,7 @@ export function ComputerSectionHeader({
   readonly controls: ReturnType<typeof useComputerSections>;
 }) {
   return (
-    <ControlPillMenu
+    <Menu
       shouldOpenOnLongPress
       actions={[
         { id: "up", title: "Move up", attributes: { disabled: !item.canMoveUp || item.disabled } },
@@ -100,6 +101,6 @@ export function ComputerSectionHeader({
           </Text>
         </View>
       </Pressable>
-    </ControlPillMenu>
+    </Menu>
   );
 }

@@ -24,3 +24,20 @@ export function getDiffStatTotals(
         : undefined,
   };
 }
+
+/**
+ * The filtered share of totals that may cover more files than the client lists (a truncated
+ * turn). Only listed files can be matched, so unlisted ones always count.
+ */
+export function getFilteredDiffStat(
+  totals: { additions: number; deletions: number },
+  files: ReadonlyArray<{ path: string; additions: number; deletions: number }>,
+  patterns?: string,
+) {
+  const { full, filtered } = getDiffStatTotals(files, patterns);
+  if (!filtered) return undefined;
+  return {
+    additions: totals.additions - (full.additions - filtered.additions),
+    deletions: totals.deletions - (full.deletions - filtered.deletions),
+  };
+}

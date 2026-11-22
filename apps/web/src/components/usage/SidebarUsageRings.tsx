@@ -1,3 +1,5 @@
+import type { UsageProviderKind } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import { useState } from "react";
 import { UsageLimitsSection } from "./UsageLimits";
 import { useAtomValue } from "@effect/atom-react";
@@ -9,8 +11,11 @@ import { environmentPresentations } from "../../state/presentation";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { selectSidebarLimit, sidebarLimitLabel, sidebarNoDataReason } from "./sidebarUsageLimits";
 
+const NO_HIDDEN_PROVIDERS: ReadonlySet<UsageProviderKind> = new Set();
+
 export function SidebarUsageRings() {
-  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const gt = useGT();
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const [now, setNow] = useState(Date.now);
@@ -80,13 +85,16 @@ export function SidebarUsageRings() {
                 {!window ? (
                   <>
                     <span className="font-medium">
-                      {driver === "codex" ? "Codex" : "Claude"} · no usage limit data yet
+                      {gt("{provider} · no usage limit data yet", {
+                        provider: driver === "codex" ? "Codex" : "Claude",
+                      })}
                     </span>
                     <span>{sidebarNoDataReason(presentations, driver, primaryEnvironmentId)}</span>
                   </>
                 ) : null}
                 <UsageLimitsSection
                   selectedEnvironmentIds={null}
+                  hiddenProviders={NO_HIDDEN_PROVIDERS}
                   now={now}
                   driver={driver}
                   compact

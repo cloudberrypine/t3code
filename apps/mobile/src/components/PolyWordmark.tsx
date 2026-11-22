@@ -1,7 +1,7 @@
 import { View } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
-import { AppText as Text } from "./AppText";
+import { AppText as Text } from "./ui/AppText";
 
 /** Same artwork, baseline and proportions as the desktop wordmark. */
 export function PolyWordmark({ fontSize = 21 }: { readonly fontSize?: number }) {

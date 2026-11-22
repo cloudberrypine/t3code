@@ -8,7 +8,8 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { PlayIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useGT } from "gt-react";
+import { useEffect } from "react";
 
 import { usePlayLinkOpener, useThreadPlayState } from "../../browser/playLinks";
 import { openUrlInPreview } from "../../browser/openFileInPreview";
@@ -41,31 +42,24 @@ function usePlayWebBuild(
     worktreePath: thread?.worktreePath ?? null,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
-  const openInPreview = useCallback(
-    (target: string) =>
-      openUrlInPreview({ threadRef, url: target, openPreview }).then((result) => {
-        if (result._tag === "Success") recordVisitForThread(threadRef, target);
-        return result;
-      }),
-    [openPreview, threadRef],
-  );
+  const openInPreview = (target: string) =>
+    openUrlInPreview({ threadRef, url: target, openPreview }).then((result) => {
+      if (result._tag === "Success") recordVisitForThread(threadRef, target);
+      return result;
+    });
   const openPlayLink = usePlayLinkOpener(threadRef.environmentId, openInPreview);
   const url = state?.status === "ready" ? state.url : null;
   const loading = state?.status === "loading";
-  return useMemo(() => {
-    if (loading) return { loading: true };
-    return url === null ? null : { loading: false, play: () => void openPlayLink(url, true) };
-  }, [loading, openPlayLink, url]);
+  if (loading) return { loading: true };
+  return url === null ? null : { loading: false, play: () => void openPlayLink(url, true) };
 }
 
 export function PlayWebBuildControl(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
-  const threadRef = useMemo(
-    () => scopeThreadRef(props.environmentId, props.threadId),
-    [props.environmentId, props.threadId],
-  );
+  const gt = useGT();
+  const threadRef = scopeThreadRef(props.environmentId, props.threadId);
   const playWebBuild = usePlayWebBuild(threadRef);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   if (playWebBuild === null) return null;
@@ -78,21 +72,21 @@ export function PlayWebBuildControl(props: {
             size="xs"
             variant="ghost"
             part="row"
-            aria-label="Play web build"
+            aria-label={gt("Play web build")}
             disabled={playWebBuild.loading}
             {...(playWebBuild.loading ? {} : { onClick: playWebBuild.play })}
           />
         }
       >
         <PlayIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-        <span className="truncate">Play web build</span>
+        <span className="truncate">{gt("Play web build")}</span>
       </TooltipTrigger>
       <TooltipPopup side="top">
         {playWebBuild.loading
-          ? "Checking the play server…"
+          ? gt("Checking the play server…")
           : shortcutLabel
-            ? `Play web build (${shortcutLabel})`
-            : "Play web build"}
+            ? gt("Play web build ({shortcut})", { shortcut: shortcutLabel })
+            : gt("Play web build")}
       </TooltipPopup>
     </Tooltip>
   );
@@ -110,6 +104,7 @@ export function PlayWebBuildShortcut(props: {
   const playWebBuild = usePlayWebBuild(props.threadRef);
   const play = playWebBuild?.loading === false ? playWebBuild.play : null;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a window keydown listener for the play shortcut while the thread is open
   useEffect(() => {
     if (play === null) return;
     const handler = (event: KeyboardEvent) => {

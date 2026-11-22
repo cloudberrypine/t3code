@@ -13,7 +13,6 @@
  *   again shortly while the play server does not answer.
  */
 import type { EnvironmentId } from "@t3tools/contracts";
-import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -21,8 +20,8 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
@@ -53,9 +52,10 @@ const PlayTicketReply = Schema.Struct({
 });
 export type PlayTicketReply = typeof PlayTicketReply.Type;
 
-class PlayTicketRefusedError extends Data.TaggedError("PlayTicketRefusedError")<{
-  readonly status: number;
-}> {
+class PlayTicketRefusedError extends Schema.TaggedError<PlayTicketRefusedError>()(
+  "PlayTicketRefusedError",
+  { status: Schema.Number },
+) {
   override get message(): string {
     return `The environment refused a play ticket (HTTP ${this.status}).`;
   }
@@ -76,7 +76,7 @@ export const mintPlayTicket = Effect.fn("clientRuntime.state.mintPlayTicket")(fu
     // The play routes are not part of the HTTP API; only the auth headers are used.
     group: "auth",
     method: "POST",
-    url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, PLAY_TICKET_PATH),
+    url: (_urls, httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, PLAY_TICKET_PATH),
     timeoutMs: TICKET_TIMEOUT_MS,
     request: ({ headers, url }) =>
       httpClient.execute(
@@ -124,7 +124,7 @@ export const checkPlayServer = Effect.fn("clientRuntime.state.checkPlayServer")(
       remoteAuthorization,
       group: "auth",
       method: "GET",
-      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, PLAY_HEALTH_PATH),
+      url: (_urls, httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, PLAY_HEALTH_PATH),
       timeoutMs: HEALTH_TIMEOUT_MS,
       request: ({ headers, url }) =>
         httpClient.execute(

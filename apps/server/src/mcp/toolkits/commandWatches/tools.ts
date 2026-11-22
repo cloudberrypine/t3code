@@ -7,7 +7,9 @@ import {
 } from "@t3tools/contracts";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
+import * as McpSchema from "effect/ai/McpSchema";
 
 import * as CommandWatchService from "../../../commandWatch/CommandWatchService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -53,6 +55,8 @@ const WatchCommandTool = Tool.make("watch_command", {
   }),
 })
   .annotate(Tool.Title, "Watch a command")
+  // Watches belong to the calling thread, so outside clients are not offered them.
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.OpenWorld, true);
 
@@ -67,6 +71,8 @@ const UnwatchCommandTool = Tool.make("unwatch_command", {
   }),
 })
   .annotate(Tool.Title, "Stop watching a command")
+  // Watches belong to the calling thread, so outside clients are not offered them.
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true);
 
@@ -77,6 +83,8 @@ const ListCommandWatchesTool = Tool.make("list_command_watches", {
   success: Schema.Struct({ watches: Schema.Array(CommandWatch) }),
 })
   .annotate(Tool.Title, "List command watches")
+  // Watches belong to the calling thread, so outside clients are not offered them.
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 

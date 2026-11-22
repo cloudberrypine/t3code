@@ -1,5 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { getDiffLineStat, resolveFileDiffPath } from "~/lib/diffRendering";
 
 // Local fork: a large diff shows one file at a time, picked from the file tree, instead of one
@@ -41,12 +41,8 @@ export function useSingleFileDiff({
     setSelection({ selectedFilePath, selectedFileRevealRequestId });
     if (selectedFilePath) setPicked(selectedFilePath);
   }
-  const shownPath = useMemo(
-    () =>
-      isLargeDiff(files, loadsPerFile)
-        ? shownDiffFilePath(files.map(resolveFileDiffPath), picked)
-        : null,
-    [files, loadsPerFile, picked],
-  );
+  const shownPath = isLargeDiff(files, loadsPerFile)
+    ? shownDiffFilePath(files.map(resolveFileDiffPath), picked)
+    : null;
   return { shownPath, pick: setPicked };
 }

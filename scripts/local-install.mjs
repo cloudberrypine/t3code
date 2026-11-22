@@ -5,9 +5,11 @@
 //     --version <build version> [--commit <sha prefix>] [--dry-run] [--max-wait-minutes N] [--launchd]
 // --signing-identity overrides the default codesign identity (each Mac has its own).
 // --launchd resubmits this command under launchd so it survives T3 quitting.
+// --db-backup <dir | host:dir> backs up ~/.t3/userdata/statev2.sqlite after T3 has quit and
+// before the swap (a new build may migrate the database; a rollback needs the old one).
 // --thread-purge dry-run|purge asks the next server start to plan, or plan and run, the
 // settled-thread purge (apps/server/src/persistence/ThreadPurge.ts). purge needs
-// --db-backup <dir | host:dir>; --thread-purge-plan <plan.json> limits it to a reviewed plan.
+// --db-backup; --thread-purge-plan <plan.json> limits it to a reviewed plan.
 // --restart-only does that without installing: wait, quit, back up, request, relaunch.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -84,8 +86,17 @@ const { values: options } = NodeUtil.parseArgs({
     "db-backup": { type: "string" },
     "thread-purge-plan": { type: "string" },
     "restart-only": { type: "boolean", default: false },
+    help: { type: "boolean", short: "h", default: false },
   },
 });
+const USAGE =
+  "Usage: node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--db-backup <dir|host:dir>] [--dry-run] [--max-wait-minutes N] [--launchd] [--signing-identity <sha1>] [--thread-purge dry-run|purge [--thread-purge-plan <plan.json>]]\n" +
+  "       node scripts/local-install.mjs --restart-only --thread-purge dry-run|purge [--db-backup <dir|host:dir>] [--thread-purge-plan <plan.json>] [--dry-run] [--max-wait-minutes N] [--launchd]\n" +
+  "--db-backup copies the database (consistent snapshot, verified hash) after T3 quits and before anything changes; --thread-purge purge requires it.";
+if (options.help) {
+  console.log(USAGE);
+  process.exit(0);
+}
 const restartOnly = options["restart-only"];
 const threadPurge = options["thread-purge"];
 const usageError =
@@ -95,10 +106,7 @@ const usageError =
   (threadPurge !== undefined && !["dry-run", "purge"].includes(threadPurge)) ||
   (threadPurge === "purge" && !options["db-backup"]);
 if (usageError) {
-  console.error(
-    "Usage: node scripts/local-install.mjs (--app <PolyCode.app> | --zip <artifact.zip>) --version <build version> [--commit <sha>] [--dry-run] [--max-wait-minutes N] [--launchd] [--signing-identity <sha1>] [--thread-purge dry-run|purge [--db-backup <dir|host:dir>] [--thread-purge-plan <plan.json>]]\n" +
-      "       node scripts/local-install.mjs --restart-only --thread-purge dry-run|purge [--db-backup <dir|host:dir>] [--thread-purge-plan <plan.json>] [--dry-run] [--max-wait-minutes N] [--launchd]",
-  );
+  console.error(USAGE);
   process.exit(2);
 }
 const sourceFlag = restartOnly ? null : options.app ? "--app" : "--zip";
@@ -325,7 +333,11 @@ function checkThreadPurge() {
   if (approvedPlan && !NodeFS.existsSync(approvedPlan)) {
     throw new Error(`Missing approved plan ${approvedPlan}`);
   }
-  if (threadPurge !== "purge") return;
+}
+
+/** Checks the --db-backup target has room for the database, before anything is quit. */
+function checkDbBackupTarget() {
+  if (!dbBackupArg) return;
   const size = NodeFS.statSync(STATE_DB).size;
   const target = backupTarget();
   if (target.host) {
@@ -379,34 +391,36 @@ function withQuiescentDatabase(copy) {
   throw new Error("Could not get a quiet database to back up");
 }
 
-/** With T3 stopped: backs up the database consistently and writes the request. */
-function requestThreadPurge() {
+/** With T3 stopped: copies the database to the --db-backup target and returns its path. */
+function backupDatabase() {
+  if (!dbBackupArg) return undefined;
+  const name = `statev2-${stamp}.sqlite`;
+  const target = backupTarget();
+  const backup = withQuiescentDatabase(() => {
+    const localHash = sha256File(STATE_DB);
+    if (target.host) {
+      const remoteFile = `${target.dir}/${name}`;
+      run("scp", ["-q", STATE_DB, `${target.host}:${remoteFile}`]);
+      const remoteHash = run("ssh", [target.host, `shasum -a 256 ${shellQuote(remoteFile)}`]).split(
+        /\s/,
+      )[0];
+      if (remoteHash !== localHash) throw new Error(`Backup hash mismatch at ${remoteFile}`);
+      return `${target.host}:${remoteFile}`;
+    }
+    const file = NodePath.join(target.dir, name);
+    run("cp", ["-c", STATE_DB, file]);
+    if (sha256File(file) !== localHash) throw new Error(`Backup hash mismatch at ${file}`);
+    return file;
+  });
+  log(`Database backed up and verified: ${backup}`);
+  return backup;
+}
+
+/** With T3 stopped: writes the purge request, naming the database backup a purge needs. */
+function requestThreadPurge(backup) {
   if (!threadPurge) return;
-  let backup;
-  if (threadPurge === "purge") {
-    const name = `statev2-${stamp}.sqlite`;
-    const target = backupTarget();
-    backup = withQuiescentDatabase(() => {
-      const localHash = sha256File(STATE_DB);
-      if (target.host) {
-        const remoteFile = `${target.dir}/${name}`;
-        run("scp", ["-q", STATE_DB, `${target.host}:${remoteFile}`]);
-        const remoteHash = run("ssh", [
-          target.host,
-          `shasum -a 256 ${shellQuote(remoteFile)}`,
-        ]).split(/\s/)[0];
-        if (remoteHash !== localHash) throw new Error(`Backup hash mismatch at ${remoteFile}`);
-        return `${target.host}:${remoteFile}`;
-      }
-      const file = NodePath.join(target.dir, name);
-      run("cp", ["-c", STATE_DB, file]);
-      if (sha256File(file) !== localHash) throw new Error(`Backup hash mismatch at ${file}`);
-      return file;
-    });
-    log(`Database backed up and verified: ${backup}`);
-  } else {
-    run("sqlite3", [STATE_DB, "PRAGMA wal_checkpoint(TRUNCATE);"]);
-  }
+  if (threadPurge === "purge" && !backup) throw new Error("Thread purge needs a database backup");
+  if (!backup) run("sqlite3", [STATE_DB, "PRAGMA wal_checkpoint(TRUNCATE);"]);
   // Written whole, then renamed, so the server never reads a partial request.
   const pending = `${PURGE_REQUEST}.tmp`;
   NodeFS.writeFileSync(
@@ -415,7 +429,7 @@ function requestThreadPurge() {
       {
         requestedAt: new Date().toISOString(),
         mode: threadPurge,
-        ...(backup ? { backup } : {}),
+        ...(threadPurge === "purge" ? { backup } : {}),
         ...(approvedPlan ? { approvedPlan } : {}),
       },
       null,
@@ -433,6 +447,7 @@ async function restartForThreadPurge() {
     throw new Error(`${PREVIOUS_APP} predates the thread purge; install a build with it first`);
   }
   checkThreadPurge();
+  checkDbBackupTarget();
   const idle = await waitForIdle();
   if (dryRun) {
     log(`Gate check: ${idle ? "idle" : "busy"}; dry run complete, nothing was quit`);
@@ -443,7 +458,7 @@ async function restartForThreadPurge() {
   notify("Restarting T3 Code for the thread purge.");
   await quitApp();
   try {
-    requestThreadPurge();
+    requestThreadPurge(backupDatabase());
   } catch (error) {
     NodeFS.rmSync(PURGE_REQUEST, { force: true });
     throw error;
@@ -483,6 +498,8 @@ async function main() {
       throw new Error("The staged app has no thread purge");
     }
     checkThreadPurge();
+    checkDbBackupTarget();
+    if (!dbBackupArg) log("No --db-backup: the database is not backed up before the swap");
     run("codesign", [
       "--force",
       "--deep",
@@ -526,11 +543,14 @@ async function main() {
     // previous app is back in place and running, and no purge request is left.
     const previous = NodePath.join(stage, "previous.app");
     let moved = false;
+    let dbBackup;
     try {
       if (hash(archive(PREVIOUS_APP)) !== oldHash) {
         throw new Error("Installed app changed during preparation");
       }
-      requestThreadPurge();
+      // Before the swap: the new build may migrate the database, so a rollback needs this copy.
+      dbBackup = backupDatabase();
+      requestThreadPurge(dbBackup);
       NodeFS.renameSync(PREVIOUS_APP, previous);
       moved = true;
       NodeFS.renameSync(next, INSTALLED_APP);
@@ -550,7 +570,10 @@ async function main() {
       log("Previous app restored and relaunched");
       throw error;
     }
-    log(`Installed and launched ${expectedVersion}. Backup: ${backupDir}`);
+    log(
+      `Installed and launched ${expectedVersion}. Backup: ${backupDir}` +
+        (dbBackup ? `; database backup: ${dbBackup}` : ""),
+    );
     notify(`Installed ${expectedVersion}.`);
   } finally {
     // Keep the stage if the restore itself failed, since it then holds the previous app.

@@ -7,7 +7,9 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-import { Atom } from "effect/unstable/reactivity";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import { Atom } from "effect/reactivity";
 
 import type { AtomCommand } from "./runtime.ts";
 
@@ -60,6 +62,14 @@ export function createOptimisticThreadLifecycle(
     }),
   );
 
+  // Until the durable snapshot catches up, an older pending update can still replace what shows.
+  const pendingThreadIdsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get): ReadonlySet<ThreadId> =>
+        new Set(get(pendingAtom(environmentId)).map((update) => update.threadId)),
+    ),
+  );
+
   function wrap<Input extends { readonly threadId: ThreadId }, E>(
     command: AtomCommand<
       { readonly environmentId: EnvironmentId; readonly input: Input },
@@ -77,84 +87,82 @@ export function createOptimisticThreadLifecycle(
   ): typeof command {
     return {
       label: command.label,
-      run: async (registry, target) => {
-        const now = DateTime.nowUnsafe();
-        const pending = pendingAtom(target.environmentId);
-        const source = sourceSnapshotAtom(target.environmentId);
-        const update: PendingThreadUpdate = {
-          threadId: target.input.threadId,
-          apply: (thread) => apply(thread, target.input, now, update.sequence !== undefined),
-        };
-        const followers =
-          follow === undefined
-            ? []
-            : previewFollowers(
-                registry.get(snapshotAtom(target.environmentId)),
-                target.input.threadId,
-                follow,
-                (child) => apply(child, { ...target.input, threadId: child.id }, now, false),
-              );
-        const removeFollower = (follower: PendingThreadUpdate) =>
-          registry.update(pending, (current) => current.filter((item) => item !== follower));
-        if (followers.length > 0) {
-          const waiting = new Set(followers);
-          let stopWatching = () => {};
-          const watch = (snapshot: OrchestrationV2ShellSnapshot | null) => {
-            for (const follower of waiting) {
-              const canonical = snapshot?.threads.find((thread) => thread.id === follower.threadId);
-              if (canonical !== undefined && parkState(canonical) === follower.expected) {
-                waiting.delete(follower);
-                removeFollower(follower.update);
+      run: (registry, target) =>
+        Effect.suspend(() => {
+          const now = DateTime.nowUnsafe();
+          const pending = pendingAtom(target.environmentId);
+          const source = sourceSnapshotAtom(target.environmentId);
+          const update: PendingThreadUpdate = {
+            threadId: target.input.threadId,
+            apply: (thread) => apply(thread, target.input, now, update.sequence !== undefined),
+          };
+          const followers =
+            follow === undefined
+              ? []
+              : previewFollowers(
+                  registry.get(snapshotAtom(target.environmentId)),
+                  target.input.threadId,
+                  follow,
+                  (child) => apply(child, { ...target.input, threadId: child.id }, now, false),
+                );
+          const removeFollower = (follower: PendingThreadUpdate) =>
+            registry.update(pending, (current) => current.filter((item) => item !== follower));
+          let stopWatchingFollowers = () => {};
+          if (followers.length > 0) {
+            const waiting = new Set(followers);
+            const watch = (snapshot: OrchestrationV2ShellSnapshot | null) => {
+              for (const follower of waiting) {
+                const canonical = snapshot?.threads.find(
+                  (thread) => thread.id === follower.threadId,
+                );
+                if (canonical !== undefined && parkState(canonical) === follower.expected) {
+                  waiting.delete(follower);
+                  removeFollower(follower.update);
+                }
               }
-            }
-            if (waiting.size === 0) stopWatching();
+              if (waiting.size === 0) stopWatchingFollowers();
+            };
+            const unsubscribeFollowers = registry.subscribe(source, watch);
+            // @effect-diagnostics-next-line globalTimersInEffect:off - the preview outlives the command.
+            const timeout = setTimeout(() => stopWatchingFollowers(), FOLLOWER_PREVIEW_TIMEOUT_MS);
+            stopWatchingFollowers = () => {
+              clearTimeout(timeout);
+              unsubscribeFollowers();
+              for (const follower of followers) removeFollower(follower.update);
+            };
+          }
+          const remove = () => {
+            registry.update(pending, (current) => current.filter((item) => item !== update));
+            stopWatchingFollowers();
           };
-          const unsubscribeFollowers = registry.subscribe(source, watch);
-          // @effect-diagnostics-next-line globalTimers:off - preview timing inside an atom command.
-          const timeout = setTimeout(() => stopWatching(), FOLLOWER_PREVIEW_TIMEOUT_MS);
-          stopWatching = () => {
-            clearTimeout(timeout);
-            unsubscribeFollowers();
-            for (const follower of followers) removeFollower(follower.update);
-          };
-          followerCleanup.set(update, stopWatching);
-        }
-        const remove = () =>
-          registry.update(pending, (current) => current.filter((item) => item !== update));
-        registry.update(pending, (current) => [
-          ...current,
-          update,
-          ...followers.map((follower) => follower.update),
-        ]);
-        let confirmed = false;
-        try {
-          const result = await command.run(registry, target);
-          if (result._tag === "Success") {
-            update.sequence = result.value.sequence;
+          // Stays applied after the reply until a snapshot at or past its sequence replaces it.
+          const confirm = (sequence: number) => {
+            update.sequence = sequence;
             registry.update(pending, (current) => [...current]);
             const reconcile = (snapshot: OrchestrationV2ShellSnapshot | null) => {
-              if (snapshot === null || snapshot.snapshotSequence >= result.value.sequence) {
-                remove();
+              if (snapshot === null || snapshot.snapshotSequence >= sequence) {
+                registry.update(pending, (current) => current.filter((item) => item !== update));
                 unsubscribe();
               }
             };
             const unsubscribe = registry.subscribe(source, reconcile);
             reconcile(registry.get(source));
-            confirmed = true;
-          }
-          return result;
-        } finally {
-          if (!confirmed) {
-            remove();
-            followerCleanup.get(update)?.();
-          }
-          followerCleanup.delete(update);
-        }
-      },
+          };
+          registry.update(pending, (current) => [
+            ...current,
+            update,
+            ...followers.map((follower) => follower.update),
+          ]);
+          return command
+            .run(registry, target)
+            .pipe(
+              Effect.onExit((exit) =>
+                Effect.sync(() => (Exit.isSuccess(exit) ? confirm(exit.value.sequence) : remove())),
+              ),
+            );
+        }),
     };
   }
-
-  const followerCleanup = new WeakMap<PendingThreadUpdate, () => void>();
 
   /** Preview the parent's action on the nested threads the server will move with it. */
   function previewFollowers(
@@ -188,5 +196,5 @@ export function createOptimisticThreadLifecycle(
     return visit(parent);
   }
 
-  return { snapshotAtom, wrap };
+  return { snapshotAtom, pendingThreadIdsAtom, wrap };
 }

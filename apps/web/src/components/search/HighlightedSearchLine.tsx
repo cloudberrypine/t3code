@@ -7,8 +7,9 @@ import {
 } from "@t3tools/shared/angelscript";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import type { ProjectContentMatch } from "@t3tools/contracts";
-import { memo, Suspense, use, useMemo, type CSSProperties } from "react";
+import { memo, Suspense, use, type CSSProperties } from "react";
 
+import { ANGELSCRIPT_SYNTAX_LANGUAGE } from "~/lib/angelScriptSyntax";
 import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { getSyntaxHighlighterPromise } from "~/lib/syntaxHighlighting";
 
@@ -132,6 +133,30 @@ function HighlightedTokens(props: {
     );
 }
 
+function firstLineTokens(
+  highlighter: Awaited<ReturnType<typeof getSyntaxHighlighterPromise>>,
+  line: string,
+  language: string,
+  theme: "light" | "dark",
+) {
+  try {
+    return highlighter.codeToTokens(line, { lang: language, theme: resolveDiffThemeName(theme) })
+      .tokens[0];
+  } catch {
+    return undefined;
+  }
+}
+
+/** AngelScript's semantic split changes token boundaries, so offsets are recomputed. */
+function withOffsets(tokens: ReadonlyArray<Omit<CodeToken, "offset">>): CodeToken[] {
+  let offset = 0;
+  return tokens.map((token) => {
+    const result = { ...token, offset };
+    offset += token.content.length;
+    return result;
+  });
+}
+
 function SyntaxHighlightedTokens(props: {
   readonly line: string;
   readonly language: string;
@@ -140,29 +165,16 @@ function SyntaxHighlightedTokens(props: {
   readonly theme: "light" | "dark";
 }) {
   const highlighter = use(getSyntaxHighlighterPromise(props.language));
-  const tokens = useMemo(() => {
-    try {
-      const tokens = highlighter.codeToTokens(props.line, {
-        lang: props.language,
-        theme: resolveDiffThemeName(props.theme),
-      }).tokens[0];
-      const colored =
-        tokens && props.api
-          ? colorAngelScriptTokens(tokens, analyzeAngelScript(props.line, props.api), props.theme)
-          : tokens;
-      let offset = 0;
-      return colored?.map((token) => {
-        const result = { ...token, offset };
-        offset += token.content.length;
-        return result;
-      });
-    } catch {
-      return undefined;
-    }
-  }, [highlighter, props.language, props.line, props.theme, props.api]);
+  const tokens = firstLineTokens(highlighter, props.line, props.language, props.theme);
+  const colored =
+    tokens && props.api
+      ? withOffsets(
+          colorAngelScriptTokens(tokens, analyzeAngelScript(props.line, props.api), props.theme),
+        )
+      : tokens;
 
-  return tokens ? (
-    <HighlightedTokens line={props.line} ranges={props.ranges} tokens={tokens} />
+  return colored ? (
+    <HighlightedTokens line={props.line} ranges={props.ranges} tokens={colored} />
   ) : (
     <HighlightedTokens
       line={props.line}
@@ -178,7 +190,7 @@ export const HighlightedSearchLine = memo(function HighlightedSearchLine(props: 
   readonly api?: AngelScriptApi | null;
   readonly theme: "light" | "dark";
 }) {
-  const ranges = useMemo(() => normalizeRanges(props.match), [props.match]);
+  const ranges = normalizeRanges(props.match);
   const fallback = (
     <HighlightedTokens
       line={props.match.lineContent}
@@ -194,7 +206,7 @@ export const HighlightedSearchLine = memo(function HighlightedSearchLine(props: 
           line={props.match.lineContent}
           language={
             usesAngelScript(props.path, props.match.lineContent, props.api ?? null)
-              ? "angelscript"
+              ? ANGELSCRIPT_SYNTAX_LANGUAGE
               : getFiletypeFromFileName(props.path)
           }
           api={isAngelScriptPath(props.path) ? (props.api ?? null) : null}

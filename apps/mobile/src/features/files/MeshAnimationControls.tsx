@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Pressable, View } from "react-native";
-import { AppText as Text } from "../../components/AppText";
-import { ControlPillMenu } from "../../components/ControlPill";
+import { AppText as Text } from "../../components/ui/AppText";
+import { Menu } from "../../components/ui/Menu";
 import type { useMeshAnimation } from "./useMeshAnimation";
 
 export function MeshAnimationControls({
@@ -16,7 +16,7 @@ export function MeshAnimationControls({
   return (
     <View className="border-b border-border px-3 py-1">
       <View className="flex-row flex-wrap items-center gap-2">
-        <ControlPillMenu
+        <Menu
           title="Mesh animation"
           accessibilityLabel="Mesh animation"
           actions={[
@@ -34,7 +34,7 @@ export function MeshAnimationControls({
           <View className="min-h-11 justify-center">
             <Text className="text-xs text-foreground">{animation.clip?.label ?? "Pose"} ▾</Text>
           </View>
-        </ControlPillMenu>
+        </Menu>
         {animation.clip && (
           <>
             <Pressable
@@ -54,7 +54,7 @@ export function MeshAnimationControls({
             >
               <Text className="text-xs text-foreground">Loop</Text>
             </Pressable>
-            <ControlPillMenu
+            <Menu
               title="Playback speed"
               accessibilityLabel="Playback speed"
               actions={[0.25, 0.5, 1, 2].map((speed) => ({
@@ -67,7 +67,7 @@ export function MeshAnimationControls({
               <View className="min-h-11 justify-center px-2">
                 <Text className="text-xs text-foreground">{animation.speed}× ▾</Text>
               </View>
-            </ControlPillMenu>
+            </Menu>
           </>
         )}
       </View>

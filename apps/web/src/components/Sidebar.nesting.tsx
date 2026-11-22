@@ -10,7 +10,7 @@ import {
 import { ThreadId } from "@t3tools/contracts";
 import { ChevronRightIcon } from "lucide-react";
 import * as Schema from "effect/Schema";
-import { useCallback, useMemo } from "react";
+import { useGT } from "gt-react";
 
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { readEnvironmentSupportsSidebarNesting, readThreadShells } from "../state/entities";
@@ -74,7 +74,7 @@ export function useSidebarThreadNesting(input: {
     CollapsedThreadGroups,
   );
   const { pinned, active, working, routeThreadKey, allThreads } = input;
-  const nesting = useMemo(() => {
+  const nesting = (() => {
     const { sections, childrenByParent } = nestThreads([pinned, active, working], allThreads);
     const collapsed = new Set(collapsedKeys);
     const groups = new Map<string, SidebarThreadGroup>();
@@ -103,14 +103,11 @@ export function useSidebarThreadNesting(input: {
       working: sections[2] ?? working,
       groups,
     };
-  }, [active, allThreads, collapsedKeys, pinned, routeThreadKey, working]);
-  const toggleGroup = useCallback(
-    (parentKey: string) =>
-      setCollapsedKeys((keys) =>
-        keys.includes(parentKey) ? keys.filter((key) => key !== parentKey) : [...keys, parentKey],
-      ),
-    [setCollapsedKeys],
-  );
+  })();
+  const toggleGroup = (parentKey: string) =>
+    setCollapsedKeys((keys) =>
+      keys.includes(parentKey) ? keys.filter((key) => key !== parentKey) : [...keys, parentKey],
+    );
   return { ...nesting, toggleGroup };
 }
 
@@ -191,18 +188,19 @@ export function SidebarThreadGroupToggle(props: {
   readonly onToggle: () => void;
 }) {
   const { group } = props;
+  const gt = useGT();
   return (
     <button
       type="button"
       aria-expanded={!group.collapsed}
-      aria-label={group.collapsed ? "Show nested threads" : "Hide nested threads"}
+      aria-label={group.collapsed ? gt("Show nested threads") : gt("Hide nested threads")}
       // The row is a drag source and a button of its own.
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.stopPropagation();
         props.onToggle();
       }}
-      className="-ml-1 inline-flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded-sm px-0.5 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="-ml-1 inline-flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded-sm px-0.5 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none"
     >
       <ChevronRightIcon
         aria-hidden
@@ -214,7 +212,15 @@ export function SidebarThreadGroupToggle(props: {
           {group.status !== null ? (
             <span
               role="img"
-              aria-label={`Nested thread ${group.status === "attention" ? "needs attention" : group.status}`}
+              aria-label={
+                group.status === "attention"
+                  ? gt("Nested thread needs attention")
+                  : group.status === "failed"
+                    ? gt("Nested thread failed")
+                    : group.status === "working"
+                      ? gt("Nested thread working")
+                      : gt("Nested thread done")
+              }
               className={cn("size-1.5 rounded-full", groupStatusClassName[group.status])}
             />
           ) : null}

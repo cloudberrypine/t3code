@@ -1,6 +1,3 @@
-import { ComposerContextId } from "@t3tools/contracts";
-import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
-import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
 import { fileReviewCommentFields } from "@t3tools/shared/fileReviewComment";
 
 import type { ReviewRenderableLineRow } from "../review/reviewModel";
@@ -34,8 +31,8 @@ export function fileLineCommentTarget(
 }
 
 /**
- * The comment as the composer's review-comment block, built from desktop's file-comment fields
- * by the shared legacy serializer; the draft upgrades it to the same context record desktop sends.
+ * The comment as the composer's review-comment block, built from desktop's file-comment fields;
+ * the draft upgrades it (`upgradeLegacyContextMessage`) to the same context record desktop sends.
  */
 export function formatFileReviewCommentContext(target: ReviewCommentTarget, comment: string) {
   const fields = fileReviewCommentFields({
@@ -45,13 +42,27 @@ export function formatFileReviewCommentContext(target: ReviewCommentTarget, comm
     text: comment,
     contents: target.lines.map((line) => line.content).join("\n"),
   });
-  const reference = {
-    kind: "review-comment" as const,
-    contextId: ComposerContextId.make("review-comment-file"),
-    label: "comment",
-  };
-  return serializeLegacyContextMessage({
-    text: formatComposerContextReference(reference),
-    records: [{ version: 1, ...reference, ...fields }],
-  });
+  const attributes = [
+    `sectionId="${escapeAttribute(fields.sectionId)}"`,
+    `sectionTitle="${escapeAttribute(fields.sectionTitle)}"`,
+    `filePath="${escapeAttribute(fields.filePath)}"`,
+    `rangeLabel="${escapeAttribute(fields.rangeLabel)}"`,
+    `startIndex="${fields.startIndex}"`,
+    `endIndex="${fields.endIndex}"`,
+  ].join(" ");
+  // The fence must be longer than any run of backticks inside the code so the body stays intact.
+  const longestRun = Math.max(0, ...[...fields.diff.matchAll(/`+/g)].map((run) => run[0].length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  const body = fields.diff
+    ? `${fields.text}\n\n${fence}${fields.fenceLanguage ?? "diff"}\n${fields.diff}\n${fence}`
+    : fields.text;
+  return `<review_comment ${attributes}>\n${body}\n</review_comment>`;
+}
+
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

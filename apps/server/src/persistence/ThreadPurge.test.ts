@@ -18,11 +18,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import { SqlitePersistenceMemory } from "./Layers/Sqlite.ts";
+import * as SqlitePersistence from "./Sqlite.ts";
 import {
   THREAD_PURGE_KEEP_FILE,
   THREAD_PURGE_PLAN_FILE,
@@ -38,9 +38,9 @@ import {
 } from "./ThreadPurge.ts";
 
 const stores = Layer.mergeAll(
-  SqlitePersistenceMemory,
-  EventStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-  ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+  SqlitePersistence.layerMemory,
+  EventStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+  ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
 );
 
 const providerInstanceId = ProviderInstanceId.make("codex");

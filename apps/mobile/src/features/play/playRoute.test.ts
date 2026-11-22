@@ -19,7 +19,9 @@ const ENVIRONMENTS: PlayEnvironments = {
 
 describe("play deep link", () => {
   it("reaches the app's router", () => {
-    expect(shouldHandleAppLink(`t3code://play?url=${encodeURIComponent(PHONE_LINK)}`)).toBe(true);
+    expect(shouldHandleAppLink(`t3code://play?url=${encodeURIComponent(PHONE_LINK)}`, false)).toBe(
+      true,
+    );
   });
 
   it("opens a play page on a paired environment, which it names", () => {

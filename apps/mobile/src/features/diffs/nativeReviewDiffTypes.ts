@@ -1,20 +1,14 @@
-export type NativeReviewDiffLanguage =
-  | "angelscript"
-  | "bash"
-  | "cpp"
-  | "diff"
-  | "javascript"
-  | "json"
-  | "jsx"
-  | "tsx"
-  | "typescript"
-  | "yaml";
+export interface NativeReviewDiffSource {
+  readonly oldContents: string;
+  readonly newContents: string;
+}
 
 export interface NativeReviewDiffFile {
   readonly id: string;
   readonly path: string;
-  readonly language: NativeReviewDiffLanguage;
+  /** A @pierre/highlights language name. */
+  readonly language: string;
   readonly additions: number;
   readonly deletions: number;
-  readonly loaded: boolean;
+  readonly loadContents?: (signal?: AbortSignal) => Promise<NativeReviewDiffSource | null>;
 }

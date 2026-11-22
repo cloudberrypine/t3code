@@ -7,6 +7,7 @@ import {
   type AngelScriptSemanticToken,
   type createAngelScriptRevisionSemantics,
 } from "@t3tools/shared/angelscript";
+import { ANGELSCRIPT_HIGHLIGHT_LANGUAGE } from "./desktopCodeLanguages";
 import type { NativeReviewDiffData } from "./nativeReviewDiffAdapter";
 import type { NativeReviewDiffRow } from "../diffs/nativeReviewDiffSurface";
 
@@ -29,7 +30,7 @@ export function prepareAngelScriptReview(
     }
     const files = data.files.map((file) =>
       usesAngelScript(file.path, sources.get(file.id) ?? "", null)
-        ? { ...file, language: "angelscript" as const }
+        ? { ...file, language: ANGELSCRIPT_HIGHLIGHT_LANGUAGE }
         : file,
     );
     return {
@@ -85,7 +86,7 @@ export function prepareAngelScriptReview(
     data: {
       ...data,
       files: data.files.map((file) =>
-        scriptIds.has(file.id) ? { ...file, language: "angelscript" as const } : file,
+        scriptIds.has(file.id) ? { ...file, language: ANGELSCRIPT_HIGHLIGHT_LANGUAGE } : file,
       ),
       rows: data.rows.map((row) =>
         semantics.get(row.id)?.some((token) => token.kind === "await")

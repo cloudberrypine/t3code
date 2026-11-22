@@ -1,5 +1,5 @@
 import type { MenuAction } from "@react-native-menu/menu";
-import type { ScreenHeaderMenuItem } from "../../components/ScreenHeader.types";
+import type { AppBarMenuItem } from "../../components/ui/AppBar.types";
 
 type ThreadAttention = { readonly reason: string } | null | undefined;
 
@@ -25,7 +25,7 @@ export function handleThreadAttentionMenuAction(event: string, onClear: () => vo
 export function buildThreadAttentionHeaderItems(
   attention: ThreadAttention,
   onClear: () => void,
-): ScreenHeaderMenuItem[] {
+): AppBarMenuItem[] {
   if (!attention) return [];
   return [
     {

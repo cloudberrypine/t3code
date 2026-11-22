@@ -1,13 +1,7 @@
 /**
- * Polyzonia play links in the integrated browser (fork-only; the rule is in
- * client-runtime's polyzoniaPlay.ts).
- *
- * A thread's play link names the address the phone reaches the environment at
- * (T3 Connect's, usually) and carries a ticket meant for the phone's browser.
- * The integrated browser instead opens the same page at the address this
- * client is connected to, signed in with a ticket minted from its own session,
- * so the posted ticket stays unspent. Its browser profile keeps the play
- * cookie, so the game's saves stay with that profile.
+ * Fork-only: Polyzonia play links open in the integrated browser at this client's own
+ * address, with a ticket minted from its session so the posted one stays unspent
+ * (the rule is client-runtime's polyzoniaPlay.ts; docs/local-fork.md has the rest).
  */
 import {
   environmentPlayOrigins,
@@ -35,8 +29,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { Atom } from "effect/unstable/reactivity";
-import { useCallback } from "react";
+import { Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "~/connection/catalog";
 import { connectionAtomRuntime } from "~/connection/runtime";
@@ -87,36 +80,31 @@ export async function resolvePlayLinkForPreview(input: {
 export const isPlayLinkHref = (href: string): boolean => parsePlayLink(href) !== null;
 
 /**
- * Opens a thread's play link in the integrated browser at its normal size,
- * whatever "Open links in" says. A link that is not a play page of the
- * thread's environment opens where any other link would: in the integrated
- * browser when `inApp` (the setting's answer for this click), else the
- * system browser.
+ * Opens a thread's play link in the integrated browser, whatever "Open links in" says.
+ * Any other link opens in the integrated browser when `inApp` (the setting's answer for
+ * this click), else in the system browser.
  */
 export function usePlayLinkOpener(
   environmentId: EnvironmentId | null,
   openInPreview: (url: string) => Promise<AtomCommandResult<void, unknown>>,
 ): (href: string, inApp: boolean) => Promise<void> {
   const mint = useAtomCommand(mintPlayTicketCommand, { reportFailure: false });
-  return useCallback(
-    async (href: string, inApp: boolean) => {
-      const playUrl =
-        environmentId === null
-          ? null
-          : await resolvePlayLinkForPreview({ href, environmentId, mint });
-      const url = playUrl ?? (inApp ? href : null);
-      if (url !== null) {
-        const result = await openInPreview(url);
-        if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
-        // Settings that could not be read keep the link here, as for other links
-        // (BrowserSettingsReadError, by tag: openFileInPreview is heavy to import).
-        const failure = squashAtomCommandFailure(result);
-        if (Predicate.isTagged(failure, "BrowserSettingsReadError")) return;
-      }
-      await readLocalApi()?.shell.openExternal(href);
-    },
-    [environmentId, mint, openInPreview],
-  );
+  return async (href: string, inApp: boolean) => {
+    const playUrl =
+      environmentId === null
+        ? null
+        : await resolvePlayLinkForPreview({ href, environmentId, mint });
+    const url = playUrl ?? (inApp ? href : null);
+    if (url !== null) {
+      const result = await openInPreview(url);
+      if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+      // Settings that could not be read keep the link here, as for other links
+      // (BrowserSettingsReadError, by tag: openFileInPreview is heavy to import).
+      const failure = squashAtomCommandFailure(result);
+      if (Predicate.isTagged(failure, "BrowserSettingsReadError")) return;
+    }
+    await readLocalApi()?.shell.openExternal(href);
+  };
 }
 
 const playServer = createPlayServerAtoms(connectionAtomRuntime);
@@ -125,11 +113,9 @@ const NO_PLAY_SERVER_ATOM = Atom.make<PlayServerState>(PLAY_SERVER_CHECKING).pip
 );
 
 /**
- * A thread's "Play web build": loading until the environment's play server has
- * answered since this client connected, then its page (the play server's
- * redirect to the thread's worktree build), or null once the play server does
- * not serve the thread's repository. Follows connects and reconnects. Open the
- * page with `usePlayLinkOpener`.
+ * A thread's "Play web build": loading until the environment's play server answers after
+ * each connect, then the page that redirects to the thread's worktree build, or null when
+ * the play server does not serve the thread's repository. Open it with `usePlayLinkOpener`.
  */
 export function useThreadPlayState(input: {
   readonly environmentId: EnvironmentId | null;

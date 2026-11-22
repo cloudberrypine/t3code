@@ -12,7 +12,7 @@ import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Pressable, ScrollView, View } from "react-native";
 
-import { AppText } from "../../components/AppText";
+import { AppText } from "../../components/ui/AppText";
 import type { AngelScriptWorkspace } from "../../lib/useAngelScript";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
@@ -203,7 +203,11 @@ export function useSourceCodeNavigation(input: {
       if (!commentsEnabled || !threadId || environmentId === undefined) return;
       if (lineIndex < 0 || lineIndex >= lines.length) return;
       void Haptics.selectionAsync();
-      setReviewCommentTarget(fileLineCommentTarget(path, lines, lineIndex));
+      // Its own scope: no review sheet's selection matches a file comment.
+      setReviewCommentTarget(
+        { key: JSON.stringify(["file", path]), content: null },
+        fileLineCommentTarget(path, lines, lineIndex),
+      );
       navigation.navigate("ThreadReviewComment", { environmentId, threadId });
     },
     [commentsEnabled, environmentId, lines, navigation, path, threadId],

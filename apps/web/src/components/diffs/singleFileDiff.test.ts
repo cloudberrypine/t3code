@@ -9,6 +9,8 @@ function file(path: string, changedLines = 1): FileDiffMetadata {
     hunks: [{ additionLines: changedLines, deletionLines: 0 } as Hunk],
     additionLines: [],
     deletionLines: [],
+    additionCharacterCount: 0,
+    deletionCharacterCount: 0,
     splitLineCount: 0,
     unifiedLineCount: 0,
     isPartial: true,

@@ -13,6 +13,15 @@ still apply. Check actual Git state rather than trusting the snapshots below.
   `codex/local-nightly-v2`.
 - On 5 October 2026 we merged `v0.0.46-nightly.20261005.2667` (Orchestration V2). At that point
   `polyzonia` was at `4e4c37317` (diff scope and terminal session shortcuts).
+- On 22 November 2026 we merged `v0.1.12-nightly.20261122.5071` (about 8,200 upstream commits) on
+  branch `local/nightly-20261122`, built and installed on M5 first. `polyzonia` stays at
+  `996ebf31ff` until Anton approves. Which local commits were kept, superseded or dropped is
+  recorded in that merge commit's message. Superseded by upstream then: diff search, diff scroll
+  memory and context expansion, terminal Cmd+1–9 and session traversal, diff tree collisions,
+  mobile Cite (upstream's own select and cite) and mobile desktop code themes (upstream's native
+  highlighter), relay paging for `mcp:` threads, auth filesystem scopes, indexed thread reads and
+  planner statistics, and the RpcClient ping patch (Effect 4.1.5 no longer holds the reader on a
+  slow consumer).
 
 ## Where t3code work happens
 
@@ -83,9 +92,10 @@ for that reason.
 
 ## Mobile code navigation, line comments and citations
 
-Mobile reuses desktop's logic rather than its own copies: code is coloured with desktop's Pierre
-syntax themes (`apps/mobile/src/features/review/desktopCodeThemes.ts`, plus AngelScript's semantic
-colours), and go-to-definition is `resolveDefinitions` in
+Mobile reuses desktop's logic rather than its own copies: code is coloured by upstream's native
+highlighter (`@pierre/highlights`, pierre-light and pierre-dark; AngelScript uses its C++ lexer
+plus our semantic colours, as on web, whose highlighter cannot load our TextMate grammar either),
+and go-to-definition is `resolveDefinitions` in
 `packages/client-runtime/src/definitionNavigation.ts`, which desktop's hook also calls. Where the
 logic is upstream web-only code, a shared copy carries a parity test against it
 (`fileReviewComment.ts`, `assistantCitationSelector.ts`).
@@ -95,12 +105,10 @@ logic is upstream web-only code, a shared copy carries a parity test against it
   Long-pressing a line number opens the review-comment sheet, and the result is the same file-comment
   record desktop's Files panel sends. With word wrap on, symbols take the long press; the rest of the
   line stays selectable.
-- In chat (`apps/mobile/src/features/citations/`), Cite beside Copy turns selected assistant text into
-  desktop's `[Assistant quote](t3-citation://…)` link, shown as a composer chip. Tap the chip to edit
-  its comment.
+- Citing selected assistant text in chat is upstream's now (on its Enriched Markdown), so our
+  `features/citations/` and the `modules/t3-markdown-text` Cite item are gone.
 - The native code canvas (`modules/t3-review-diff`) reports long-press gutter or column hits and draws
-  the symbol tint. The markdown text module (`modules/t3-markdown-text`) adds the Cite menu item.
-  Both need a rebuilt app.
+  the symbol tint. It needs a rebuilt app.
 
 ## Polyzonia play proxy
 
@@ -224,6 +232,13 @@ once the run that was active at the request has completed. The code is
   and the file is saved again on the next recheck.
 - The tool answers `{settleAfterRun: "pending", waitingFor}`, `"settled"` (already settled),
   `"cancelled"` or `"none"` (nothing to cancel).
+- Upstream has its own, smaller version: an agent's plain `settle` of its own thread during a run
+  answers "settles when turn ends" and waits in memory (up to 24 hours) for that run and its
+  automatic follow-ups only, not for children, watches or visits, and not across a restart. Both
+  end in an ordinary settle, so whichever fires first wins and ours then drops its request.
+- The instructions agents get about it (and about `watch_command`) are in
+  `packages/provider-core/src/server/localOrchestrationInstructions.ts`, a fourth section after
+  upstream's, with a size test beside it.
 
 ## Tool output store
 
@@ -236,8 +251,9 @@ small. Reads that use the full text restore it: `getTurnItem` (the clients' on-d
 `getTimelinePage` (agents' `t3_thread_read`). The wire never carries `outputRef`, and clients get
 the same items as before.
 
-- The tables are created in the SQLite setup, not by a numbered migration (fork ids would collide
-  with upstream's).
+- The tables are created by `ensureToolOutputSchema` in the SQLite setup
+  (`apps/server/src/persistence/Sqlite.ts`, after the migrations), not by a numbered migration (fork
+  ids would collide with upstream's).
 - Rows written before the store are moved by a background backfill once the server is active:
   short transactions with recorded progress (`tool_output_backfill`), so it resumes after a
   restart. A row is rewritten only when restoring it reproduces the original JSON byte for byte
@@ -277,7 +293,7 @@ CLI processes never run it.
 - **VACUUM:** after a purge, when the disk has three times the kept data plus 1 GB free (an APFS
   clone backup keeps the old blocks); otherwise it is skipped with a log line.
 - **Planning without a restart:** `node apps/server/scripts/thread-purge-plan.ts [--db <file>]
-[--keep <keep.json>] [--out <plan.json>]` opens the database read-only and writes the same plan.
+  [--keep <keep.json>] [--out <plan.json>]` opens the database read-only and writes the same plan.
 - **Requesting:** `scripts/local-install.mjs` takes `--thread-purge dry-run|purge`, with
   `--db-backup <dir | host:dir>` for purge and optional `--thread-purge-plan <plan.json>`, during an
   install or with `--restart-only` (wait for idle, quit, back up, request, relaunch, no install).
@@ -305,7 +321,7 @@ Dependencies are installed with `vp install`; pnpm is not on PATH in agent shell
 
 ```sh
 T3CODE_BUILD_CACHE=1 vp run dist:desktop:artifact --platform mac --target dir --arch arm64 \
-  --build-version <0.0.46+local.YYYYMMDD.label.N> --output-dir release/<unique-build-folder>
+  --build-version <0.1.12-nightly.YYYYMMDD.NNNN+local.YYYYMMDD.label.N> --output-dir release/<unique-build-folder>
 ```
 
 This leaves `release/<folder>/mac-arm64/PolyCode.app`. `--target zip` still produces a ZIP,
@@ -324,8 +340,14 @@ back to older sources rebuilds; `vp cache clean` clears it. Measured on 5 Octobe
 seconds after a web change, 14 after a server-only change and 12 with no change, against 63 for
 the old uncached ZIP build.
 
-Use a unique `+local` version. Local builds disable automatic updates so custom features stay.
-As of 6 October 2026 the installed build is `0.0.46+local.20261006.playweb.1`.
+Since 0.1.x upstream also writes the build version into the web and server bundles, so a build
+with a new version misses the cache; it still helps when rebuilding the same version.
+
+Use a unique `+local` version: `DesktopUpdates.ts` turns automatic updates off only when the
+version contains `+local`, so custom features stay. Such a version never matches upstream's
+nightly pattern, so the app keeps the plain "PolyCode" name and the `t3code-v2` profile. On 22
+November 2026 M5 got `0.1.12-nightly.20261122.5071+local.20261122.polycode.1`; M1 kept
+`0.0.46+local.20261103.polycode.4`.
 
 ## Windows x64 build and install (Win1)
 
@@ -406,6 +428,11 @@ Pass `--zip <file>` instead of `--app` for a ZIP build.
   exits; once the swap has started it finishes the swap or the restore first.
 - `--dry-run` runs the gate once and every verification, including a backup copy inside the
   staging folder, without quitting or replacing anything.
+- `--db-backup <dir | host:dir>` on a normal install also backs up `statev2.sqlite` after T3 is
+  quit and before the swap, the way the thread purge does (empty-WAL snapshot, APFS clone or scp,
+  SHA-256 check, 15 GB free rule, target checked before waiting). A failed backup relaunches the
+  previous app without swapping. Use it for any install whose upstream merge adds migrations: an
+  older app cannot open a migrated database, so a rollback needs the copy.
 
 Signing uses the Apple Development identity Anton Karl Love Holmberg (H6SHQW7R8K), team
 M6Z4YG5SD6, certificate SHA-1 `9996FD65608B18E540C4FE341030A5E801214B56`. Keeping it stable avoids
