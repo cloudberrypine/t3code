@@ -7129,6 +7129,43 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.isTrue(Result.isSuccess(result), "worktree creation failed in the hook");
       }),
     );
+    it.effect("lets a remote-based worktree's checkout hook read a bare mirror", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const remote = yield* makeTmpDir("git-bare-mirror-");
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["push", "origin", `${initialBranch}:refs/heads/main`]);
+        const remoteHead = yield* git(cwd, ["rev-parse", "origin/main"]);
+        yield* git(cwd, ["commit", "--allow-empty", "-m", "advance local branch"]);
+        yield* writeTextFile(
+          cwd,
+          ".git/hooks/post-checkout",
+          `#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE\ngit -C '${remote}' rev-parse refs/heads/main > mirror-head\n`,
+        );
+        yield* fs.chmod(path.join(cwd, ".git/hooks/post-checkout"), 0o755);
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "remote-base");
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: "origin/main",
+          newRefName: "feature/remote-base",
+          baseRefName: "origin/main",
+        });
+
+        assert.equal(yield* git(worktreePath, ["rev-parse", "HEAD"]), remoteHead);
+        assert.equal(
+          (yield* fs.readFileString(path.join(worktreePath, "mirror-head"))).trim(),
+          remoteHead,
+        );
+      }),
+    );
+
     // regression: #25367 a checkout that writes over 1 MB to stderr failed on the output cap
     it.effect.each([false, true])(
       "creates the worktree when git worktree add writes over 1 MB (progress: %s)",

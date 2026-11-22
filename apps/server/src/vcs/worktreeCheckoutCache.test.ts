@@ -85,7 +85,11 @@ const setup = Effect.gen(function* () {
   const driver = yield* provide(makeGitVcsDriverCore());
   const { worktreeCheckoutCacheDir } = yield* ServerConfig.ServerConfig;
   const cache = (yield* provide(
-    makeWorktreeCheckoutCache({ cacheDir: worktreeCheckoutCacheDir, execute: driver.execute }),
+    makeWorktreeCheckoutCache({
+      cacheDir: worktreeCheckoutCacheDir,
+      execute: driver.execute,
+      executeCheckout: driver.execute,
+    }),
   ))!;
   const create = (name: string, refName = "main", fastCheckout = true) =>
     provide(
@@ -205,8 +209,14 @@ describe.skipIf(!symlinksSupported)("worktree checkout cache", () => {
       const fixture = yield* setup;
       yield* fixture.build(yield* fixture.create("base", "main", false));
       const marker = NodePath.join(fixture.root, "hook-args");
+      const mirror = NodePath.join(fixture.root, "mirror.git");
+      sh(fixture.repo, ["clone", "--bare", ".", mirror]);
       const hook = NodePath.join(fixture.repo, ".git", "hooks", "post-checkout");
-      NodeFS.writeFileSync(hook, `#!/bin/sh\necho "$@" > "${marker}"\n`, { mode: 0o755 });
+      NodeFS.writeFileSync(
+        hook,
+        `#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE\ngit -C "${mirror}" rev-parse --verify HEAD && echo "$@" > "${marker}"\n`,
+        { mode: 0o755 },
+      );
 
       yield* fixture.create("fast");
       assert.isFalse(fixture.checkedOutWithGit("fast"));

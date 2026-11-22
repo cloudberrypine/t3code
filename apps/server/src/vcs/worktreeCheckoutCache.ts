@@ -101,6 +101,7 @@ interface CacheEntry {
 export const makeWorktreeCheckoutCache = Effect.fn("WorktreeCheckoutCache.make")(function* (input: {
   readonly cacheDir: string;
   readonly execute: GitVcsDriver.GitVcsDriver["Service"]["execute"];
+  readonly executeCheckout: GitVcsDriver.GitVcsDriver["Service"]["execute"];
 }) {
   const clone = yield* CheckoutCloner.CheckoutCloner;
   if (clone === undefined) return undefined;
@@ -113,7 +114,7 @@ export const makeWorktreeCheckoutCache = Effect.fn("WorktreeCheckoutCache.make")
   const pendingBuilds = new Set<string>();
   // Bumped by `clear`, so a build that started before it does not publish its result.
   let generation = 0;
-  const { cacheDir, execute } = input;
+  const { cacheDir, execute, executeCheckout } = input;
 
   const git = (
     operation: string,
@@ -656,7 +657,7 @@ export const makeWorktreeCheckoutCache = Effect.fn("WorktreeCheckoutCache.make")
     if (target === null) return false;
 
     // `git worktree add --no-checkout` skips this hook; a normal add runs it.
-    const hook = yield* execute({
+    const hook = yield* executeCheckout({
       operation: "GitVcsDriver.createWorktree.postCheckout",
       cwd: worktreePath,
       args: [

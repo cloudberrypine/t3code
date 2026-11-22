@@ -234,6 +234,7 @@ interface ExecuteGitOptions {
   keepLineCallbacksAfterTruncation?: boolean | undefined;
   progress?: GitVcsDriver.ExecuteGitProgress | undefined;
   writesSharedConfig?: boolean | undefined;
+  runsCheckoutHooks?: boolean | undefined;
 }
 
 function parseBranchAb(value: string): { ahead: number; behind: number } {
@@ -1063,8 +1064,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   >();
   const statusFetchProcesses = yield* Semaphore.make(4);
 
-  const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
-    function* (input) {
+  const executeRaw: (
+    input: GitVcsDriver.ExecuteGitInput,
+    useHostBareRepositoryPolicy: boolean,
+  ) => Effect.Effect<GitVcsDriver.ExecuteGitResult, GitCommandError> = Effect.fnUntraced(
+    function* (input, useHostBareRepositoryPolicy) {
       const commandInput = {
         ...input,
         args: [...input.args],
@@ -1095,7 +1099,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ...input.env,
           ...trace2Monitor.env,
         };
-        const env = { ...baseEnv, ...explicitBareRepositoryEnv(baseEnv, hostPlatform) };
+        const env = useHostBareRepositoryPolicy
+          ? baseEnv
+          : { ...baseEnv, ...explicitBareRepositoryEnv(baseEnv, hostPlatform) };
         const spawnEnv = { ...env, ...windowsLongPathConfigEnv(hostPlatform, env) };
         const resolved = yield* resolveSpawnCommand("git", [], { env: spawnEnv });
         const spawnError = (cause: unknown) =>
@@ -1226,8 +1232,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
-  const execute: GitVcsDriver.GitVcsDriver["Service"]["execute"] = (input) =>
-    executeRaw(input).pipe(
+  const execute = (input: GitVcsDriver.ExecuteGitInput, useHostBareRepositoryPolicy = false) =>
+    executeRaw(input, useHostBareRepositoryPolicy).pipe(
       withMetrics({
         counter: gitCommandsTotal,
         timer: gitCommandDuration,
@@ -1257,9 +1263,32 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.writesSharedConfig ? withSharedConfigLock(input.cwd, execution) : execution,
     );
 
+  const executeCheckout = Effect.fnUntraced(function* (input: GitVcsDriver.ExecuteGitInput) {
+    const directory = yield* execute({
+      operation: "GitVcsDriver.checkout.gitDirectory",
+      cwd: input.cwd,
+      args: ["rev-parse", "--absolute-git-dir"],
+      allowNonZeroExit: true,
+    });
+    const gitDir = directory.stdout.replace(/\r?\n$/, "");
+    if (directory.exitCode !== 0 || !path.isAbsolute(gitDir)) {
+      return yield* execute(input);
+    }
+    // Discovery is guarded. Select that repository explicitly so hooks inherit the host's Git policy.
+    // The add command uses the source only for refs. Other callers pass the new worktree's root.
+    return yield* execute(
+      {
+        ...input,
+        args: [`--git-dir=${gitDir}`, `--work-tree=${path.resolve(input.cwd)}`, ...input.args],
+      },
+      true,
+    );
+  });
+
   const checkoutCache = yield* makeWorktreeCheckoutCache({
     cacheDir: worktreeCheckoutCacheDir,
     execute,
+    executeCheckout,
   });
 
   const executeGit = (
@@ -1268,7 +1297,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     args: readonly string[],
     options: ExecuteGitOptions = {},
   ): Effect.Effect<GitVcsDriver.ExecuteGitResult, GitCommandError> =>
-    execute({
+    (options.runsCheckoutHooks ? executeCheckout : execute)({
       operation,
       cwd,
       args,
@@ -5964,6 +5993,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // Large checkouts and post-checkout hooks can legitimately run for many
         // minutes; a fixed deadline kills them and leaves an orphaned worktree.
         timeoutMs: null,
+        runsCheckoutHooks: sparsePatterns === null,
         // Hooks and filter drivers may print without bound; only progress lines are read.
         appendTruncationMarker: true,
         keepLineCallbacksAfterTruncation: true,
@@ -5988,6 +6018,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               {
                 fallbackErrorDetail: "git checkout failed",
                 timeoutMs: null,
+                runsCheckoutHooks: true,
                 appendTruncationMarker: true,
                 keepLineCallbacksAfterTruncation: true,
                 ...checkoutProgressOptions,
