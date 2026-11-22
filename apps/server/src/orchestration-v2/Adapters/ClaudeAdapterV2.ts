@@ -3670,8 +3670,7 @@ function claudeBypassAvailability(
 }
 
 function requiresClaudeApproval(context: ActiveClaudeTurnContext): boolean {
-  // CLI-forwarded requests need a person's decision even under bypass (ask rules,
-  // safety checks, or settings fallback). Do not wait for queued init/status updates.
+  // Claude may forward requests even under bypass, before its init/status updates arrive.
   const policy = context.queryPolicy;
   return policy.installPermissionCallback || policy.permissionMode === "bypassPermissions";
 }
@@ -12693,7 +12692,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           if (
             context.input.runtimePolicy.interactionMode === "plan" &&
-            context.input.runtimePolicy.approvalPolicy === "never"
+            (context.input.runtimePolicy.approvalPolicy === "never" ||
+              context.input.runtimePolicy.runtimeMode === "full-access")
           ) {
             return {
               behavior: "deny",
@@ -12703,7 +12703,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
-          if (!requiresClaudeApproval(context)) {
+          if (
+            context.input.runtimePolicy.runtimeMode !== "full-access" &&
+            !requiresClaudeApproval(context)
+          ) {
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -12729,6 +12732,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return {
               behavior: "deny",
               message: `Claude Code's removal safety check denied this command; the user did not reject it. The command did not run. Do not bypass the check by splitting the removal, putting it in a script, or using another tool or shell. If the warning below supplies a safe rewrite, use it and let the same check evaluate it. Otherwise continue the rest of the task without the removal and tell the user what you needed to delete and why. Warning: ${safetyReason}`,
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
+
+          if (context.input.runtimePolicy.runtimeMode === "full-access") {
+            return {
+              behavior: "deny",
+              message: safetyReason
+                ? `Claude Code requires approval, which is disabled in Full access. ${safetyReason}`
+                : "Claude Code requires approval, which is disabled in Full access.",
               toolUseID: callbackOptions.toolUseID,
             } satisfies PermissionResult;
           }
@@ -12822,6 +12835,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return { action: "cancel" } satisfies ElicitationResult;
           const acceptance = claudeMcpElicitationAcceptance(request);
           const context = yield* Ref.get(activeTurn);
+          if (context?.input.runtimePolicy.runtimeMode === "full-access") {
+            return { action: "cancel" } satisfies ElicitationResult;
+          }
           if (acceptance === undefined || context === null) {
             yield* Effect.logWarning(
               "Cancelled an MCP elicitation the approval card cannot answer.",

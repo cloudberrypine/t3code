@@ -225,15 +225,7 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.equal(auto.approvalPolicy, "on-request");
       assert.equal(auto.approvalsReviewer, "auto_review");
       assert.equal(auto.sandboxPolicy?.type, "workspaceWrite");
-      assert.deepEqual(fullAccess.approvalPolicy, {
-        granular: {
-          mcp_elicitations: true,
-          request_permissions: false,
-          rules: false,
-          sandbox_approval: false,
-          skill_approval: false,
-        },
-      });
+      assert.equal(fullAccess.approvalPolicy, "never");
       assert.equal(fullAccess.approvalsReviewer, "user");
       assert.equal(fullAccess.sandboxPolicy?.type, "dangerFullAccess");
     }),
@@ -1756,7 +1748,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               },
               {
                 type: "expect_outbound",
-                frame: { id: 0, result: { action: "accept", content: { approval: "once" } } },
+                frame: {
+                  id: 0,
+                  result:
+                    runtimeMode === "full-access"
+                      ? { action: "cancel" }
+                      : { action: "accept", content: { approval: "once" } },
+                },
               },
               {
                 type: "emit_inbound",
@@ -2515,6 +2513,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         {
           cwd: "/workspace",
           model: "gpt-5.4",
+          approvalPolicy: "never",
           config: {
             "tools.update_plan.enabled": true,
             mcp_optional_startup_grace_ms: 10_000,
@@ -3848,6 +3847,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           turnEvent("turn/completed", turnIds[0]!),
           ...startTurn(1),
           patchDecision!,
+          ...approval({
+            id: 105,
+            turnId: turnIds[1]!,
+            kind: "commandExecution",
+            itemId: "full-access-command",
+            decision: "decline",
+          }),
           turnEvent("turn/completed", turnIds[1]!),
           ...startTurn(2),
           ...approval({
@@ -3867,7 +3873,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           turnEvent("turn/completed", turnIds[2]!),
         ],
       });
-      const harness = yield* makeCodexReplayHarness(transcript);
+      const wirePolicies: unknown[] = [];
+      const harness = yield* makeCodexReplayHarness(transcript, undefined, (method, params) =>
+        Effect.sync(() => {
+          if (method === "turn/start" && Predicate.hasProperty(params, "approvalPolicy")) {
+            wirePolicies.push(params.approvalPolicy);
+          }
+        }),
+      );
       const requests = () => [
         ...new Map(
           harness.events.flatMap((event) =>
@@ -3917,6 +3930,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       yield* answer(4, "file-change", "accept");
       yield* harness.awaitTerminal(3);
       assert.lengthOf(requests(), 4);
+      assert.deepEqual(wirePolicies, ["untrusted", "never", "untrusted"]);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -4527,7 +4541,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         () => Effect.void,
         (method, params) =>
           Effect.sync(() => {
-            if (method === "thread/resume") resumeThreadEnvs.push(threadEnvOf(params));
+            if (method === "thread/resume") {
+              assert.deepInclude(params, { approvalPolicy: "never" });
+              resumeThreadEnvs.push(threadEnvOf(params));
+            }
           }),
       );
       const resumed = yield* harness.runtime.resumeThread({
@@ -12487,22 +12504,31 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const harness = yield* makeCodexReplayHarness(
           makeCodexReplayTranscript({
             scenario,
-            entries: [...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }), ...entries],
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId,
+                nativeTurnId,
+                prompt,
+                turnPolicy: { approvalPolicy: "untrusted", sandboxPolicy: { type: "readOnly" } },
+              }),
+              ...entries,
+            ],
           }),
           (event) =>
             event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
               ? Queue.offer(pending, event.runtimeRequest)
               : Effect.void,
         );
-        yield* harness.runtime.startTurn(
-          makeCodexTestTurnInput({
+        yield* harness.runtime.startTurn({
+          ...makeCodexTestTurnInput({
             threadId: harness.threadId,
             providerThread: harness.providerThread,
             now: yield* DateTime.now,
             attemptId: RunAttemptId.make(`${scenario}-attempt`),
             text: prompt,
           }),
-        );
+          runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode: "approval-required" },
+        });
         return {
           harness,
           answerNext: Queue.take(pending).pipe(

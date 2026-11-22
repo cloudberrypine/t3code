@@ -203,7 +203,7 @@ function normalizeReplayFrame(value: unknown): unknown {
     normalized.params !== null
   ) {
     const params = { ...(normalized.params as Record<string, unknown>) };
-    // Older recordings used `never` for full access, before MCP prompts were kept interactive.
+    // Full-access recordings span both the original policy and the MCP-elicitation default.
     if (
       params.approvalPolicy === "never" ||
       stableStringify(params.approvalPolicy) ===
@@ -276,6 +276,8 @@ function normalizeThreadRequest(frame: unknown, ignoredConfigKeys: ReadonlySet<s
     return frame;
   }
   const { cwd: _cwd, model: _model, config, ...params } = record.params as Record<string, unknown>;
+  // Older recordings relied on the app-server default for thread load requests.
+  if (params.approvalPolicy === "never") delete params.approvalPolicy;
   if (typeof config !== "object" || config === null) return { ...record, params };
   const owned = Object.fromEntries(
     Object.entries(config as Record<string, unknown>).filter(
