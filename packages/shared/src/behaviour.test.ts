@@ -308,6 +308,109 @@ describe("tokens", () => {
     ]);
   });
 
+  it("reads the converted programs' bindings, lists and await any conditions", () => {
+    const source = `bindings {
+  input { Life, Position };
+  effect T random_in(range<T> r) draws(1);
+  effect void asleep(bool on);
+  run FallMovement fall { void start(); idle void stop(); const int velocity_y; };
+  use { MammalBirth };
+}
+state A() {
+  await any {
+    Courted reply = event(Courted);
+    until(reply_by);
+  }
+  await after(1s) shows state_Settling;
+  wait_until(rest_until);
+}
+`;
+    expect(kindsOn(source, 2).slice(0, 1)).toEqual([["input", "keyword"]]);
+    expect(kindsOn(source, 3)).toEqual([
+      ["effect", "keyword"],
+      ["T", "type"],
+      ["random_in", "function"],
+      ["range", "type"],
+      ["T", "type"],
+      ["draws", "keyword"],
+      ["1", "number"],
+    ]);
+    expect(kindsOn(source, 4)).toEqual([
+      ["effect", "keyword"],
+      ["void", "type"],
+      ["asleep", "function"],
+      ["bool", "type"],
+    ]);
+    expect(kindsOn(source, 5).map(([text, kind]) => `${text}=${kind}`)).toEqual([
+      "run=keyword",
+      "FallMovement=type",
+      "void=type",
+      "start=function",
+      "idle=keyword",
+      "void=type",
+      "stop=function",
+      "const=keyword",
+      "int=type",
+    ]);
+    expect(kindsOn(source, 6)).toEqual([
+      ["use", "keyword"],
+      ["MammalBirth", "constant"],
+    ]);
+    expect(kindsOn(source, 10)).toEqual([
+      ["Courted", "type"],
+      ["event", "keyword"],
+      ["Courted", "event"],
+    ]);
+    expect(kindsOn(source, 11)).toEqual([["until", "keyword"]]);
+    expect(kindsOn(source, 13)).toEqual([
+      ["await", "wait"],
+      ["after", "keyword"],
+      ["1s", "number"],
+      ["shows", "keyword"],
+      ["state_Settling", "string"],
+    ]);
+    expect(kindsOn(source, 14)[0]).toEqual(["wait_until", "wait"]);
+    expect([...analyzeBehaviour(source).lines.keys()].sort((a, b) => a - b)).toEqual([
+      9, 10, 11, 12, 13, 14,
+    ]);
+  });
+
+  it("reads a flat file (routine and activity) with its own line rules", () => {
+    const source = `# The Sloth, flat.
+routine
+  if browse
+    start SlothBrowse with fall_on_purpose
+  end
+activity SlothBrowse
+step ApproachLeaf
+  follow to_leaf else missed
+  wait_for chew_time Chew  # chews
+  finish
+missed:
+  fail CannotReach
+`;
+    const { lines } = analyzeBehaviour(source);
+    expect([...lines.keys()]).toEqual([8, 9]);
+    expect(kindsOn(source, 4)).toEqual([
+      ["start", "control"],
+      ["SlothBrowse", "state"],
+      ["with", "control"],
+      ["fall_on_purpose", "function"],
+    ]);
+    expect(kindsOn(source, 9)).toEqual([
+      ["wait_for", "wait"],
+      ["Chew", "constant"],
+      ["# chews", "comment"],
+    ]);
+    expect(kindsOn(source, 11)).toEqual([["missed:", "constant"]]);
+    expect(
+      resolveBehaviourDefinitions(
+        [{ path: "sloth.beh", contents: source }],
+        source.indexOf("SlothBrowse") + 1,
+      ),
+    ).toEqual([{ path: "sloth.beh", line: 6 }]);
+  });
+
   it("reads a request policy as a keyword, never a wait", () => {
     const line = lineOf(SLOTH, "state Dunging() requests(wait)");
     expect(kindsOn(SLOTH, line)).toEqual([
@@ -582,11 +685,11 @@ describe("navigation", () => {
   });
 });
 
-// The prototype's converted sources, where this machine has them: every line that holds a wait
-// keyword outside comments and strings is a wait line.
+// The prototype's sources, where this machine has them: every line that holds a wait keyword
+// outside comments and strings is a wait line. A flat file waits where a line starts with one.
 const PROTOTYPE_ROOTS = [
   NodePath.join(NodeOS.homedir(), "Projects/polyc-prototype/.worktrees/beh/a/behaviours"),
-  NodePath.join(NodeOS.homedir(), "Projects/polyc-prototype/behaviours"),
+  NodePath.join(NodeOS.homedir(), "Projects/polyc-prototype/a/behaviours"),
 ];
 function sources(dir: string): string[] {
   return NodeFS.readdirSync(dir).flatMap((name) => {
@@ -595,7 +698,7 @@ function sources(dir: string): string[] {
     return /\.beh$/.test(path) ? [path] : [];
   });
 }
-// Files still in the old line-based syntax (`end` closes a block) are not this lexer's.
+// Old line-based files (`end` closes a block) from before the conversion are not this lexer's.
 const prototypeSources = PROTOTYPE_ROOTS.filter(NodeFS.existsSync)
   .flatMap(sources)
   .filter((path) => !/^\s*end\s*$/m.test(NodeFS.readFileSync(path, "utf8")));
@@ -603,16 +706,21 @@ it.skipIf(prototypeSources.length === 0)("marks every wait in the prototype's so
   for (const path of prototypeSources) {
     const source = NodeFS.readFileSync(path, "utf8");
     const { lines } = analyzeBehaviour(source);
-    const code = source
-      .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "))
+    const flat = /^(?:\s*(?:#.*)?\n)*\s*(?:routine|activity)\b/.test(source);
+    const code = (
+      flat ? source : source.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "))
+    )
       .split("\n")
-      .map((line) => line.replace(/\/\/.*$/, "").replace(/"(?:[^"\\]|\\.)*"/g, '""'));
+      .map((line) =>
+        line.replace(flat ? /#.*$/ : /\/\/.*$/, "").replace(/"(?:[^"\\]|\\.)*"/g, '""'),
+      );
     code.forEach((line, index) => {
-      if (
-        /\bawait\b(?!\s*[;)])|\bwait(?:_for)?\s*\(/.test(line) &&
-        !/requests\s*\(\s*wait\s*\)/.test(line)
-      )
-        expect(lines.get(index + 1), `${path}:${index + 1}: ${line.trim()}`).toBe("wait");
+      const waits = flat
+        ? /^\s*(?:wait|wait_for|await|follow)\b/.test(line)
+        : /\bawait\b(?!\s*[;)])|\bwait(?:_for|_until)?\s*\(/.test(line) &&
+          !/requests\s*\(\s*wait\s*\)/.test(line);
+      // A multi-line wait and an `await any` block mark their other lines too.
+      if (waits) expect(lines.get(index + 1), `${path}:${index + 1}: ${line.trim()}`).toBe("wait");
     });
   }
 });

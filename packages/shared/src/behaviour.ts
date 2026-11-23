@@ -145,7 +145,7 @@ export function tokenizeBehaviour(source: string): BehaviourLexToken[] {
 
 // Words.
 
-const WAIT_CALLS = new Set(["wait", "wait_for"]);
+const WAIT_CALLS = new Set(["wait", "wait_for", "wait_until"]);
 /** What `await` waits on besides a state: `await after(d)`, `until(t)`, `event(E)`, `any { }`. */
 const AWAIT_CONDITIONS = new Set(["after", "until", "event", "any"]);
 const BUILTIN_TYPES = new Set([
@@ -208,7 +208,6 @@ const STRUCTURE = new Set([
   "enum",
   "state",
   "defer",
-  "on",
   "availability",
   "bindings",
 ]);
@@ -259,7 +258,21 @@ interface Scope {
   kind: ScopeKind;
   /** The behaviour or library it is in, "" outside any. */
   unit: string;
+  /** Inside `bindings { }`, where binding words (`level`, `idle`, `wakes`...) are keywords. */
+  bindings: boolean;
 }
+
+/** Words of a binding declaration: `effect level T f() draws(1);`, `run T r { idle void stop(); }`. */
+const BINDING_WORDS = new Set([
+  "level",
+  "draws",
+  "idle",
+  "holds_still",
+  "wakes",
+  "push",
+  "solve",
+  "const",
+]);
 
 /** What a `{` opens, from the statement's tokens before it. */
 function scopeKind(header: readonly BehaviourLexToken[], parent: Scope | undefined): ScopeKind {
@@ -324,6 +337,7 @@ function walkScopes(
       const scope = {
         kind,
         unit: kind === "unit" ? (headerName(header, kind) ?? "") : (top?.unit ?? ""),
+        bindings: kind === "bindings" || (top?.bindings ?? false),
       };
       onOpen?.(header, kind, scope);
       scopes.push(scope);
@@ -350,6 +364,7 @@ function walkScopes(
  * statements.
  */
 export function analyzeBehaviour(source: string): BehaviourAnalysis {
+  if (isFlatBehaviour(source)) return analyzeFlatBehaviour(source);
   const lexed = tokenizeBehaviour(source);
   const kinds = new Map<BehaviourLexToken, BehaviourTokenKind>();
   const lineKinds = new Map<number, BehaviourLineKind>();
@@ -426,6 +441,73 @@ export function analyzeBehaviour(source: string): BehaviourAnalysis {
 }
 
 type Setter = (token: BehaviourLexToken | undefined, kind: BehaviourTokenKind) => void;
+
+const FLAT_KEYWORDS = new Set(["routine", "activity", "step"]);
+const FLAT_CONTROL = new Set([
+  "if",
+  "unless",
+  "end",
+  "do",
+  "start",
+  "then",
+  "with",
+  "guard",
+  "else",
+  "goto",
+  "require",
+  "refuse",
+  "finish",
+  "fail",
+]);
+const FLAT_WAITS = new Set(["wait", "wait_for", "await", "follow"]);
+
+/**
+ * A flat file (`routine` and `activity` sections: the Capybara's and the first Sloth's), which the
+ * compiler reads with its own line-based reader: `#` comments, one statement a line.
+ */
+function isFlatBehaviour(source: string): boolean {
+  for (const raw of source.split("\n")) {
+    const code = raw.replace(/#.*$/, "").trim();
+    if (code) return /^(?:routine|activity)\b/.test(code);
+  }
+  return false;
+}
+
+function analyzeFlatBehaviour(source: string): BehaviourAnalysis {
+  const tokens: BehaviourSemanticToken[] = [];
+  const lines = new Map<number, BehaviourLineKind>();
+  let lineStart = 0;
+  source.split("\n").forEach((raw, index) => {
+    const line = index + 1;
+    const text = raw.replace(/\r$/, "");
+    const hash = text.indexOf("#");
+    const code = hash < 0 ? text : text.slice(0, hash);
+    const words = [...code.matchAll(/[A-Za-z_]\w*:?|\d+t?\b/g)];
+    const first = words[0]?.[0] ?? "";
+    words.forEach((match, i) => {
+      const word = match[0];
+      const at = lineStart + match.index;
+      const push = (kind: BehaviourTokenKind) =>
+        tokens.push({ start: at, end: at + word.length, line, kind });
+      if (/^\d/.test(word)) push("number");
+      else if (word.endsWith(":") && i === 0) push("constant"); // a label
+      else if (i === 0 && FLAT_WAITS.has(word)) push("wait");
+      else if (i === 0 && FLAT_KEYWORDS.has(word)) push("keyword");
+      else if (FLAT_CONTROL.has(word)) push("control");
+      else if (first === "activity" || (first === "start" && i === 1)) push("state");
+      else if (first === "step" && i === 1) push("constant");
+      else if (FLAT_WAITS.has(first) && first !== "follow" && i === 2) push("constant"); // the step
+      else if ((first === "do" || first === "require") && i === 1) push("function");
+      else if (first === "start" && i === 3) push("function"); // start A with effect
+      else if (["goto", "fail", "refuse"].includes(words[i - 1]?.[0] ?? "")) push("constant");
+    });
+    if (hash >= 0)
+      tokens.push({ start: lineStart + hash, end: lineStart + text.length, line, kind: "comment" });
+    if (FLAT_WAITS.has(first)) lines.set(line, "wait");
+    lineStart += raw.length + 1;
+  });
+  return { tokens, lines };
+}
 
 function classifyName(
   code: readonly BehaviourLexToken[],
@@ -515,6 +597,37 @@ function classifyName(
     return;
   }
   if (text === "enum" && next?.kind === "name") {
+    set(token, "keyword");
+    set(next, "type");
+    return;
+  }
+  // A name list: `failure { A, B };`, `refusal { ... };`, `use { M };`, `input { Life };`.
+  if (i === statement && isOp(next, "{") && ["failure", "refusal", "use", "input"].includes(text)) {
+    set(token, "keyword");
+    return;
+  }
+  // A condition of `await any { }`: `until(t);`, `after(d);`, `E m = event(E);`.
+  if (scope?.kind === "awaitAny" && AWAIT_CONDITIONS.has(text) && isOp(next, "(")) {
+    set(token, "keyword");
+    if (text === "event") set(code[i + 2], "event");
+    return;
+  }
+  // A type's argument: `range<T>`, `list<entity, 16>`.
+  if (isOp(previous, "<") && BUILTIN_TYPES.has(code[i - 2]?.text ?? "")) {
+    set(token, "type");
+    return;
+  }
+  if (scope?.bindings && BINDING_WORDS.has(text)) {
+    set(token, "keyword");
+    return;
+  }
+  // `shows key`: the player text while it waits, a localization key.
+  if (text === "shows" && next?.kind === "name") {
+    set(token, "keyword");
+    set(next, "string");
+    return;
+  }
+  if (text === "struct" && next?.kind === "name") {
     set(token, "keyword");
     set(next, "type");
     return;
@@ -766,6 +879,20 @@ export interface BehaviourDefinitionSite {
 
 export function behaviourDefinitions(source: string): BehaviourDefinitionSite[] {
   const sites: BehaviourDefinitionSite[] = [];
+  if (isFlatBehaviour(source)) {
+    // Activities are the flat form's states; steps and labels are where it jumps.
+    source.split("\n").forEach((raw, index) => {
+      const words = raw.replace(/#.*$/, "").trim().split(/\s+/);
+      const line = index + 1;
+      if (words[0] === "activity")
+        for (const name of words.slice(1)) sites.push({ name, unit: "", kind: "state", line });
+      else if (words[0] === "step" && words[1])
+        sites.push({ name: words[1], unit: "", kind: "state", line });
+      else if (words.length === 1 && words[0]!.endsWith(":"))
+        sites.push({ name: words[0]!.slice(0, -1), unit: "", kind: "state", line });
+    });
+    return sites;
+  }
   const code = tokenizeBehaviour(source).filter((token) => token.kind !== "comment");
   walkScopes(
     code,
