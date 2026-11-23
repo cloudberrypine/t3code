@@ -1,12 +1,14 @@
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { LegendList } from "@legendapp/list/react-native";
+import { markdownPreviewSections } from "../../lib/markdownDocument";
 import { resolveMobileMarkdownMediaSource } from "../../lib/markdownMediaSource";
 import { getBrowseDirectoryPath } from "@t3tools/client-runtime/state/projects";
 import { splitMarkdownFrontMatter } from "@t3tools/shared/markdownFrontmatter";
 import { useGT } from "gt-react-native";
 import { useMemo, useState } from "react";
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { ScrollView, View } from "react-native";
+import { Platform, ScrollView, View } from "react-native";
 import { RefreshControl } from "../../components/ui/RefreshControl";
 
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
@@ -28,6 +30,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/ui/VideoPreviewModal";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/ui/FilePreviewModal";
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   SelectableMarkdownText,
@@ -87,6 +90,10 @@ export function FileMarkdownPreview(props: {
   readonly onRefresh?: () => Promise<void> | void;
 }) {
   const document = useMemo(() => splitMarkdownFrontMatter(props.markdown), [props.markdown]);
+  const sections = useMemo(
+    () => (Platform.OS === "ios" ? markdownPreviewSections(document.body) : [document.body]),
+    [document.body],
+  );
   const navigation = useNavigation();
   const gt = useGT();
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
@@ -224,58 +231,73 @@ export function FileMarkdownPreview(props: {
     if (!openMedia(href)) void tryOpenExternalUrl(href, "markdown-link");
   };
 
-  return (
-    <ScrollView
-      className="flex-1 bg-sheet"
-      contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{ padding: 18 }}
-      refreshControl={
-        props.onRefresh ? (
-          <RefreshControl
-            refreshing={isPullRefreshing}
-            onRefresh={() => void handlePullToRefresh()}
-          />
-        ) : undefined
-      }
-    >
-      <View className="mx-auto w-full max-w-[760px]">
-        {/* Polyzonia: the front matter block is shown, not hidden. */}
-        {document.frontMatter !== null ? (
-          <View className="mb-4 rounded-lg border border-border bg-card p-4">
-            <Text
-              accessibilityRole="header"
-              className="font-t3-medium text-xs text-foreground-muted"
-            >
-              {gt("Front matter")}
-            </Text>
-            <Text selectable className="mt-2 font-mono text-xs leading-relaxed text-foreground">
-              {document.frontMatter}
-            </Text>
-          </View>
-        ) : null}
-        <SelectableMarkdownText
-          markdown={document.body}
-          fileEmbedLabel={(href) =>
-            markdownFileEmbedLabel(
-              href,
-              {
-                environmentId: props.environmentId,
-                threadId: props.threadId ?? undefined,
-                workspaceRoot: markdownDirectory,
-                captured: props.captured,
-              },
-              false,
-            )
-          }
-          onLinkPress={onLinkPress}
-          renderImage={renderImage}
-          resolveImageSource={resolveImageSource}
-          onImagePress={onImagePress}
-          textStyle={styles.nativeTextStyle}
-        />
-        <FilePreviewModal source={expandedFile} onRequestClose={() => setExpandedFile(null)} />
-        <VideoPreviewModal source={expandedVideo} onRequestClose={() => setExpandedVideo(null)} />
+  const frontMatter =
+    document.frontMatter === null ? null : (
+      <View className="mx-auto mb-4 w-full max-w-[760px] rounded-lg border border-border bg-card p-4">
+        <Text accessibilityRole="header" className="font-t3-medium text-xs text-foreground-muted">
+          {gt("Front matter")}
+        </Text>
+        <Text selectable className="mt-2 font-mono text-xs leading-relaxed text-foreground">
+          {document.frontMatter}
+        </Text>
       </View>
-    </ScrollView>
+    );
+  const renderSection = (markdown: string) => (
+    <View className="mx-auto w-full max-w-[760px]">
+      <SelectableMarkdownText
+        markdown={markdown}
+        fileEmbedLabel={(href) =>
+          markdownFileEmbedLabel(
+            href,
+            {
+              environmentId: props.environmentId,
+              threadId: props.threadId ?? undefined,
+              workspaceRoot: markdownDirectory,
+              captured: props.captured,
+            },
+            false,
+          )
+        }
+        onLinkPress={onLinkPress}
+        renderImage={renderImage}
+        resolveImageSource={resolveImageSource}
+        onImagePress={onImagePress}
+        textStyle={styles.nativeTextStyle}
+      />
+    </View>
+  );
+  const scrollProps = {
+    className: "flex-1",
+    contentInsetAdjustmentBehavior: "automatic" as const,
+    contentContainerStyle: { padding: 18 },
+    refreshControl: props.onRefresh ? (
+      <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullToRefresh()} />
+    ) : undefined,
+  };
+
+  return (
+    <View className="flex-1 bg-sheet">
+      {sections.length > 1 ? (
+        // iOS allocates backing stores for each native table in a mounted renderer.
+        <LegendList
+          {...scrollProps}
+          renderScrollComponent={NativeScrollView}
+          data={sections}
+          keyExtractor={(_section, index) => String(index)}
+          renderItem={({ item }) => renderSection(item)}
+          extraData={renderSection}
+          estimatedItemSize={650}
+          drawDistance={300}
+          ListHeaderComponent={frontMatter}
+        />
+      ) : (
+        <ScrollView {...scrollProps}>
+          {frontMatter}
+          {renderSection(document.body)}
+        </ScrollView>
+      )}
+      <FilePreviewModal source={expandedFile} onRequestClose={() => setExpandedFile(null)} />
+      <VideoPreviewModal source={expandedVideo} onRequestClose={() => setExpandedVideo(null)} />
+    </View>
   );
 }

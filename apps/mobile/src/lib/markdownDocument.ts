@@ -507,6 +507,39 @@ export function parseMarkdownDocument(markdown: string): Root {
   return parser.parse(markdownForNativeParsing(markdown));
 }
 
+const MARKDOWN_PREVIEW_SECTION_SIZE = 4_000;
+
+/** Keep expensive native views in separate sections without cutting a Markdown block in half. */
+export function markdownPreviewSections(markdown: string): ReadonlyArray<string> {
+  if (markdown.length <= MARKDOWN_PREVIEW_SECTION_SIZE) return [markdown];
+
+  const root = parser.parse(markdown);
+  const starts = [0];
+  let sectionStart = 0;
+  let previousEnd = 0;
+  for (const block of root.children) {
+    const end = block.position?.end.offset;
+    if (end === undefined) continue;
+    if (end - sectionStart > MARKDOWN_PREVIEW_SECTION_SIZE && previousEnd > sectionStart) {
+      starts.push(previousEnd);
+      sectionStart = previousEnd;
+    }
+    previousEnd = end;
+  }
+
+  if (starts.length === 1) return [markdown];
+
+  // Reference links and images can use a definition anywhere in the file. Put the first
+  // definition for each label before the section, where it also wins over local duplicates.
+  const definitions = markdownReferenceDefinitions(markdown);
+  const prelude = definitions.length > 0 ? `${definitions.join("\n")}\n\n` : "";
+
+  return starts.map((start, index) => {
+    const section = markdown.slice(start, starts[index + 1]);
+    return section.includes("[") ? prelude + section : section;
+  });
+}
+
 export function markdownForNativeRendering(markdown: string, fileLink: RegExp): string {
   return transformNativeMarkdown(markdownForNativeParsing(markdown), fileLink, true);
 }
