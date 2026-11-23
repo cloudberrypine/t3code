@@ -559,6 +559,37 @@ describe("source file scroll", () => {
     };
     await vi.waitFor(() => expect(visibleLines()).toContain(801));
   });
+
+  it("opens an editable file's find panel with mod+f from outside its text", async () => {
+    using _settings = setup();
+    await preloadHighlighter({ themes: Object.values(DEFAULT_THEMES), langs: ["typescript"] });
+    state.file = {
+      relativePath: "server.ts",
+      contents: "const server = 1;\n",
+      byteLength: 18,
+      truncated: false,
+    };
+    await using _screen = await render(
+      <div style={{ width: 500, height: 400, display: "flex", flexDirection: "column" }}>
+        {filePreview("server.ts")}
+      </div>,
+    );
+    const surface = () =>
+      document.querySelector<HTMLElement>(".file-preview-virtualizer")?.parentElement ?? null;
+    await vi.waitFor(() =>
+      expect(
+        surface()?.querySelector("diffs-container")?.shadowRoot?.querySelector("[data-content]"),
+      ).toBeTruthy(),
+    );
+    surface()!.focus();
+    expect(deepActiveElement()).toBe(surface());
+    await userEvent.keyboard(
+      isMacPlatform(navigator.platform) ? "{Meta>}f{/Meta}" : "{Control>}f{/Control}",
+    );
+    await vi.waitFor(() => expect(deepActiveElement()).toBeInstanceOf(HTMLInputElement));
+    const root = surface()!.querySelector("diffs-container")!.shadowRoot!;
+    expect(root.querySelector("[data-search-panel-overlay]")).not.toBeNull();
+  });
 });
 
 describe("rendered Markdown task saves", () => {

@@ -8,6 +8,7 @@ import type { ANGELSCRIPT_SYNTAX_LANGUAGE } from "~/lib/angelScriptSyntax";
 import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 
+import { FILE_FIND_CSS, useReadOnlyFileFind } from "./fileFind";
 import { FILE_LINK_REVEAL_UNSAFE_CSS } from "./fileSurfaceChrome";
 import { BEHAVIOUR_CSS } from "~/lib/behaviourRendering";
 import { SourceSelection } from "./sourceSelection";
@@ -28,6 +29,8 @@ export default function ReadOnlySourcePreview(props: {
   const { text, onPostRender } = props;
   const wrapper = useRef<HTMLDivElement>(null);
   const [selection] = useState(() => new SourceSelection());
+  // Polyzonia: a read-only file has no editor and so no find panel of its own.
+  const find = useReadOnlyFileFind(text);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the document's selection, which only it reports
   useEffect(() => {
     const root = () => wrapper.current?.querySelector("diffs-container")?.shadowRoot;
@@ -58,13 +61,18 @@ export default function ReadOnlySourcePreview(props: {
   };
   const drawSelection: NonNullable<typeof onPostRender> = (node, instance, phase) => {
     if (phase !== "unmount" && node.shadowRoot) selection.render(node.shadowRoot, text);
+    find.onPostRender(node, instance, phase);
     return onPostRender?.(node, instance, phase);
   };
   return (
     <DiffWorkerPoolProvider>
       <div
         ref={wrapper}
-        className="contents"
+        // Focusable, so a click in the file lets mod+f reach its find bar.
+        tabIndex={-1}
+        data-file-find-root=""
+        className="relative flex min-h-0 min-w-0 flex-1 flex-col outline-none"
+        onKeyDownCapture={find.onKeyDownCapture}
         onCopy={copySelection}
         onPointerDown={(event) => selection.press(event.button !== 0 || event.shiftKey)}
         // Scrolling unmounts rows, and a selection made in the same task has not been reported yet.
@@ -91,12 +99,13 @@ export default function ReadOnlySourcePreview(props: {
               theme: resolveDiffThemeName(resolvedTheme),
               preferredHighlighter: PREFERRED_HIGHLIGHTER,
               themeType: resolvedTheme,
-              unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${BEHAVIOUR_CSS}\n${props.unsafeCSSExtra ?? ""}`,
+              unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${BEHAVIOUR_CSS}\n${FILE_FIND_CSS}\n${props.unsafeCSSExtra ?? ""}`,
               onPostRender: drawSelection,
             }}
             className="min-h-full"
           />
         </Virtualizer>
+        {find.bar}
       </div>
     </DiffWorkerPoolProvider>
   );

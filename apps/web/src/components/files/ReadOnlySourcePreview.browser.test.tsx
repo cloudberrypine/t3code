@@ -213,4 +213,50 @@ describe("ReadOnlySourcePreview", () => {
       text.slice(text.indexOf("line 3\n"), text.indexOf(`${lastLine}\n`)),
     );
   });
+
+  it("finds in the file with mod+f and centres each match", async () => {
+    const lines = Array.from({ length: 600 }, (_, index) => `line ${index + 1}`);
+    lines.splice(450, 0, "the needle, and a Needle again: needle");
+    const contents = lines.join("\n");
+    await getSyntaxHighlighterPromise("text");
+    await using screen = await render(
+      <div className="flex h-[400px] flex-col">
+        <ReadOnlySourcePreview name="notes.txt" text={contents} wordWrap={false} />
+      </div>,
+    );
+    const root = screen.container.querySelector("diffs-container")!.shadowRoot!;
+    const rows = () => [...root.querySelectorAll<HTMLElement>("[data-line]")];
+    await vi.waitFor(() => expect(rows()[0]?.textContent).toBe("line 1"));
+    // A read-only file has no editor; a click in it gives its find bar the keys.
+    await userEvent.click(rows()[0]!);
+    await userEvent.keyboard("{ControlOrMeta>}f{/ControlOrMeta}");
+    const field = () => screen.container.querySelector<HTMLInputElement>("[data-file-find] input");
+    await vi.waitFor(() => expect(document.activeElement).toBe(field()));
+    await userEvent.keyboard("needle");
+    const bar = () => screen.container.querySelector("[data-file-find]");
+    await vi.waitFor(() => expect(bar()?.textContent).toContain("1 of 3"));
+    const scroller = screen.container.querySelector<HTMLElement>(".file-preview-virtualizer")!;
+    const visibleLines = () => {
+      const viewport = scroller.getBoundingClientRect();
+      return rows()
+        .filter((row) => {
+          const box = row.getBoundingClientRect();
+          return box.height > 0 && box.top >= viewport.top && box.bottom <= viewport.bottom;
+        })
+        .map((row) => Number(row.dataset.line));
+    };
+    await vi.waitFor(() => expect(visibleLines()).toContain(451));
+    await vi.waitFor(() => expect(CSS.highlights.get("t3-file-find-current")?.size).toBe(1));
+    expect(CSS.highlights.get("t3-file-find")?.size).toBe(2);
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() => expect(bar()?.textContent).toContain("2 of 3"));
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+    await vi.waitFor(() => expect(bar()?.textContent).toContain("1 of 3"));
+    // Capitals make the search case-sensitive.
+    await userEvent.keyboard("{Backspace>6/}Needle");
+    await vi.waitFor(() => expect(bar()?.textContent).toContain("1 of 1"));
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(bar()).toBeNull());
+    expect(CSS.highlights.get("t3-file-find-current")?.size ?? 0).toBe(0);
+  });
 });

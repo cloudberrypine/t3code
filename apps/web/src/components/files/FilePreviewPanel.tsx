@@ -129,6 +129,7 @@ import {
 } from "./fileSurfaceChrome";
 import SourceFilePreview from "./ReadOnlySourcePreview";
 import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
+import { isFindShortcut, isFromEditorText, openEditorFind } from "./fileFind";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey } from "./fileContentRevision";
 import {
@@ -1112,7 +1113,19 @@ function EditableFileSurface({
 
   return (
     <EditProvider createEditor={createFileEditor}>
-      <div ref={surfaceRef} className="flex min-h-0 flex-1">
+      <div
+        ref={surfaceRef}
+        // Polyzonia: mod+f anywhere in the file opens its editor's find panel, which the editor
+        // itself answers only while the caret is in its text.
+        tabIndex={-1}
+        className="flex min-h-0 flex-1 outline-none"
+        onKeyDownCapture={(event) => {
+          if (!isFindShortcut(event) || isFromEditorText(event)) return;
+          if (!openEditorFind(editorRef.current, surfaceRef.current)) return;
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
         <Virtualizer
           className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
           config={{
