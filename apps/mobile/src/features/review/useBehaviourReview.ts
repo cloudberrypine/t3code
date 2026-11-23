@@ -17,12 +17,11 @@ const NO_REVISIONS: ReadonlyMap<string, BehaviourRevision> = new Map();
  */
 export function useBehaviourReview(input: {
   readonly data: NativeReviewDiffData;
-  readonly scheme: "light" | "dark";
   readonly canHighlight: boolean;
   readonly collapsedFileIds: ReadonlyArray<string>;
   readonly loadScriptRevision?: RevisionLoader | undefined;
 }) {
-  const { canHighlight, collapsedFileIds, data, loadScriptRevision, scheme } = input;
+  const { canHighlight, collapsedFileIds, data, loadScriptRevision } = input;
   const [loaded, setLoaded] = useState<{
     readonly loader: RevisionLoader | undefined;
     readonly values: ReadonlyMap<string, BehaviourRevision>;
@@ -75,10 +74,7 @@ export function useBehaviourReview(input: {
   useEffect(() => {
     if (visible.current) loadRevisions(visible.current.start, visible.current.end);
   }, [loadRevisions]);
-  const prepared = useMemo(
-    () => prepareBehaviourReview(data, scheme, revisions),
-    [data, scheme, revisions],
-  );
+  const prepared = useMemo(() => prepareBehaviourReview(data, revisions), [data, revisions]);
   const updateVisibleRange = useCallback(
     (start: number, end: number) => {
       visible.current = { start, end };

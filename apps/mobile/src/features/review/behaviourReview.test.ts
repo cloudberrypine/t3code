@@ -1,11 +1,7 @@
 import { behaviourColors, createBehaviourRevisionSemantics } from "@t3tools/shared/behaviour";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  colorBehaviourReviewRow,
-  prepareBehaviourReview,
-  withBehaviourWaitRows,
-} from "./behaviourReview";
+import { colorBehaviourReviewRow, prepareBehaviourReview } from "./behaviourReview";
 import type { NativeReviewDiffData } from "./nativeReviewDiffAdapter";
 import type { NativeReviewDiffRow } from "../diffs/nativeReviewDiffSurface";
 
@@ -45,22 +41,12 @@ const contextRows = (lines: readonly string[]): NativeReviewDiffRow[] =>
 
 describe("prepareBehaviourReview", () => {
   it.each(["Sloth.beh", "Sloth.pzb"])(
-    "gives %s's wait rows the wait background and colours their tokens",
+    "colours %s's rows as plain text with no wait row tint",
     (path) => {
       const data = diff(path, contextRows(DUNG_IN_HOLLOW));
-      const result = prepareBehaviourReview(data, "dark");
+      const result = prepareBehaviourReview(data);
       expect(result.data.files[0]!.language).toBe("text");
-      const background = behaviourColors.dark.waitBackground;
-      expect(result.data.rows.map((row) => row.awaitBackground ?? null)).toEqual([
-        null,
-        background,
-        null,
-        null,
-        null,
-        background,
-        background,
-        null,
-      ]);
+      expect(result.data.rows.every((row) => row.awaitBackground === undefined)).toBe(true);
       const kinds = (id: string) =>
         result.semantics
           .get(id)
@@ -89,14 +75,14 @@ describe("prepareBehaviourReview", () => {
     },
   );
 
-  it("reads a context row's wait from the new side only", () => {
-    // The old file opens `await any {` above the row; the new file no longer does.
+  it("reads a context row's colours from the new side only", () => {
+    // The old file opens a block comment above the row; the new file no longer does.
     const data = diff("a.beh", [
       {
         kind: "line",
         id: "gone",
         fileId: "script",
-        content: "  await any {",
+        content: "  /* old",
         change: "delete",
         oldLineNumber: 1,
       },
@@ -104,48 +90,28 @@ describe("prepareBehaviourReview", () => {
         kind: "line",
         id: "row",
         fileId: "script",
-        content: "    log(x);",
+        content: "  log(x);",
         change: "context",
         oldLineNumber: 2,
         newLineNumber: 1,
       },
     ]);
-    const background = behaviourColors.dark.waitBackground;
-    expect(
-      prepareBehaviourReview(data, "dark").data.rows.map((row) => row.awaitBackground ?? null),
-    ).toEqual([background, null]);
-  });
-
-  it("marks a comment excerpt's waiting rows on each side", () => {
-    const rows: NativeReviewDiffRow[] = [
-      { kind: "line", id: "a", content: "  wait_for(1t);", change: "delete", oldLineNumber: 2 },
-      { kind: "line", id: "b", content: "  foo();", change: "add", newLineNumber: 2 },
-      { kind: "line", id: "c", content: "  await Rest();", change: "context", newLineNumber: 3 },
-    ];
-    const background = behaviourColors.light.waitBackground;
-    expect(
-      withBehaviourWaitRows(rows, "sloth.beh", "light").map((row) => row.awaitBackground ?? null),
-    ).toEqual([background, null, background]);
-    expect(withBehaviourWaitRows(rows, "Sloth.as", "light")).toBe(rows);
+    const kinds = prepareBehaviourReview(data)
+      .semantics.get("row")
+      ?.map((token) => token.kind);
+    expect(kinds).toEqual(["function"]);
   });
 
   it("leaves other files alone", () => {
     const data = diff("Sloth.as", contextRows(DUNG_IN_HOLLOW));
-    const result = prepareBehaviourReview(data, "light");
+    const result = prepareBehaviourReview(data);
     expect(result.data).toBe(data);
     expect(result.semantics.size).toBe(0);
   });
 
-  it("marks a hunk inside an await any block from its complete revisions", () => {
-    const oldLines = [
-      "state Rest() {",
-      "  await any {",
-      "    after(p.rest_duration);",
-      "    event(Alarm);",
-      "  }",
-      "}",
-    ];
-    const newLines = oldLines.map((line) => line.replace("rest_duration", "nap_duration"));
+  it("reads a hunk inside a block comment from its complete revisions", () => {
+    const oldLines = ["state Rest() {", "  /* a", "     wait_for(x); */", "}"];
+    const newLines = oldLines.map((line) => line.replace("(x)", "(y)"));
     const data = diff("Sloth.beh", [
       {
         kind: "line",
@@ -164,10 +130,8 @@ describe("prepareBehaviourReview", () => {
         newLineNumber: 3,
       },
     ]);
-    // Alone, the changed line reads as a plain statement.
-    expect(
-      prepareBehaviourReview(data, "light").data.rows.map((row) => row.awaitBackground ?? null),
-    ).toEqual([null, null]);
+    // Alone, the changed line reads as a wait.
+    expect(prepareBehaviourReview(data).semantics.get("new")?.[0]?.kind).toBe("wait");
 
     const revisions = new Map([
       [
@@ -178,17 +142,9 @@ describe("prepareBehaviourReview", () => {
         }),
       ],
     ]);
-    const result = prepareBehaviourReview(data, "light", revisions);
-    const background = behaviourColors.light.waitBackground;
-    expect(result.data.rows.map((row) => [row.change, row.awaitBackground])).toEqual([
-      ["delete", background],
-      ["add", background],
-    ]);
-    expect(
-      result.semantics
-        .get("new")
-        ?.map((token) => [newLines[2]!.slice(token.start, token.end), token.kind]),
-    ).toContainEqual(["nap_duration", "param"]);
+    const result = prepareBehaviourReview(data, revisions);
+    expect(result.semantics.get("old")?.map((token) => token.kind)).toEqual(["comment"]);
+    expect(result.semantics.get("new")?.map((token) => token.kind)).toEqual(["comment"]);
   });
 
   it("falls back to the hunk when a revision does not match the row", () => {
@@ -199,7 +155,7 @@ describe("prepareBehaviourReview", () => {
         createBehaviourRevisionSemantics({ oldContents: "other", newContents: "other" }),
       ],
     ]);
-    const result = prepareBehaviourReview(data, "light", revisions);
-    expect(result.data.rows[1]!.awaitBackground).toBe(behaviourColors.light.waitBackground);
+    const result = prepareBehaviourReview(data, revisions);
+    expect(result.semantics.get("1")?.[0]?.kind).toBe("wait");
   });
 });

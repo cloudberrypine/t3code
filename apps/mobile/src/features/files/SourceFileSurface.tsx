@@ -67,7 +67,7 @@ import {
   selectableSourceHtml,
 } from "./source-file-document";
 import { sourceHighlightAtom } from "./sourceHighlightingState";
-import { behaviourWaitBackground, useBehaviourSource } from "./behaviourSource";
+import { useBehaviourSource } from "./behaviourSource";
 import { colorBehaviourLines } from "../../lib/behaviourHighlighting";
 
 interface SourceFileSurfaceProps {
@@ -242,20 +242,17 @@ function useSourceFileModel(props: SourceFileSurfaceProps) {
   );
   // Polyzonia's behaviour language (`.beh`, `.pzb`) tokenizes as plain text under its own colours.
   const behaviour = useBehaviourSource(props.path, normalizedContents);
-  /** A 1-based line's full-strength await or wait background. */
+  /** A 1-based line's full-strength AngelScript await background. */
   const lineBackground = (line: number) =>
-    awaitLines.has(line)
-      ? angelScriptColors[theme].background
-      : behaviourWaitBackground(behaviour, line, theme);
-  const rowsJson =
-    api || behaviour
-      ? JSON.stringify(
-          buildNativeSourceRows(lines).map((row, index) => {
-            const awaitBackground = lineBackground(index + 1);
-            return awaitBackground ? { ...row, awaitBackground } : row;
-          }),
-        )
-      : document.rowsJson;
+    awaitLines.has(line) ? angelScriptColors[theme].background : undefined;
+  const rowsJson = api
+    ? JSON.stringify(
+        buildNativeSourceRows(lines).map((row, index) => {
+          const awaitBackground = lineBackground(index + 1);
+          return awaitBackground ? { ...row, awaitBackground } : row;
+        }),
+      )
+    : document.rowsJson;
   const targetIndex =
     props.initialLine !== null && props.initialLine !== undefined && props.initialLine > 0
       ? Math.min(Math.floor(props.initialLine) - 1, Math.max(0, lines.length - 1))

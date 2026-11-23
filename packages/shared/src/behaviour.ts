@@ -754,8 +754,6 @@ function stripCr(text: string) {
 // deleted line), as upstream's readable light theme does.
 
 export interface BehaviourPalette extends Record<BehaviourTokenKind, string> {
-  /** A waiting line's background. */
-  waitBackground: string;
   /** A waiting line's gutter stripe. */
   waitStripe: string;
   /** The wait keyword's own background. */
@@ -778,7 +776,6 @@ export const behaviourColors: Record<"light" | "dark", BehaviourPalette> = {
     memory: "#8e460e",
     qualifier: "#4a6073",
     event: "#a23c19",
-    waitBackground: "#fff1c2",
     waitStripe: "#d49b00",
     waitKeywordBackground: "#ffdd75",
   },
@@ -797,7 +794,6 @@ export const behaviourColors: Record<"light" | "dark", BehaviourPalette> = {
     memory: "#ffa359",
     qualifier: "#93aec4",
     event: "#ff8a66",
-    waitBackground: "#3a3420",
     waitStripe: "#e5b53a",
     waitKeywordBackground: "#6a5313",
   },

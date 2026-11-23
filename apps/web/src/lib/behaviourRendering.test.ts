@@ -141,8 +141,9 @@ it("does not paint a late revision after unmount", async () => {
   painter.dispose();
 });
 
-it("styles waiting rows with a tint, a gutter stripe and the wait word's own background", () => {
+it("styles waiting rows with a gutter stripe and the wait word's own background, no tint", () => {
   expect(BEHAVIOUR_CSS).toContain('[data-beh-line="wait"]');
+  expect(BEHAVIOUR_CSS).not.toContain("background-image");
   expect(BEHAVIOUR_CSS).toMatch(/box-shadow: inset 3px 0 0 light-dark\(/);
   expect(BEHAVIOUR_CSS).toMatch(/::highlight\(beh-wait\) \{[^}]*background-color/);
   expect(BEHAVIOUR_CSS).toContain("::highlight(beh-state)");

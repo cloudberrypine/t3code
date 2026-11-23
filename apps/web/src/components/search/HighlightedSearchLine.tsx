@@ -174,7 +174,7 @@ function SyntaxHighlightedTokens(props: {
   const highlighter = use(getSyntaxHighlighterPromise(props.language));
   const tokens = firstLineTokens(highlighter, props.line, props.language, props.theme);
   // Polyzonia: the behaviour language is plain text to the highlighter and coloured here; a
-  // line that waits keeps its tint and gutter stripe in the results too.
+  // line that waits keeps its gutter stripe in the results too.
   const behaviour = props.behaviour ? analyzeBehaviour(props.line) : null;
   const colored =
     tokens && behaviour
@@ -191,7 +191,6 @@ function SyntaxHighlightedTokens(props: {
       <span
         data-beh-line="wait"
         style={{
-          backgroundColor: palette.waitBackground,
           boxShadow: `inset 3px 0 0 ${palette.waitStripe}`,
           paddingLeft: 6,
         }}

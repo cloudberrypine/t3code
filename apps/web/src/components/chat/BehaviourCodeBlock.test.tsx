@@ -31,7 +31,8 @@ it("colours a beh fence and marks its waiting lines in both themes", () => {
     ]);
     expect(html).toContain(`color:${palette.wait}`);
     expect(html).toContain(`color:${palette.state}`);
-    expect(html).toContain(`background-color:${palette.waitBackground}`);
+    expect(html).toContain(`inset 3px 0 0 ${palette.waitStripe}`);
+    expect(html).toContain(`background-color:${palette.waitKeywordBackground}`);
     // The text survives as written, with a newline between lines and none after the last.
     expect(html.replace(/<[^>]+>/g, "")).toBe(
       CODE.trimEnd().replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),

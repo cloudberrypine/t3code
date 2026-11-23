@@ -100,7 +100,6 @@ export function useNativeReviewDiffBridge(input: {
   // Polyzonia's behaviour language (`.beh`, `.pzb`): its colours and wait rows over AngelScript's.
   const behaviour = useBehaviourReview({
     data: angelScript.data,
-    scheme,
     canHighlight,
     collapsedFileIds,
     loadScriptRevision,

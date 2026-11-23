@@ -65,10 +65,12 @@ describe("behaviour language rendering", () => {
         null,
         null,
       ]);
+      // A gutter stripe, and no tint over the line.
       const waiting = getComputedStyle(rows[1]!);
-      expect(waiting.backgroundImage).toContain("gradient");
       expect(waiting.boxShadow).toContain("inset");
-      expect(getComputedStyle(rows[0]!).backgroundImage).toBe("none");
+      expect(waiting.backgroundImage).toBe("none");
+      expect(waiting.backgroundColor).toBe(getComputedStyle(rows[0]!).backgroundColor);
+      expect(getComputedStyle(rows[0]!).boxShadow).toBe("none");
       expect(CSS.highlights.get("beh-wait")?.size).toBe(2);
       expect(CSS.highlights.get("beh-state")?.size).toBe(2);
       painter.dispose();

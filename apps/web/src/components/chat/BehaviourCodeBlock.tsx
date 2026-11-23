@@ -1,6 +1,6 @@
 // Polyzonia: chat code fences tagged `beh` or `pzb` (the prototype's behaviour language). The
 // syntax highlighter has no lexer for it, so the fence is coloured from the shared analyzer, and
-// a line that waits gets the same tint and gutter stripe as in file previews and diffs.
+// a line that waits gets the same gutter stripe as in file previews and diffs.
 import {
   behaviourColors,
   highlightBehaviour,
@@ -18,7 +18,6 @@ function lineStyle(
     return {
       display: "inline-block",
       minWidth: "100%",
-      backgroundColor: palette.waitBackground,
       boxShadow: `inset 3px 0 0 ${palette.waitStripe}`,
     };
   return undefined;
