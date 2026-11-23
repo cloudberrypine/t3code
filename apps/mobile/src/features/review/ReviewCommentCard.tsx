@@ -1,6 +1,7 @@
 import { useMessages } from "gt-react-native";
 import { memo, useMemo, useState } from "react";
 import { getFiletypeFromFileName } from "@pierre/diffs/utils/getFiletypeFromFileName";
+import { isBehaviourPath } from "@t3tools/shared/behaviour";
 import { ScrollView, StyleSheet, Text as NativeText, View, type ColorValue } from "react-native";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
@@ -68,7 +69,9 @@ export const ReviewCommentCard = memo(function ReviewCommentCard(props: {
   const language =
     props.comment.fenceLanguage && props.comment.fenceLanguage !== "diff"
       ? props.comment.fenceLanguage
-      : getFiletypeFromFileName(props.comment.filePath);
+      : isBehaviourPath(props.comment.filePath)
+        ? "beh"
+        : getFiletypeFromFileName(props.comment.filePath);
   const addedRows = useMemo(
     () => compactNativeRows.filter((row) => row.kind === "line" && row.change !== "delete"),
     [compactNativeRows],

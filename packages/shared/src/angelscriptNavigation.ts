@@ -1,4 +1,5 @@
 import { angelScriptStateTree, isAngelScriptPath, tokenizeAngelScript } from "./angelscript.ts";
+import { behaviourNavigationTargets, isBehaviourPath } from "./behaviour.ts";
 
 export interface AngelScriptSource {
   path: string;
@@ -880,6 +881,8 @@ export interface NavigationTarget {
  */
 export function navigationTargets(source: AngelScriptSource, partial = false): NavigationTarget[] {
   const { contents } = source;
+  // Polyzonia: the prototype's behaviour language has its own lexer (`#` comments).
+  if (isBehaviourPath(source.path)) return behaviourNavigationTargets(contents);
   const offsets = [0];
   for (let i = 0; i < contents.length; i++) if (contents[i] === "\n") offsets.push(i + 1);
   const lineAt = (offset: number) => {

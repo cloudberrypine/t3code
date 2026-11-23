@@ -3,12 +3,14 @@ import { useEffect, useRef, type ComponentProps } from "react";
 import type { File as FileInstance, PostRenderPhase } from "@pierre/diffs";
 import type { EnvironmentId, ScopedThreadRef, ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { isAngelScriptPath, usesAngelScript } from "@t3tools/shared/angelscript";
+import { isBehaviourPath } from "@t3tools/shared/behaviour";
 import { isCppPath } from "@t3tools/shared/cppNavigation";
 import { resolveCppCounterpart } from "@t3tools/client-runtime/cpp-navigation";
 import { useAngelScript } from "~/hooks/useAngelScript";
 import { useDefinitionNavigation } from "~/hooks/useDefinitionNavigation";
 import { createAngelScriptClickNavigation } from "~/lib/angelScriptNavigation";
 import { createAngelScriptPainter } from "~/lib/angelScriptRendering";
+import { createBehaviourPainter } from "~/lib/behaviourRendering";
 import { fileNavigationAction } from "~/lib/fileJumpHistory";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { projectEnvironment } from "~/state/projects";
@@ -63,6 +65,10 @@ export function useFileSourceNavigation({
   const painter = createAngelScriptPainter(api);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the painter's CSS highlight ranges when it is replaced or unmounts
   useEffect(() => () => painter.dispose(), [painter]);
+  const behaviour = relativePath !== null && isBehaviourPath(relativePath);
+  const behaviourPainter = createBehaviourPainter();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the behaviour painter's CSS highlight ranges when it is replaced or unmounts
+  useEffect(() => () => behaviourPainter.dispose(), [behaviourPainter]);
   const findDefinitionFiles = useAtomQueryRunner(projectEnvironment.searchEntries, {
     refresh: true,
     reportFailure: false,
@@ -78,9 +84,11 @@ export function useFileSourceNavigation({
   );
   const onFilePostRender: FilePostRender = (node, instance, phase) => {
     painter.paint(node, instance.file, phase);
+    behaviourPainter.paint(node, instance.file, phase);
     navigation.attach(
       node,
-      (angelScript || (relativePath !== null && isCppPath(relativePath))) && !isHostFile
+      (angelScript || behaviour || (relativePath !== null && isCppPath(relativePath))) &&
+        !isHostFile
         ? instance.file
         : undefined,
       phase,

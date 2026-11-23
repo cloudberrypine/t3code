@@ -31,4 +31,11 @@ describe("local highlight languages", () => {
     expect(resolveHighlightLanguage({ path: "assets/scripts/Monkey.as" })).toBe("cpp");
     expect(resolveHighlightLanguage({ language: "angelscript" })).toBe("cpp");
   });
+
+  it("tokenizes the behaviour language as plain text, never with the C++ lexer", () => {
+    for (const path of ["prototype/sloth.beh", "prototype/engine.pzb", "Sloth.BEH"])
+      expect(resolveHighlightLanguage({ path })).toBe("text");
+    for (const language of ["beh", "pzb", "behaviour"])
+      expect(resolveHighlightLanguage({ language })).toBe("text");
+  });
 });

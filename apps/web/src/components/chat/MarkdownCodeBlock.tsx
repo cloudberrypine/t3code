@@ -27,6 +27,8 @@ import {
 } from "./MarkdownCodeBlock.logic";
 import { reportMarkdownActionFailure } from "./markdownActionFailure";
 import { PierreEntryIcon } from "./PierreEntryIcon";
+import { isBehaviourLanguage } from "@t3tools/shared/behaviour";
+import { BehaviourCodeBlock } from "./BehaviourCodeBlock";
 
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
 const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
@@ -295,6 +297,9 @@ export function SuspenseShikiCodeBlock({
   const [hasStreamed, setHasStreamed] = useState(isStreaming);
   if (isStreaming && !hasStreamed) setHasStreamed(true);
   const language = extractFenceLanguage(className);
+  // Polyzonia: the prototype's behaviour language has no lexer in the highlighter.
+  if (isBehaviourLanguage(language))
+    return <BehaviourCodeBlock code={code} themeName={themeName} />;
   const cacheKey = createHighlightCacheKey(code, language, themeName);
   // Once lines are mounted individually, keep that renderer when streaming
   // finishes so switching to cached HTML cannot clear an existing selection.

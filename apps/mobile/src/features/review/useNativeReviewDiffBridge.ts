@@ -1,5 +1,6 @@
 import { useAngelScript, type AngelScriptWorkspace } from "../../lib/useAngelScript";
 import { prepareAngelScriptReview } from "./angelScriptReview";
+import { useBehaviourReview } from "./useBehaviourReview";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAngelScriptRevisionSemantics, isAngelScriptPath } from "@t3tools/shared/angelscript";
 import type { NativeSyntheticEvent } from "react-native";
@@ -47,9 +48,11 @@ export function useNativeReviewDiffBridge(input: {
       requested: new Set<string>(),
       values: new Map<string, ReturnType<typeof createAngelScriptRevisionSemantics>>(),
     }),
+    // oxlint-disable-next-line react/memo-dependencies -- a new revision reader or scripting API starts a fresh revision cache
     [loadScriptRevision, api],
   );
   const activeRevisions = useRef<typeof revisions | null>(revisions);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells in-flight revision reads which cache is current, so a replaced cache drops their results
   useEffect(() => {
     activeRevisions.current = revisions;
     return () => {
@@ -84,13 +87,25 @@ export function useNativeReviewDiffBridge(input: {
     },
     [api, loadScriptRevision, canHighlight, rawData, collapsedFileIds, revisions],
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the revisions of the rows already on screen when the loader changes
   useEffect(() => {
     if (visible.current) loadVisibleScripts(visible.current.start, visible.current.end);
   }, [loadVisibleScripts]);
-  const { data, semantics } = useMemo(
+  const angelScript = useMemo(
     () => prepareAngelScriptReview(rawData, api, scheme, revisions.values),
+    // oxlint-disable-next-line react/memo-dependencies -- revisionVersion recolours when a revision lands in the mutable cache
     [rawData, api, scheme, revisions, revisionVersion],
   );
+  const { semantics } = angelScript;
+  // Polyzonia's behaviour language (`.beh`, `.pzb`): its colours and wait rows over AngelScript's.
+  const behaviour = useBehaviourReview({
+    data: angelScript.data,
+    scheme,
+    canHighlight,
+    collapsedFileIds,
+    loadScriptRevision,
+  });
+  const { data } = behaviour;
   const [surfaceGeneration, setSurfaceGeneration] = useState(0);
   const hasMountedContentRef = useRef(false);
   const [collapsedCommentIds, setCollapsedCommentIds] = useState<ReadonlySet<string>>(
@@ -130,6 +145,7 @@ export function useNativeReviewDiffBridge(input: {
       rows: data.rows,
       collapsedFileIds: collapsedFileIdsSet,
       semantics,
+      behaviourSemantics: behaviour.semantics,
       scheme,
       resetKey: tokensResetKey,
       enabled: canHighlight,
@@ -156,6 +172,7 @@ export function useNativeReviewDiffBridge(input: {
       });
       visible.current = { start: payload.firstRowIndex, end: payload.lastRowIndex };
       loadVisibleScripts(payload.firstRowIndex, payload.lastRowIndex);
+      behaviour.updateVisibleRange(payload.firstRowIndex, payload.lastRowIndex);
     }
   };
 

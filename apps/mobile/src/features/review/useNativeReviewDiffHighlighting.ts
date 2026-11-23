@@ -1,5 +1,7 @@
 import type { HighlightScheme } from "../../lib/highlights";
 import { colorAngelScriptTokens, type AngelScriptSemanticToken } from "@t3tools/shared/angelscript";
+import type { BehaviourSemanticToken } from "@t3tools/shared/behaviour";
+import { colorBehaviourReviewRow } from "./behaviourReview";
 
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
@@ -27,12 +29,23 @@ export function useNativeReviewDiffHighlighting(input: {
   readonly rows: ReadonlyArray<NativeReviewDiffRow>;
   /** AngelScript semantic colours by row id, laid over the syntax tokens. */
   readonly semantics?: ReadonlyMap<string, readonly AngelScriptSemanticToken[]>;
+  /** Behaviour-language (`.beh`, `.pzb`) colours by row id, likewise. */
+  readonly behaviourSemantics?: ReadonlyMap<string, readonly BehaviourSemanticToken[]>;
   readonly scheme: HighlightScheme;
   readonly collapsedFileIds: ReadonlySet<string>;
   readonly resetKey: string;
   readonly enabled: boolean;
 }) {
-  const { collapsedFileIds, enabled, files, resetKey, rows, scheme, semantics } = input;
+  const {
+    behaviourSemantics,
+    collapsedFileIds,
+    enabled,
+    files,
+    resetKey,
+    rows,
+    scheme,
+    semantics,
+  } = input;
   const highlightedRowIdsRef = useRef<Set<string>>(new Set());
   const viewportScope = `${enabled}:${resetKey}:${rows.length}`;
   const [viewport, setViewport] = useState<{
@@ -77,7 +90,8 @@ export function useNativeReviewDiffHighlighting(input: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- forgets delivered rows so the viewport repaints with newly loaded semantics
   useEffect(() => {
     highlightedRowIdsRef.current = new Set();
-  }, [enabled, semantics]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- new semantics maps are the trigger: their rows repaint
+  }, [enabled, semantics, behaviourSemantics]);
 
   // Effect on purpose: abortable async highlighting tied to the visible range's lifetime.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- runs abortable native highlighting for the visible range and aborts it when the range or diff changes
@@ -114,14 +128,18 @@ export function useNativeReviewDiffHighlighting(input: {
         language: "diff",
         lineCount: result.rowCount,
         durationMs: result.durationMs,
-        tokensByRowId: semantics
-          ? Object.fromEntries(
-              Object.entries(result.tokensByRowId).map(([id, tokens]) => [
-                id,
-                colorAngelScriptTokens(tokens, semantics.get(id) ?? [], scheme),
-              ]),
-            )
-          : result.tokensByRowId,
+        tokensByRowId:
+          semantics || behaviourSemantics
+            ? Object.fromEntries(
+                Object.entries(result.tokensByRowId).map(([id, tokens]) => [
+                  id,
+                  colorBehaviourReviewRow(id, tokens, behaviourSemantics, scheme) ??
+                    (semantics
+                      ? colorAngelScriptTokens(tokens, semantics.get(id) ?? [], scheme)
+                      : tokens),
+                ]),
+              )
+            : result.tokensByRowId,
       });
       pendingPatchesRef.current.push({ resetKey, chunkIndex, json, rowIds });
       traceDiffHighlight("patch-queued", {
@@ -202,6 +220,7 @@ export function useNativeReviewDiffHighlighting(input: {
       abortController.abort();
     };
   }, [
+    behaviourSemantics,
     collapsedFileIds,
     enabled,
     files,

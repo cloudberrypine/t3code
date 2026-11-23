@@ -9,6 +9,7 @@ import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 
 import { FILE_LINK_REVEAL_UNSAFE_CSS } from "./fileSurfaceChrome";
+import { BEHAVIOUR_CSS } from "~/lib/behaviourRendering";
 import { SourceSelection } from "./sourceSelection";
 
 export default function ReadOnlySourcePreview(props: {
@@ -90,7 +91,7 @@ export default function ReadOnlySourcePreview(props: {
               theme: resolveDiffThemeName(resolvedTheme),
               preferredHighlighter: PREFERRED_HIGHLIGHTER,
               themeType: resolvedTheme,
-              unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${props.unsafeCSSExtra ?? ""}`,
+              unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${BEHAVIOUR_CSS}\n${props.unsafeCSSExtra ?? ""}`,
               onPostRender: drawSelection,
             }}
             className="min-h-full"

@@ -1,3 +1,5 @@
+import { isBehaviourLanguage } from "@t3tools/shared/behaviour";
+
 import { resolveHighlightLanguage } from "../lib/highlightLanguage";
 
 // Fences enriched-markdown colours itself: cpp/highlight/CodeBlockLanguages.cpp entries with a default grammar.
@@ -49,6 +51,8 @@ export function codeFenceRenderer(fence: string, mathRenderingEnabled: boolean):
   if (fence === "math" && mathRenderingEnabled) return { kind: "math" };
   const name = fence.toLowerCase();
   if (NATIVE_HIGHLIGHT_FENCES.has(name)) return { kind: "native" };
+  // Polyzonia's behaviour language: plain text under its own colours (useMarkdownCodeHighlight).
+  if (isBehaviourLanguage(name)) return { kind: "highlight", language: name };
   const language = resolveHighlightLanguage({ language: name });
   return language === "text" ? { kind: "native" } : { kind: "highlight", language };
 }

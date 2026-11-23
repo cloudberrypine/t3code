@@ -67,6 +67,8 @@ import {
   selectableSourceHtml,
 } from "./source-file-document";
 import { sourceHighlightAtom } from "./sourceHighlightingState";
+import { behaviourWaitBackground, useBehaviourSource } from "./behaviourSource";
+import { colorBehaviourLines } from "../../lib/behaviourHighlighting";
 
 interface SourceFileSurfaceProps {
   readonly workspace?: AngelScriptWorkspace;
@@ -238,15 +240,22 @@ function useSourceFileModel(props: SourceFileSurfaceProps) {
       .filter(([, tokens]) => tokens.some((token) => token.kind === "await"))
       .map(([line]) => line),
   );
-  const rowsJson = api
-    ? JSON.stringify(
-        buildNativeSourceRows(lines).map((row, index) =>
-          awaitLines.has(index + 1)
-            ? { ...row, awaitBackground: angelScriptColors[theme].background }
-            : row,
-        ),
-      )
-    : document.rowsJson;
+  // Polyzonia's behaviour language (`.beh`, `.pzb`) tokenizes as plain text under its own colours.
+  const behaviour = useBehaviourSource(props.path, normalizedContents);
+  /** A 1-based line's full-strength await or wait background. */
+  const lineBackground = (line: number) =>
+    awaitLines.has(line)
+      ? angelScriptColors[theme].background
+      : behaviourWaitBackground(behaviour, line, theme);
+  const rowsJson =
+    api || behaviour
+      ? JSON.stringify(
+          buildNativeSourceRows(lines).map((row, index) => {
+            const awaitBackground = lineBackground(index + 1);
+            return awaitBackground ? { ...row, awaitBackground } : row;
+          }),
+        )
+      : document.rowsJson;
   const targetIndex =
     props.initialLine !== null && props.initialLine !== undefined && props.initialLine > 0
       ? Math.min(Math.floor(props.initialLine) - 1, Math.max(0, lines.length - 1))
@@ -259,11 +268,13 @@ function useSourceFileModel(props: SourceFileSurfaceProps) {
   const highlightResult = useAtomValue(highlightAtom);
   const rawTokens = AsyncResult.isSuccess(highlightResult) ? highlightResult.value : null;
   const tokens =
-    rawTokens && semantics.size > 0
-      ? rawTokens.map((line, index) =>
-          colorAngelScriptTokens(line, semantics.get(index + 1) ?? [], theme),
-        )
-      : rawTokens;
+    rawTokens && behaviour
+      ? colorBehaviourLines(rawTokens, behaviour, theme)
+      : rawTokens && semantics.size > 0
+        ? rawTokens.map((line, index) =>
+            colorAngelScriptTokens(line, semantics.get(index + 1) ?? [], theme),
+          )
+        : rawTokens;
   const status: SourceHighlightStatus = AsyncResult.isFailure(highlightResult)
     ? "error"
     : AsyncResult.isSuccess(highlightResult)
@@ -272,7 +283,7 @@ function useSourceFileModel(props: SourceFileSurfaceProps) {
 
   return {
     api,
-    awaitLines,
+    lineBackground,
     normalizedContents,
     lines,
     rowsJson,
@@ -281,6 +292,10 @@ function useSourceFileModel(props: SourceFileSurfaceProps) {
     theme,
     tokens,
   };
+}
+
+function withHalfAlpha(color: string | undefined) {
+  return color ? `${color}80` : undefined;
 }
 
 function SourceHighlightStatusView(props: { readonly status: SourceHighlightStatus }) {
@@ -426,7 +441,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   const appTheme = useUniwindTheme();
   const foreground = appTheme["--color-foreground"];
   const { codeSurface, codeWordBreak } = useAppearanceCodeSurface();
-  const { api, normalizedContents, lines, status, targetIndex, tokens, awaitLines, theme } =
+  const { api, normalizedContents, lines, status, targetIndex, tokens, lineBackground } =
     useSourceFileModel(props);
   // Attachments (one selectable text) have no workspace to navigate or comment in.
   const codeNavigation = useSourceCodeNavigation({
@@ -484,7 +499,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
       onLongPress={onLongPressLine ? () => onLongPressLine(index + 1) : undefined}
       awaitBackground={
         // Half strength like desktop and the native canvas, which tint this row at 50% alpha.
-        awaitLines.has(index + 1) ? `${angelScriptColors[theme].background}80` : undefined
+        withHalfAlpha(lineBackground(index + 1))
       }
       symbols={symbolsByLine?.get(index)}
       symbolHighlight={highlight?.lineIndex === index ? highlight : null}

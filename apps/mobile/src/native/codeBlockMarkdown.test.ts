@@ -24,6 +24,9 @@ describe("codeFenceRenderer", () => {
     ["python", true, { kind: "native" }],
     ["", true, { kind: "native" }],
     ["text", true, { kind: "native" }],
+    ["beh", true, { kind: "highlight", language: "beh" }],
+    ["PZB", true, { kind: "highlight", language: "pzb" }],
+    ["behaviour", true, { kind: "highlight", language: "behaviour" }],
   ])("draws %j with math rendering %s as %j", (fence, mathRenderingEnabled, expected) => {
     expect(codeFenceRenderer(fence, mathRenderingEnabled)).toEqual(expected);
   });

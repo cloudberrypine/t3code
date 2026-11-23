@@ -5,6 +5,12 @@ import {
   usesAngelScript,
   type AngelScriptApi,
 } from "@t3tools/shared/angelscript";
+import {
+  analyzeBehaviour,
+  behaviourColors,
+  colorBehaviourTokens,
+  isBehaviourPath,
+} from "@t3tools/shared/behaviour";
 import { getFiletypeFromFileName } from "@pierre/diffs";
 import type { ProjectContentMatch } from "@t3tools/contracts";
 import { memo, Suspense, use, type CSSProperties } from "react";
@@ -161,18 +167,39 @@ function SyntaxHighlightedTokens(props: {
   readonly line: string;
   readonly language: string;
   readonly api?: AngelScriptApi | null;
+  readonly behaviour?: boolean;
   readonly ranges: ReadonlyArray<Range>;
   readonly theme: "light" | "dark";
 }) {
   const highlighter = use(getSyntaxHighlighterPromise(props.language));
   const tokens = firstLineTokens(highlighter, props.line, props.language, props.theme);
+  // Polyzonia: the behaviour language is plain text to the highlighter and coloured here; a
+  // line that waits keeps its tint and gutter stripe in the results too.
+  const behaviour = props.behaviour ? analyzeBehaviour(props.line) : null;
   const colored =
-    tokens && props.api
-      ? withOffsets(
-          colorAngelScriptTokens(tokens, analyzeAngelScript(props.line, props.api), props.theme),
-        )
-      : tokens;
+    tokens && behaviour
+      ? withOffsets(colorBehaviourTokens(tokens, behaviour.tokens, props.theme))
+      : tokens && props.api
+        ? withOffsets(
+            colorAngelScriptTokens(tokens, analyzeAngelScript(props.line, props.api), props.theme),
+          )
+        : tokens;
 
+  if (colored && behaviour?.lines.get(1) === "wait") {
+    const palette = behaviourColors[props.theme];
+    return (
+      <span
+        data-beh-line="wait"
+        style={{
+          backgroundColor: palette.waitBackground,
+          boxShadow: `inset 3px 0 0 ${palette.waitStripe}`,
+          paddingLeft: 6,
+        }}
+      >
+        <HighlightedTokens line={props.line} ranges={props.ranges} tokens={colored} />
+      </span>
+    );
+  }
   return colored ? (
     <HighlightedTokens line={props.line} ranges={props.ranges} tokens={colored} />
   ) : (
@@ -210,6 +237,7 @@ export const HighlightedSearchLine = memo(function HighlightedSearchLine(props: 
               : getFiletypeFromFileName(props.path)
           }
           api={isAngelScriptPath(props.path) ? (props.api ?? null) : null}
+          behaviour={isBehaviourPath(props.path)}
           ranges={ranges}
           theme={props.theme}
         />

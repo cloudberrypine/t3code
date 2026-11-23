@@ -4,8 +4,10 @@ import type {
 } from "@t3tools/shared/angelscriptNavigation";
 import { usesAngelScript, type AngelScriptApi } from "@t3tools/shared/angelscript";
 import { angelScriptCppSymbol, isCppPath } from "@t3tools/shared/cppNavigation";
+import { isBehaviourPath } from "@t3tools/shared/behaviour";
 
 import { resolveAngelScriptDefinitions } from "./angelscript.ts";
+import { resolveBehaviourNavigation } from "./behaviourNavigation.ts";
 import { resolveCppDefinitions } from "./cppNavigation.ts";
 
 export type { AngelScriptDefinition as Definition } from "@t3tools/shared/angelscriptNavigation";
@@ -22,7 +24,11 @@ export function supportsDefinitionNavigation(
   source: AngelScriptSource,
   api: AngelScriptApi | null,
 ) {
-  return isCppPath(source.path) || usesAngelScript(source.path, source.contents, api);
+  return (
+    isCppPath(source.path) ||
+    isBehaviourPath(source.path) ||
+    usesAngelScript(source.path, source.contents, api)
+  );
 }
 
 /**
@@ -40,6 +46,8 @@ export async function resolveDefinitions({
   offset: number;
   api: AngelScriptApi | null;
 }): Promise<AngelScriptDefinition[]> {
+  if (isBehaviourPath(source.path))
+    return resolveBehaviourNavigation({ source, offset, read: reader.read });
   const angelScript = usesAngelScript(source.path, source.contents, api);
   const apiSymbol = angelScript ? angelScriptCppSymbol(source, offset) : null;
   if (isCppPath(source.path) || apiSymbol) {

@@ -1,5 +1,8 @@
 import { useMemo } from "react";
 
+import { isBehaviourLanguage } from "@t3tools/shared/behaviour";
+
+import { highlightBehaviourCode } from "../../lib/behaviourHighlighting";
 import { resolveHighlightLanguage } from "../../lib/highlightLanguage";
 import { highlightCode, type HighlightedLines, type HighlightScheme } from "../../lib/highlights";
 
@@ -14,7 +17,9 @@ export function useMarkdownCodeHighlight(input: {
   return useMemo(
     () =>
       enabled && language
-        ? highlightCode(code, resolveHighlightLanguage({ language }), theme)
+        ? isBehaviourLanguage(language)
+          ? highlightBehaviourCode(code, theme)
+          : highlightCode(code, resolveHighlightLanguage({ language }), theme)
         : null,
     [code, enabled, language, theme],
   );

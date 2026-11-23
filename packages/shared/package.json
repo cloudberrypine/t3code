@@ -503,6 +503,10 @@
       "types": "./src/angelscriptNavigation.ts",
       "import": "./src/angelscriptNavigation.ts"
     },
+    "./behaviour": {
+      "types": "./src/behaviour.ts",
+      "import": "./src/behaviour.ts"
+    },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",
       "import": "./src/cliRelease.ts"

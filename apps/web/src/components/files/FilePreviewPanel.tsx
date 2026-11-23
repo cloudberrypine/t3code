@@ -6,6 +6,7 @@ import { namedClipboardTarget, useCopyToClipboard } from "~/hooks/useCopyToClipb
 import { Spinner } from "~/components/ui/spinner";
 import { parsePolyzoniaMesh } from "@t3tools/client-runtime/polyzonia-mesh";
 import { ANGELSCRIPT_CSS, angelScriptCacheKey } from "~/lib/angelScriptRendering";
+import { BEHAVIOUR_CSS } from "~/lib/behaviourRendering";
 import { ANGELSCRIPT_SYNTAX_LANGUAGE } from "~/lib/angelScriptSyntax";
 import { PolyzoniaMeshPreview } from "./PolyzoniaMeshPreview";
 import { createFileRevealHighlight } from "./fileRevealHighlight";
@@ -1135,9 +1136,10 @@ function EditableFileSurface({
               theme: resolveDiffThemeName(resolvedTheme),
               preferredHighlighter: PREFERRED_HIGHLIGHTER,
               themeType: resolvedTheme,
-              unsafeCSS: angelScript
-                ? `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${ANGELSCRIPT_CSS}`
-                : FILE_LINK_REVEAL_UNSAFE_CSS,
+              // Polyzonia: the behaviour language's colours apply to .beh and .pzb files only.
+              unsafeCSS: `${FILE_LINK_REVEAL_UNSAFE_CSS}\n${BEHAVIOUR_CSS}${
+                angelScript ? `\n${ANGELSCRIPT_CSS}` : ""
+              }`,
               onPostRender: handlePostRender,
             }}
             selectedLines={selectedRange}

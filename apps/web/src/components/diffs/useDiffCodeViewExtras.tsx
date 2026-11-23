@@ -1,4 +1,4 @@
-// Local fork: AngelScript colouring and definition navigation, back/forward through file jumps,
+// Local fork: AngelScript and behaviour-language colouring and definition navigation, back/forward through file jumps,
 // a jump back to a line in a diff, and the file the reader is in, layered on the shared viewer.
 // StyledDiffCodeView keeps upstream's shape and only wires these in.
 import { useAtomValue } from "@effect/atom-react";
@@ -12,6 +12,7 @@ import type {
 import type { CodeViewHandle } from "@pierre/diffs/react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { isAngelScriptPath, usesAngelScript } from "@t3tools/shared/angelscript";
+import { isBehaviourPath } from "@t3tools/shared/behaviour";
 import { isCppPath } from "@t3tools/shared/cppNavigation";
 import { useGT } from "gt-react";
 import {
@@ -33,6 +34,7 @@ import {
   createAngelScriptPainter,
   withAngelScriptLanguage,
 } from "~/lib/angelScriptRendering";
+import { BEHAVIOUR_CSS, createBehaviourPainter } from "~/lib/behaviourRendering";
 import { createDiffDefinitionNavigation } from "~/lib/diffDefinitionNavigation";
 import { diffJumpExpansion } from "~/lib/diffJumpReveal";
 import { getDiffLineStat, resolveFileDiffPath } from "~/lib/diffRendering";
@@ -101,6 +103,9 @@ export function useDiffCodeViewExtras<LAnnotation>({
   const painter = createAngelScriptPainter(api, loadDiffFiles);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the painter's highlight decorations when it is replaced or unmounted
   useEffect(() => () => painter.dispose(), [painter]);
+  const behaviourPainter = createBehaviourPainter(loadDiffFiles);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases the behaviour painter's highlight decorations when it is replaced or unmounted
+  useEffect(() => () => behaviourPainter.dispose(), [behaviourPainter]);
   const items = originalItems.map((item) => {
     if (item.type === "file" && usesAngelScript(item.file.name, item.file.contents, api))
       return {
@@ -208,11 +213,9 @@ export function useDiffCodeViewExtras<LAnnotation>({
   const onItemPostRender = useStableCallback(
     (node: HTMLElement, phase: PostRenderPhase, rendered: RenderedItem<LAnnotation>) => {
       updateActiveFile();
-      painter.paint(
-        node,
-        rendered.type === "diff" ? rendered.instance.fileDiff : rendered.file,
-        phase,
-      );
+      const renderedFile = rendered.type === "diff" ? rendered.instance.fileDiff : rendered.file;
+      painter.paint(node, renderedFile, phase);
+      behaviourPainter.paint(node, renderedFile, phase);
       if (rendered.type !== "diff") return;
       const diff = rendered.instance.fileDiff;
       navigation.attach(
@@ -220,7 +223,9 @@ export function useDiffCodeViewExtras<LAnnotation>({
         workspace &&
           navigationThread &&
           diff &&
-          (isCppPath(diff.name) || usesAngelScript(diff.name, diffSample(diff), api))
+          (isCppPath(diff.name) ||
+            isBehaviourPath(diff.name) ||
+            usesAngelScript(diff.name, diffSample(diff), api))
           ? diff
           : undefined,
         phase,
@@ -260,7 +265,7 @@ export function useDiffCodeViewExtras<LAnnotation>({
 
   return {
     items,
-    css: ANGELSCRIPT_CSS,
+    css: `${ANGELSCRIPT_CSS}\n${BEHAVIOUR_CSS}`,
     attachViewer,
     updateActiveFile,
     onItemPostRender,
