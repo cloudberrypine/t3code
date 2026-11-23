@@ -1,6 +1,7 @@
 import {
   behaviourIncludes,
   joinBehaviourPath,
+  rankBehaviourDefinitions,
   resolveBehaviourDefinitions,
 } from "@t3tools/shared/behaviour";
 import type {
@@ -11,9 +12,9 @@ import type {
 import type { ScriptingApiReader } from "./angelscript.ts";
 
 /**
- * Polyzonia: go to definition in the prototype's behaviour language (`.beh`, `.pzb`). The file
- * itself first; the files it includes (`include "../engine.pzb"`, and theirs) are read only when
- * the name is not defined in it, within a small request and size budget.
+ * Polyzonia: go to definition in the prototype's behaviour language (`.beh`, `.pzb`). The files
+ * it includes (`#include "../engine.beh"`, and theirs) are read unless the clicked unit defines
+ * the name itself, within a small request and size budget.
  */
 export async function resolveBehaviourNavigation({
   source,
@@ -25,8 +26,10 @@ export async function resolveBehaviourNavigation({
   read: ScriptingApiReader["read"];
 }): Promise<AngelScriptDefinition[]> {
   const files = [source];
-  const local = resolveBehaviourDefinitions(files, offset);
-  if (local.length) return local;
+  // Only the clicked unit's own name settles it here: a file-level binding in an included file
+  // outranks another unit's name in this one.
+  const local = rankBehaviourDefinitions(files, offset);
+  if (local.rank === 0) return local.definitions;
   const visited = new Set([source.path]);
   let pending = behaviourIncludes(source.contents).map((path) =>
     joinBehaviourPath(source.path, path),

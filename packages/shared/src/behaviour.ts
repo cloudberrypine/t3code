@@ -85,9 +85,9 @@ export interface BehaviourLexToken {
 const TOKEN = new RegExp(
   [
     /([ \t\r\f\v]+|\n)/.source, // 1 whitespace
-    /(\/\/[^\n]*)/.source, // 2 line comment
+    /(\/\/[^\r\n]*)/.source, // 2 line comment
     /(\/\*[\s\S]*?(?:\*\/|$))/.source, // 3 block comment, to the end of the source if unclosed
-    /("(?:[^"\\\n]|\\.)*"?)/.source, // 4 string, to the end of the line if unclosed
+    /("(?:[^"\\\r\n]|\\.)*"?)/.source, // 4 string, to the end of the line if unclosed
     /(#[ \t]*[A-Za-z_]\w*)/.source, // 5 directive: #include
     /(\d+(?:\.\d+)?(?:cm|s|t|%)?(?![A-Za-z_\d]))/.source, // 6 number with its unit
     /([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)/.source, // 7 name, qualified: Lib::name
@@ -372,32 +372,40 @@ export function analyzeBehaviour(source: string): BehaviourAnalysis {
     if (code[i]!.kind === "name") classifyName(code, i, statement, scope, set);
   });
 
-  // Waiting lines: every line of a statement that holds `await`, `wait(` or `wait_for(`, and the
-  // whole of an `await any { ... }` block.
+  // Waiting lines: the lines of the wait itself, from its keyword to the end of its call
+  // (`await Mating::contact(mate,\n    distance)` is two), and the whole of an `await any { }`.
+  // A wait never reaches past the statement it is in.
+  const ends = (token: BehaviourLexToken | undefined) =>
+    token === undefined || isOp(token, ";") || isOp(token, "{") || isOp(token, "}");
   for (let i = 0; i < code.length; i++) {
     if (kinds.get(code[i]!) !== "wait" || isWord(code[i - 1], "await")) continue;
-    let start = i;
-    while (start > 0 && !["{", "}", ";"].includes(code[start - 1]!.text)) start--;
     let end = i;
-    let depth = 0;
-    for (; end < code.length; end++) {
-      const text = code[end]!.kind === "op" ? code[end]!.text : "";
-      if (text === "(" || text === "[") depth++;
-      else if (text === ")" || text === "]") depth--;
-      else if (depth <= 0 && (text === ";" || text === "}")) break;
-      else if (depth <= 0 && text === "{") {
-        if (isWord(code[i + 1], "any")) {
-          let braces = 0;
-          for (; end < code.length; end++) {
-            if (isOp(code[end], "{")) braces++;
-            else if (isOp(code[end], "}") && --braces === 0) break;
-          }
+    if (isWord(code[i + 1], "any")) {
+      let open = i + 2;
+      while (open < code.length && !isOp(code[open], "{") && !isOp(code[open], ";")) open++;
+      if (isOp(code[open], "{")) {
+        let braces = 0;
+        for (end = open; end < code.length; end++) {
+          if (isOp(code[end], "{")) braces++;
+          else if (isOp(code[end], "}") && --braces === 0) break;
         }
-        break;
+      }
+    } else {
+      // The first bracket after the keyword opens the call that waits: `wait_for(d)`,
+      // `await HangStill(d)`, `await climb.done()`, `await event(Ping)`.
+      let open = i + 1;
+      while (!ends(code[open]) && !isOp(code[open], "(")) open++;
+      if (isOp(code[open], "(")) {
+        let depth = 0;
+        for (end = open; !ends(code[end]); end++) {
+          if (isOp(code[end], "(")) depth++;
+          else if (isOp(code[end], ")") && --depth === 0) break;
+        }
+        if (ends(code[end])) end--;
       }
     }
     const last = code[Math.min(end, code.length - 1)]!;
-    for (let line = code[start]!.line; line <= last.line; line++) lineKinds.set(line, "wait");
+    for (let line = code[i]!.line; line <= last.line; line++) lineKinds.set(line, "wait");
   }
 
   const result: BehaviourSemanticToken[] = [];
@@ -521,7 +529,10 @@ function classifyName(
     if (
       (text === "requires" && code.slice(statement, i).some((t) => isWord(t, "library"))) ||
       (text === "initial" && isWord(next, "state")) ||
-      (i === statement && text !== "requires" && text !== "initial" && next?.kind === "name")
+      (i === statement &&
+        text !== "requires" &&
+        text !== "initial" &&
+        (next?.kind === "name" || (isOp(next, "{") && (text === "failure" || text === "input"))))
     ) {
       set(token, "keyword");
       if (text === "event") set(next, "event");
@@ -824,7 +835,9 @@ export function behaviourNavigationTargets(source: string): BehaviourNavigationT
     "qualifier",
   ]);
   for (const token of analyzeBehaviour(source).tokens) {
-    if (followed.has(token.kind))
+    const text = source.slice(token.start, token.end);
+    // Builtin types and constants have no definition to go to.
+    if (followed.has(token.kind) && !BUILTIN_TYPES.has(text) && !CONSTANTS.has(text))
       targets.push({ line: token.line, start: token.start, end: token.end });
   }
   const tokens = tokenizeBehaviour(source);
@@ -891,13 +904,27 @@ export function resolveBehaviourDefinitions(
   files: ReadonlyArray<{ path: string; contents: string }>,
   offset: number,
 ): Array<{ path: string; line: number }> {
+  return rankBehaviourDefinitions(files, offset).definitions;
+}
+
+/**
+ * As `resolveBehaviourDefinitions`, with the rank of what was found: 0 is the clicked unit's own
+ * name (or the qualified one, or the include), so nothing an included file holds can beat it.
+ */
+export function rankBehaviourDefinitions(
+  files: ReadonlyArray<{ path: string; contents: string }>,
+  offset: number,
+): { definitions: Array<{ path: string; line: number }>; rank: number } {
+  const none = { definitions: [], rank: Number.POSITIVE_INFINITY };
   const source = files[0];
-  if (!source) return [];
+  if (!source) return none;
   const symbol = behaviourSymbolAt(source.contents, offset);
-  if (!symbol) return [];
+  if (!symbol) return none;
   if (symbol.include !== undefined) {
     const path = joinBehaviourPath(source.path, symbol.include);
-    return files.some((file) => file.path === path) ? [{ path, line: 1 }] : [];
+    return files.some((file) => file.path === path)
+      ? { definitions: [{ path, line: 1 }], rank: 0 }
+      : none;
   }
   const here = unitAt(source.contents, offset + 1);
   const qualified = symbol.qualifier ? `${symbol.qualifier}::${symbol.name}` : symbol.name;
@@ -907,7 +934,12 @@ export function resolveBehaviourDefinitions(
       let rank: number | null = null;
       if (symbol.unit) {
         if (site.kind === "unit" && site.name === symbol.name) rank = 0;
-      } else if (site.unit === "" && site.kind !== "unit" && site.name === qualified) {
+      } else if (
+        symbol.qualifier &&
+        site.unit === "" &&
+        site.kind !== "unit" &&
+        site.name === qualified
+      ) {
         // An engine binding declared by its qualified name (`effect MammalPregnancy::update();`).
         rank = 0;
       } else if (site.name === symbol.name) {
@@ -918,10 +950,10 @@ export function resolveBehaviourDefinitions(
       if (rank !== null) ranked.push({ path: file.path, line: site.line, rank });
     }
   }
-  if (!ranked.length) return [];
+  if (!ranked.length) return none;
   const best = Math.min(...ranked.map((entry) => entry.rank));
   const seen = new Set<string>();
-  return ranked
+  const definitions = ranked
     .filter((entry) => entry.rank === best)
     .flatMap(({ path, line }) => {
       const key = `${path}:${line}`;
@@ -929,6 +961,7 @@ export function resolveBehaviourDefinitions(
       seen.add(key);
       return [{ path, line }];
     });
+  return { definitions, rank: best };
 }
 
 /** `#include "../engine.beh"` relative to the including file, normalized. */

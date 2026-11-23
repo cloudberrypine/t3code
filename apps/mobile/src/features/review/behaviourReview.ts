@@ -41,8 +41,9 @@ export function prepareBehaviourReview(
     tokens: BehaviourSemanticToken[],
     lineKind: BehaviourLineKind | null,
   ) => {
-    // A context row is read on both sides; the new side's reading stands.
-    if (!semantics.has(row.id)) semantics.set(row.id, tokens);
+    // A context row is read on both sides; the new side's reading stands, colours and wait alike.
+    if (semantics.has(row.id)) return;
+    semantics.set(row.id, tokens);
     if (lineKind === "wait") waits.add(row.id);
   };
   for (const side of ["add", "delete"] as const) {
@@ -91,6 +92,31 @@ export function prepareBehaviourReview(
       ),
     },
   };
+}
+
+/**
+ * A comment excerpt's rows with the wait background on the rows that wait, each side read as one
+ * fragment. Rows of other files come back as they are.
+ */
+export function withBehaviourWaitRows(
+  rows: ReadonlyArray<NativeReviewDiffRow>,
+  path: string,
+  scheme: "light" | "dark",
+): ReadonlyArray<NativeReviewDiffRow> {
+  if (!isBehaviourPath(path)) return rows;
+  const waits = new Set<NativeReviewDiffRow>();
+  for (const side of ["add", "delete"] as const) {
+    const sideRows = rows.filter(
+      (row) => row.kind === "line" && (side === "delete") === (row.change === "delete"),
+    );
+    const { lines } = behaviourLineSemantics(sideRows.map((row) => row.content ?? "").join("\n"));
+    sideRows.forEach((row, index) => {
+      if (lines.get(index + 1) === "wait") waits.add(row);
+    });
+  }
+  if (!waits.size) return rows;
+  const awaitBackground = behaviourColors[scheme].waitBackground;
+  return rows.map((row) => (waits.has(row) ? { ...row, awaitBackground } : row));
 }
 
 /** A highlighted diff row's tokens with its behaviour colours, or null when it is not a behaviour row. */

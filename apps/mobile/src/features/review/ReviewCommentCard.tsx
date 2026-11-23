@@ -2,6 +2,7 @@ import { useMessages } from "gt-react-native";
 import { memo, useMemo, useState } from "react";
 import { getFiletypeFromFileName } from "@pierre/diffs/utils/getFiletypeFromFileName";
 import { isBehaviourPath } from "@t3tools/shared/behaviour";
+import { withBehaviourWaitRows } from "./behaviourReview";
 import { ScrollView, StyleSheet, Text as NativeText, View, type ColorValue } from "react-native";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
@@ -112,7 +113,13 @@ export const ReviewCommentCard = memo(function ReviewCommentCard(props: {
     () => createNativeReviewDiffTheme(appearanceScheme, themeId, appTheme),
     [appearanceScheme, appTheme, themeId],
   );
-  const nativeRowsJson = useMemo(() => JSON.stringify(compactNativeRows), [compactNativeRows]);
+  const nativeRowsJson = useMemo(
+    () =>
+      JSON.stringify(
+        withBehaviourWaitRows(compactNativeRows, props.comment.filePath, appearanceScheme),
+      ),
+    [compactNativeRows, props.comment.filePath, appearanceScheme],
+  );
   const nativeThemeJson = useMemo(
     () => JSON.stringify(nativeReviewDiffTheme),
     [nativeReviewDiffTheme],

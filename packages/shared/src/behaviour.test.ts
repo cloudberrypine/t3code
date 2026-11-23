@@ -371,6 +371,45 @@ describe("wait lines", () => {
     expect(text(12)).toEqual(["wait_for_current=control"]);
   });
 
+  it("marks only the wait's own lines, never the statement around it", () => {
+    const waits = (source: string) =>
+      [...analyzeBehaviour(source).lines.keys()].sort((a, b) => a - b);
+    // A brace-less body, an Allman brace, a control header, a case label, a bare else and a
+    // multi-line for header stay unmarked.
+    expect(waits("state A() {\n  if (await X())\n    foo();\n  bar();\n}")).toEqual([2]);
+    expect(waits("state A() {\n  if (await X())\n  {\n    foo();\n  }\n}")).toEqual([2]);
+    expect(waits("state A() {\n  if (cond)\n    await X();\n}")).toEqual([3]);
+    expect(waits("switch (k) {\n  case One:\n    wait_for(1s);\n}")).toEqual([3]);
+    expect(waits("if (a) foo();\nelse\n  await X();")).toEqual([3]);
+    expect(waits("for (int i = 0; i < 3;\n     i++)\n  wait(1t);")).toEqual([3]);
+    // An unclosed bracket (a file mid-edit) ends at its statement.
+    expect(waits("state A() {\n  wait_for(p.x;\n  foo();\n}\nstate B() {\n  baz();\n}")).toEqual([
+      2,
+    ]);
+  });
+
+  it("paints CRLF comments and strings within their row", () => {
+    const semantics = behaviourLineSemantics('x; // c\r\ny("a\r\n');
+    expect(semantics.tokens.get(1)).toEqual([{ start: 3, end: 7, line: 1, kind: "comment" }]);
+    expect(semantics.tokens.get(2)?.find((token) => token.kind === "string")).toMatchObject({
+      start: 2,
+      end: 4,
+    });
+  });
+
+  it("colours a name list's word as a keyword", () => {
+    const source = "behaviour X {\n  failure { A, B };\n  input { C };\n}";
+    expect(kindsOn(source, 2)).toEqual([
+      ["failure", "keyword"],
+      ["A", "constant"],
+      ["B", "constant"],
+    ]);
+    expect(kindsOn(source, 3)).toEqual([
+      ["input", "keyword"],
+      ["C", "constant"],
+    ]);
+  });
+
   it("reads a lone fragment (a diff hunk or a search result)", () => {
     expect(analyzeBehaviour("    await fall.done();").lines.get(1)).toBe("wait");
     expect(analyzeBehaviour("  } else if (await X()) {").lines.get(1)).toBe("wait");
@@ -506,6 +545,15 @@ describe("navigation", () => {
     expect(resolveBehaviourDefinitions(files, SLOTH.indexOf("JoiningMate") + 1)).toEqual([]);
   });
 
+  it("prefers the clicked unit's own function to a file-level binding of that name", () => {
+    const source =
+      "bindings { query int distance(pos a, pos b); }\nbehaviour X {\n  int distance(pos a, pos b) { return 1; }\n  state S() { distance(a, b); }\n}";
+    const files = [{ path: "x.beh", contents: source }];
+    expect(resolveBehaviourDefinitions(files, source.lastIndexOf("distance(a") + 1)).toEqual([
+      { path: "x.beh", line: 3 },
+    ]);
+  });
+
   it("follows includes and names the clickable ranges", () => {
     const engine =
       "bindings {\n  query int distance(pos a, pos b);\n  effect tick random_in(range r);\n}\n";
@@ -528,6 +576,9 @@ describe("navigation", () => {
     expect(targets).toContain("home_tree");
     expect(targets).toContain("../engine.beh");
     expect(targets).not.toContain("wait_for");
+    // Builtins have nothing to go to.
+    expect(targets).not.toContain("entity");
+    expect(targets).not.toContain("self");
   });
 });
 

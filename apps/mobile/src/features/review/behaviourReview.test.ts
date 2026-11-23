@@ -1,7 +1,11 @@
 import { behaviourColors, createBehaviourRevisionSemantics } from "@t3tools/shared/behaviour";
 import { describe, expect, it } from "vite-plus/test";
 
-import { colorBehaviourReviewRow, prepareBehaviourReview } from "./behaviourReview";
+import {
+  colorBehaviourReviewRow,
+  prepareBehaviourReview,
+  withBehaviourWaitRows,
+} from "./behaviourReview";
 import type { NativeReviewDiffData } from "./nativeReviewDiffAdapter";
 import type { NativeReviewDiffRow } from "../diffs/nativeReviewDiffSurface";
 
@@ -84,6 +88,46 @@ describe("prepareBehaviourReview", () => {
       expect(colorBehaviourReviewRow("missing", [], result.semantics, "dark")).toBeNull();
     },
   );
+
+  it("reads a context row's wait from the new side only", () => {
+    // The old file opens `await any {` above the row; the new file no longer does.
+    const data = diff("a.beh", [
+      {
+        kind: "line",
+        id: "gone",
+        fileId: "script",
+        content: "  await any {",
+        change: "delete",
+        oldLineNumber: 1,
+      },
+      {
+        kind: "line",
+        id: "row",
+        fileId: "script",
+        content: "    log(x);",
+        change: "context",
+        oldLineNumber: 2,
+        newLineNumber: 1,
+      },
+    ]);
+    const background = behaviourColors.dark.waitBackground;
+    expect(
+      prepareBehaviourReview(data, "dark").data.rows.map((row) => row.awaitBackground ?? null),
+    ).toEqual([background, null]);
+  });
+
+  it("marks a comment excerpt's waiting rows on each side", () => {
+    const rows: NativeReviewDiffRow[] = [
+      { kind: "line", id: "a", content: "  wait_for(1t);", change: "delete", oldLineNumber: 2 },
+      { kind: "line", id: "b", content: "  foo();", change: "add", newLineNumber: 2 },
+      { kind: "line", id: "c", content: "  await Rest();", change: "context", newLineNumber: 3 },
+    ];
+    const background = behaviourColors.light.waitBackground;
+    expect(
+      withBehaviourWaitRows(rows, "sloth.beh", "light").map((row) => row.awaitBackground ?? null),
+    ).toEqual([background, null, background]);
+    expect(withBehaviourWaitRows(rows, "Sloth.as", "light")).toBe(rows);
+  });
 
   it("leaves other files alone", () => {
     const data = diff("Sloth.as", contextRows(DUNG_IN_HOLLOW));
