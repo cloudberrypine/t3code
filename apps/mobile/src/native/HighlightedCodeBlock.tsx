@@ -6,7 +6,7 @@ import type { MarkdownStyle } from "react-native-enriched-markdown";
 import { Menu } from "../components/ui/Menu";
 import { useMarkdownCodeHighlight } from "../features/threads/markdownCodeHighlightState";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
-import type { HighlightedToken, HighlightScheme } from "../lib/highlights";
+import type { HighlightScheme } from "../lib/highlights";
 import { CodeBlockFrame, CodeBlockHeaderButton } from "./CodeBlockFrame";
 import { fencedCodeMarkdown } from "./codeBlockMarkdown";
 import type { NativeMarkdownTextStyle } from "./SelectableMarkdownText.types";
@@ -38,21 +38,6 @@ const CODE_MENU_ACTIONS = [
   },
   { id: "copy-markdown", title: msg("Copy as Markdown"), image: "doc.text" },
 ];
-
-/**
- * A token's colour; a behaviour fence's waiting line also carries its background, and there the
- * wait word is bold and comments italic, as on desktop.
- */
-function codeTokenStyle(token: HighlightedToken & { readonly background?: string }) {
-  if (!token.background) return token.color ? { color: token.color } : undefined;
-  const fontStyle = token.fontStyle ?? 0;
-  return {
-    ...(token.color ? { color: token.color } : {}),
-    backgroundColor: token.background,
-    ...(fontStyle & 2 ? { fontWeight: "700" as const } : {}),
-    ...(fontStyle & 1 ? { fontStyle: "italic" as const } : {}),
-  };
-}
 
 /** A fence in a language enriched-markdown cannot colour, drawn like its native block. */
 export function HighlightedCodeBlock(props: {
@@ -96,7 +81,7 @@ export function HighlightedCodeBlock(props: {
             const start = offset;
             offset += token.content.length;
             return (
-              <Text key={start} style={codeTokenStyle(token)}>
+              <Text key={start} style={token.color ? { color: token.color } : undefined}>
                 {token.content}
               </Text>
             );

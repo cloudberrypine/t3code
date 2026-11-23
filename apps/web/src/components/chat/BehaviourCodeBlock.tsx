@@ -66,13 +66,7 @@ export function BehaviourCodeBlock({
                       style={{
                         color: palette[token.kind],
                         ...(token.kind === "comment" ? { fontStyle: "italic" } : {}),
-                        ...(token.kind === "wait"
-                          ? {
-                              fontWeight: 700,
-                              backgroundColor: palette.waitKeywordBackground,
-                              borderRadius: 2,
-                            }
-                          : {}),
+                        ...(token.kind === "wait" ? { fontWeight: 700 } : {}),
                       }}
                     >
                       {token.content}

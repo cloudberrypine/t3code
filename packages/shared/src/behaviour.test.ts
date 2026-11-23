@@ -585,12 +585,6 @@ describe("line views and colours", () => {
       );
       expect((luminance(behaviourColors.dark[kind]) + 0.05) / 0.05, kind).toBeGreaterThan(4.5);
     }
-    // The wait word on its own background.
-    for (const theme of ["light", "dark"] as const) {
-      const { wait, waitKeywordBackground } = behaviourColors[theme];
-      const [hi, lo] = [luminance(wait), luminance(waitKeywordBackground)].sort((a, b) => b - a);
-      expect((hi! + 0.05) / (lo! + 0.05), theme).toBeGreaterThan(4.5);
-    }
   });
 });
 

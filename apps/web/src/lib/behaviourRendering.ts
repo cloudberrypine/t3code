@@ -1,6 +1,6 @@
 // Polyzonia: the prototype's behaviour language (`.beh`, `.pzb`) in file previews and diffs, as
 // plain text with every token painted over it by CSS custom highlights. A row that waits gets
-// `data-beh-line="wait"`: a gutter stripe, and the wait word sits on its own background.
+// `data-beh-line="wait"`: a gutter stripe beside the amber wait word.
 import type { FileContents, FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
 import {
   BEHAVIOUR_TOKEN_KINDS,
@@ -21,11 +21,6 @@ export const BEHAVIOUR_CSS = `
   box-shadow: inset 3px 0 0 ${pair("waitStripe")};
 }
 ${BEHAVIOUR_TOKEN_KINDS.map((kind) => `::highlight(beh-${kind}) { color: ${pair(kind)}; }`).join("\n")}
-::highlight(beh-wait) {
-  background-color: ${pair("waitKeywordBackground")};
-  text-decoration: underline 2px ${pair("waitStripe")};
-  text-underline-offset: 3px;
-}
 `;
 
 interface LineSemantics {

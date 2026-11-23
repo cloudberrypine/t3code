@@ -756,8 +756,6 @@ function stripCr(text: string) {
 export interface BehaviourPalette extends Record<BehaviourTokenKind, string> {
   /** A waiting line's gutter stripe. */
   waitStripe: string;
-  /** The wait keyword's own background. */
-  waitKeywordBackground: string;
 }
 
 export const behaviourColors: Record<"light" | "dark", BehaviourPalette> = {
@@ -777,7 +775,6 @@ export const behaviourColors: Record<"light" | "dark", BehaviourPalette> = {
     qualifier: "#4a6073",
     event: "#a23c19",
     waitStripe: "#d49b00",
-    waitKeywordBackground: "#ffdd75",
   },
   dark: {
     comment: "#8a8a8a",
@@ -795,7 +792,6 @@ export const behaviourColors: Record<"light" | "dark", BehaviourPalette> = {
     qualifier: "#93aec4",
     event: "#ff8a66",
     waitStripe: "#e5b53a",
-    waitKeywordBackground: "#6a5313",
   },
 };
 

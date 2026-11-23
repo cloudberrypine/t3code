@@ -29,10 +29,8 @@ it("colours a behaviour snippet over plain-text tokens, '//' starting a comment"
   expect(colorOf(2, "NoDung")).toBe(behaviourColors.light.constant);
 });
 
-it("gives a fence's wait word its own background and leaves the line untinted", () => {
+it("colours a fence's wait word without a background", () => {
   const lines = highlightBehaviourCode("state A() {\n  await after(2s);\n}", "dark");
-  const palette = behaviourColors.dark;
-  expect(lines.flat().filter((token) => token.background !== undefined)).toEqual([
-    expect.objectContaining({ content: "await", background: palette.waitKeywordBackground }),
-  ]);
+  const token = lines[1]!.find((entry) => entry.content === "await");
+  expect(token).toEqual({ content: "await", color: behaviourColors.dark.wait, fontStyle: 2 });
 });
