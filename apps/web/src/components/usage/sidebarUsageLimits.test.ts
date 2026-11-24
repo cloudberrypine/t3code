@@ -3,16 +3,13 @@ import {
   EnvironmentId,
   UsageLimitSourceId,
   ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
-import type { LimitAccount } from "@t3tools/shared/usageLimits";
-import {
-  sidebarLimitLabel,
-  sidebarWindowName,
-  providerLimitPresentations,
-  sidebarNoDataReason,
-  selectSidebarLimit,
-} from "./sidebarUsageLimits";
+import { collectLimitAccounts, type LimitAccount } from "@t3tools/shared/usageLimits";
+import { selectSidebarLimit } from "@t3tools/shared/sidebarUsageLimits";
+import { sidebarLimitLabel, sidebarWindowName, selectSidebarRings } from "./sidebarUsageLimits";
 
 const primary = EnvironmentId.make("primary");
 const other = EnvironmentId.make("other");
@@ -73,6 +70,96 @@ describe("sidebar limit selection", () => {
   });
 });
 
+const instance = (
+  instanceId: string,
+  driver: "codex" | "claudeAgent",
+  overrides: Partial<ServerProvider> & { email?: string } = {},
+): ServerProvider => {
+  const { email, ...rest } = overrides;
+  return {
+    instanceId: ProviderInstanceId.make(instanceId),
+    driver: ProviderDriverKind.make(driver),
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated", ...(email ? { email } : {}) },
+    checkedAt: "2026-10-29T10:00:00Z",
+    models: [],
+    slashCommands: [],
+    skills: [],
+    usageLimits: {
+      checkedAt: "2026-10-29T10:00:00Z",
+      windows: [
+        { ...window("seven_day", "weekly"), usedPercent: email === "two@example.com" ? 90 : 27 },
+      ],
+    },
+    ...rest,
+  };
+};
+const primaryWith = (...providers: ServerProvider[]) =>
+  new Map([[primary, { entry: { target: { label: "Primary" } }, serverConfig: { providers } }]]);
+const ringSummary = (rings: ReturnType<typeof selectSidebarRings>) =>
+  rings.map((ring) => [ring.title, ring.window?.usedPercent, ring.accentColor, ring.noDataReason]);
+
+describe("sidebar rings per provider instance", () => {
+  const codex = instance("codex", "codex", { email: "me@example.com" });
+  const claude = instance("claudeAgent", "claudeAgent", { email: "one@example.com" });
+  it("gives each account of the primary environment's instances a ring in settings order", () => {
+    // The server sorts by display name; the provider settings list the default instance first.
+    const second = instance("claude2", "claudeAgent", {
+      displayName: "Claude 2",
+      email: "two@example.com",
+      accentColor: "#22aa44",
+    });
+    expect(
+      ringSummary(
+        selectSidebarRings(primaryWith(codex, second, claude), primary, [second.instanceId]),
+      ),
+    ).toEqual([
+      ["Codex", 27, undefined, null],
+      ["Claude (one@example.com)", 27, undefined, null],
+      ["Claude 2 (two@example.com)", 90, "#22aa44", null],
+    ]);
+    const sameAccount = instance("claude2", "claudeAgent", { email: "One@example.com" });
+    expect(
+      ringSummary(selectSidebarRings(primaryWith(codex, claude, sameAccount), primary)),
+    ).toEqual([
+      ["Codex", 27, undefined, null],
+      ["Claude", 27, undefined, null],
+    ]);
+    const disabled = { ...second, enabled: false };
+    expect(selectSidebarRings(primaryWith(codex, claude, disabled), primary)).toHaveLength(2);
+    const signedOut = instance("claude2", "claudeAgent", {
+      displayName: "Claude 2",
+      auth: { status: "unauthenticated" },
+      usageLimits: undefined,
+    });
+    expect(ringSummary(selectSidebarRings(primaryWith(codex, claude, signedOut), primary))).toEqual(
+      [
+        ["Codex", 27, undefined, null],
+        ["Claude (one@example.com)", 27, undefined, null],
+        ["Claude 2", undefined, undefined, "not signed in"],
+      ],
+    );
+  });
+  it("keeps one ring per driver when each has one instance or the primary is not loaded", () => {
+    const presentations = primaryWith(codex, claude);
+    const rings = selectSidebarRings(presentations, primary);
+    expect(rings.map((ring) => [ring.driver, ring.title])).toEqual([
+      ["codex", "Codex"],
+      ["claudeAgent", "Claude"],
+    ]);
+    expect(rings[1]?.window).toBe(
+      selectSidebarLimit(collectLimitAccounts(presentations), "claudeAgent", primary),
+    );
+    expect(ringSummary(selectSidebarRings(new Map(), primary))).toEqual([
+      ["Codex", undefined, undefined, "not loaded yet"],
+      ["Claude", undefined, undefined, "not loaded yet"],
+    ]);
+  });
+});
+
 const now = Date.parse("2026-10-29T09:00:00Z");
 describe("sidebar limit accessible tooltip summary", () => {
   it("names only weekly allowance, usage, countdown, reset, plan and update", () => {
@@ -84,9 +171,15 @@ describe("sidebar limit accessible tooltip summary", () => {
       plan: "Max",
     };
     const label = sidebarLimitLabel(
-      [selected, account("claudeAgent", other, [])],
-      "claudeAgent",
-      primary,
+      {
+        key: "claudeAgent",
+        driver: "claudeAgent",
+        title: "Claude (one@example.com)",
+        account: selected,
+        window: weekly,
+        accentColor: undefined,
+        noDataReason: null,
+      },
       "24-hour",
       now,
     );
@@ -96,25 +189,38 @@ describe("sidebar limit accessible tooltip summary", () => {
     expect(label).toContain("Max; updated");
     expect(label).not.toContain("undefined");
   });
-  it("names fallback windows and does not expose a lone account email", () => {
+  it("names fallback windows and the reason a ring has no data", () => {
     const session = window("five_hour", "session");
-    const selected = { ...account("claudeAgent", primary, [session]), email: "one@example.com" };
     expect(sidebarWindowName(session)).toBe("5-hour session");
-    expect(sidebarLimitLabel([selected], "claudeAgent", primary, "24-hour", now)).toMatch(
-      /^Claude: no usage limit data yet/,
+    const [, ring] = selectSidebarRings(
+      primaryWith(
+        instance("codex", "codex"),
+        instance("claudeAgent", "claudeAgent", {
+          email: "one@example.com",
+          usageLimits: { checkedAt: "2026-10-29T10:00:00Z", windows: [session] },
+        }),
+      ),
+      primary,
     );
-    expect(sidebarLimitLabel([], "codex", primary, "24-hour", now, "not signed in")).toBe(
-      "Codex: no usage limit data yet (not signed in)",
+    expect(ring && sidebarLimitLabel(ring, "24-hour", now)).toBe(
+      "Claude: no usage limit data yet (not loaded yet)",
     );
   });
-  it("filters both native and hub accounts to the hovered provider", () => {
+  it("feeds an instance's ring from a hub report of the same account", () => {
     const presentations = new Map([
       [
         primary,
         {
           entry: { target: { label: "Primary" } },
           serverConfig: {
-            providers: [],
+            providers: [
+              instance("codex", "codex"),
+              instance("claudeAgent", "claudeAgent", { email: "one@example.com" }),
+              instance("claude2", "claudeAgent", {
+                email: "two@example.com",
+                usageLimits: undefined,
+              }),
+            ],
             usageLimitSources: [
               {
                 id: UsageLimitSourceId.make("hub"),
@@ -123,14 +229,12 @@ describe("sidebar limit accessible tooltip summary", () => {
                 label: "Hub",
                 accounts: [
                   {
-                    id: "one",
-                    driver: ProviderDriverKind.make("codex"),
-                    usageLimits: account("codex", primary, []).limits,
-                  },
-                  {
                     id: "two",
                     driver: ProviderDriverKind.make("claudeAgent"),
-                    usageLimits: account("claudeAgent", primary, []).limits,
+                    email: "two@example.com",
+                    usageLimits: account("claudeAgent", primary, [
+                      { ...window("seven_day", "weekly"), usedPercent: 64 },
+                    ]).limits,
                   },
                 ],
               },
@@ -139,13 +243,10 @@ describe("sidebar limit accessible tooltip summary", () => {
         },
       ],
     ]);
-    const filtered = providerLimitPresentations(presentations, "codex");
-    expect(
-      filtered
-        .get(primary)
-        ?.serverConfig?.usageLimitSources?.[0]?.accounts.map((entry) => entry.id),
-    ).toEqual(["one"]);
-    expect(presentations.get(primary)?.serverConfig.usageLimitSources[0]?.accounts).toHaveLength(2);
-    expect(sidebarNoDataReason(new Map(), "claudeAgent", primary)).toBe("not loaded yet");
+    expect(ringSummary(selectSidebarRings(presentations, primary))).toEqual([
+      ["Codex", 27, undefined, null],
+      ["Claude (one@example.com)", 27, undefined, null],
+      ["Claude (two@example.com)", 64, undefined, null],
+    ]);
   });
 });

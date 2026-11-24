@@ -1,41 +1,37 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
 import { useGT } from "gt-react";
 import { useState } from "react";
-import { UsageLimitsSection } from "./UsageLimits";
 import { useAtomValue } from "@effect/atom-react";
-import { collectLimitAccounts, remainingPercent } from "@t3tools/shared/usageLimits";
+import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
+import { remainingPercent } from "@t3tools/shared/usageLimits";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { environmentPresentations } from "../../state/presentation";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
-import { selectSidebarLimit, sidebarLimitLabel, sidebarNoDataReason } from "./sidebarUsageLimits";
-
-const NO_HIDDEN_PROVIDERS: ReadonlySet<UsageProviderKind> = new Set();
+import { CompactLimitAccount } from "./UsageLimitsPooled";
+import { selectSidebarRings, sidebarLimitLabel } from "./sidebarUsageLimits";
 
 export function SidebarUsageRings() {
   const gt = useGT();
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
+  const providerInstances = usePrimarySettings((settings) => settings.providerInstances);
   const [now, setNow] = useState(Date.now);
-  const accounts = collectLimitAccounts(presentations);
+  const rings = selectSidebarRings(
+    presentations,
+    primaryEnvironmentId,
+    Object.keys(providerInstances),
+  );
   return (
     <span className="flex shrink-0 gap-1 pb-0.5 group-data-[collapsible=icon]:flex-col">
-      {(["codex", "claudeAgent"] as const).map((driver) => {
-        const window = selectSidebarLimit(accounts, driver, primaryEnvironmentId);
+      {rings.map((ring) => {
+        const { driver, window, account } = ring;
         const remaining = window ? remainingPercent(window) : null;
-        const label = sidebarLimitLabel(
-          accounts,
-          driver,
-          primaryEnvironmentId,
-          timestampFormat,
-          now,
-          sidebarNoDataReason(presentations, driver, primaryEnvironmentId),
-        );
+        const accentColor = normalizeProviderAccentColor(ring.accentColor);
         return (
           <Tooltip
-            key={driver}
+            key={ring.key}
             onOpenChange={(open) => {
               if (open) setNow(Date.now());
             }}
@@ -45,7 +41,7 @@ export function SidebarUsageRings() {
               render={
                 <span
                   role="img"
-                  aria-label={label}
+                  aria-label={sidebarLimitLabel(ring, timestampFormat, now)}
                   tabIndex={0}
                   className="relative inline-flex size-7 items-center justify-center text-3xs font-medium text-foreground tabular-nums"
                 />
@@ -70,7 +66,7 @@ export function SidebarUsageRings() {
                   cy="14"
                   r="12"
                   pathLength="100"
-                  stroke="currentColor"
+                  stroke={accentColor ?? "currentColor"}
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeDasharray={`${remaining ?? 0} 100`}
@@ -85,20 +81,14 @@ export function SidebarUsageRings() {
                 {!window ? (
                   <>
                     <span className="font-medium">
-                      {gt("{provider} · no usage limit data yet", {
-                        provider: driver === "codex" ? "Codex" : "Claude",
-                      })}
+                      {gt("{provider} · no usage limit data yet", { provider: ring.title })}
                     </span>
-                    <span>{sidebarNoDataReason(presentations, driver, primaryEnvironmentId)}</span>
+                    <span>{ring.noDataReason}</span>
                   </>
-                ) : null}
-                <UsageLimitsSection
-                  selectedEnvironmentIds={null}
-                  hiddenProviders={NO_HIDDEN_PROVIDERS}
-                  now={now}
-                  driver={driver}
-                  compact
-                />
+                ) : (
+                  <span className="font-medium">{ring.title}</span>
+                )}
+                {account ? <CompactLimitAccount account={account} now={now} /> : null}
               </div>
             </TooltipPopup>
           </Tooltip>

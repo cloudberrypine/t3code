@@ -1,20 +1,11 @@
-import type { EnvironmentId, ServerProviderUsageWindow } from "@t3tools/contracts";
-import {
-  selectUsageLimitWindows,
-  remainingPercent,
-  type LimitAccount,
-  type LimitPresentations,
-} from "@t3tools/shared/usageLimits";
+import type { ServerProviderUsageWindow } from "@t3tools/contracts";
+import { selectUsageLimitWindows, remainingPercent } from "@t3tools/shared/usageLimits";
+import type { SidebarRing } from "@t3tools/shared/sidebarUsageLimits";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { formatLimitResetCountdown } from "./usageLimitFormatting";
 import { formatDayAwareTimestamp, formatUpcomingTimestamp } from "../../timestampFormat";
 
-export {
-  selectSidebarAccount,
-  selectSidebarLimit,
-  sidebarNoDataReason,
-} from "@t3tools/shared/sidebarUsageLimits";
-import { selectSidebarAccount, selectSidebarLimit } from "@t3tools/shared/sidebarUsageLimits";
+export { selectSidebarRings } from "@t3tools/shared/sidebarUsageLimits";
 
 export function sidebarWindowName(window: ServerProviderUsageWindow) {
   if (window.kind === "weekly" || window.kind === "monthly") return window.kind;
@@ -26,51 +17,13 @@ export function sidebarWindowName(window: ServerProviderUsageWindow) {
   return window.label;
 }
 
-/** Filter the existing widgets' input, including hub accounts, rather than only their headings. */
-export function providerLimitPresentations(
-  presentations: LimitPresentations,
-  driver: "codex" | "claudeAgent",
-): LimitPresentations {
-  return new Map(
-    [...presentations].map(([id, presentation]) => [
-      id,
-      {
-        ...presentation,
-        serverConfig: presentation.serverConfig
-          ? {
-              ...presentation.serverConfig,
-              providers: presentation.serverConfig.providers?.filter(
-                (provider) => provider.driver === driver,
-              ),
-              usageLimitSources: presentation.serverConfig.usageLimitSources?.flatMap((source) => {
-                const accounts = source.accounts.filter((account) => account.driver === driver);
-                return accounts.length ? [{ ...source, accounts }] : [];
-              }),
-            }
-          : null,
-      },
-    ]),
-  );
-}
-
 /** One sentence with the same facts the existing compact widgets display. */
 export function sidebarLimitLabel(
-  accounts: readonly LimitAccount[],
-  driver: "codex" | "claudeAgent",
-  primaryEnvironmentId: EnvironmentId | null,
+  { driver, title, account, window, noDataReason }: SidebarRing,
   timestampFormat: TimestampFormat,
   now: number,
-  noDataReason = "not loaded yet",
 ): string {
-  const account = selectSidebarAccount(accounts, driver, primaryEnvironmentId);
-  const window = selectSidebarLimit(accounts, driver, primaryEnvironmentId);
-  const provider = driver === "codex" ? "Codex" : "Claude";
-  const identity =
-    accounts.filter((candidate) => candidate.driver === driver).length > 1
-      ? (account?.email ?? account?.displayName)
-      : null;
-  const prefix = `${provider}${identity ? ` (${identity})` : ""}`;
-  if (!window) return `${prefix}: no usage limit data yet (${noDataReason})`;
+  if (!window) return `${title}: no usage limit data yet (${noDataReason ?? "not loaded yet"})`;
   const details = [
     window,
     ...((account
@@ -89,5 +42,5 @@ export function sidebarLimitLabel(
     details.push(
       `updated ${formatDayAwareTimestamp(account.limits.checkedAt, timestampFormat, now)}`,
     );
-  return `${prefix}: ${details.join("; ")}`;
+  return `${title}: ${details.join("; ")}`;
 }
