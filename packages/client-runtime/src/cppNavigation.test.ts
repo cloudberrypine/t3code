@@ -185,6 +185,45 @@ it("resolves struct references without counting forward declarations as variable
       line: 3,
     });
 });
+it("follows plain C enum members, which have no owner to search for", async () => {
+  const header = `typedef enum Species
+{
+  Species_None,
+  Species_Grass = 4,
+  Species_Capybara,     // Capybara.as
+  Species_Sloth /* slow */,
+  Species_COUNT
+} Species;`;
+  // The header comes in through an umbrella include, so only the search can find it.
+  const source = {
+    path: "src/app/app.c",
+    contents: `#include "sim/sim_inc.h"
+void run(void) {
+  int s = Species_None + Species_Grass + Species_Capybara + Species_Sloth + Species_COUNT;
+}`,
+  };
+  // Multi-line calls put Species_None at the start of many lines, listed ahead of the header.
+  const noise = Array.from({ length: 10 }, (_, i) => [
+    `src/use${i}.c`,
+    `void use${i}(void) {\n  spawn(w,\n        Species_None,\n        1);\n}`,
+  ]);
+  const reader = fixture({
+    ...Object.fromEntries(noise),
+    "src/sim/sim_inc.h": '#include "sim/ids.h"',
+    "src/sim/ids.h": header,
+  });
+  for (const [name, line] of [
+    ["Species_None", 3],
+    ["Species_Grass", 4],
+    ["Species_Capybara", 5],
+    ["Species_Sloth", 6],
+    ["Species_COUNT", 7],
+  ] as const) {
+    expect(
+      await resolveCppNavigation({ source, offset: source.contents.indexOf(name), ...reader }),
+    ).toEqual({ path: "src/sim/ids.h", line });
+  }
+});
 it("keeps anonymous-namespace helpers in the current file ahead of unrelated helpers", async () => {
   const source = {
     path: "src/Dive.cpp",

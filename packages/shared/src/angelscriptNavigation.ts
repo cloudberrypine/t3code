@@ -166,7 +166,7 @@ export function indexNavigationSource(source: AngelScriptSource, cpp = false) {
     scopes.push(scope);
     braces.set(i, scope);
   }
-  const named: Array<{ token: Token; scope: Scope; brace: number }> = [];
+  const named: Array<{ token?: Token; type: string; scope: Scope; brace: number }> = [];
   for (let i = 0; i < tokens.length; i++) {
     const keyword = tokens[i]!.text;
     // Both module declarations have namespace lookup rules. In a library,
@@ -191,6 +191,24 @@ export function indexNavigationSource(source: AngelScriptSource, cpp = false) {
           name: "",
         });
       }
+    }
+    // C's anonymous enums (`enum {`, `typedef enum : u8 {`) still declare their members.
+    if (cpp && kind === "enum" && ["{", ":"].includes(tokens[i + 1]?.text ?? "")) {
+      let brace = i + 1;
+      while (brace < tokens.length && !["{", ";", "}"].includes(tokens[brace]!.text)) brace++;
+      const scope = braces.get(brace);
+      if (!scope) continue;
+      scope.kind = "enum";
+      const alias = tokens[(pairs.get(brace) ?? tokens.length) + 1];
+      named.push({
+        type:
+          tokens[i - 1]?.text === "typedef" && alias && identifier.test(alias.text)
+            ? alias.text
+            : "int",
+        scope,
+        brace,
+      });
+      continue;
     }
     const name =
       tokens[
@@ -220,7 +238,7 @@ export function indexNavigationSource(source: AngelScriptSource, cpp = false) {
         n += 2;
       }
     }
-    named.push({ token: name, scope, brace });
+    named.push({ token: name, type: name.text, scope, brace });
   }
   const scopeAt = (offset: number) => {
     let found = root;
@@ -400,13 +418,14 @@ export function indexNavigationSource(source: AngelScriptSource, cpp = false) {
   for (const scope of scopes) {
     if (scope !== root) scope.parent = scopeAt(scope.start - 1);
   }
-  for (const { token, scope, brace } of named) {
-    declarations.push({
-      token,
-      type: token.text,
-      kind: scope.kind === "namespace" || scope.kind === "state" ? scope.kind : "type",
-      scope: scope.parent ?? root,
-    });
+  for (const { token, type, scope, brace } of named) {
+    if (token)
+      declarations.push({
+        token,
+        type,
+        kind: scope.kind === "namespace" || scope.kind === "state" ? scope.kind : "type",
+        scope: scope.parent ?? root,
+      });
     if (scope.kind === "enum") {
       for (let i = brace + 1; i < (pairs.get(brace) ?? tokens.length); i++) {
         if (["(", "[", "{"].includes(tokens[i]!.text)) {
@@ -415,7 +434,7 @@ export function indexNavigationSource(source: AngelScriptSource, cpp = false) {
         }
         const value = tokens[i]!;
         if (identifier.test(value.text) && ["{", ","].includes(tokens[i - 1]?.text ?? "")) {
-          declarations.push({ token: value, type: token.text, kind: "variable", scope });
+          declarations.push({ token: value, type, kind: "variable", scope });
         }
       }
     }

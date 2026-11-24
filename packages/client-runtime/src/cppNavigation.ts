@@ -13,6 +13,7 @@ import {
 import {
   cppBindingTargets,
   cppDefinitionQuery,
+  cppEnumeratorQuery,
   cppIncludes,
   cppImplementationQuery,
   cppSymbolAt,
@@ -21,6 +22,8 @@ import {
   isCppPath,
   type CppSymbol,
 } from "@t3tools/shared/cppNavigation";
+
+const isCppHeader = (path: string) => /\.(?:h|hh|hpp|hxx)$/i.test(path);
 
 interface CppNavigationReader {
   read: (path: string) => Promise<ProjectReadFileResult | null>;
@@ -215,6 +218,13 @@ export async function resolveCppDefinitions({
   if (!apiSymbol && !direct) {
     await load(await searchFiles(cppDefinitionQuery(symbol.name)));
     direct = findDirect();
+    if (!direct && !symbol.owner && !symbol.typeOnly && symbol.arity === undefined) {
+      // The name also starts lines of multi-line calls, often in more files than one load reads,
+      // and enums live in headers, so headers are read first.
+      const paths = await searchFiles(cppEnumeratorQuery(symbol.name));
+      await load(paths.sort((a, b) => Number(!isCppHeader(a)) - Number(!isCppHeader(b))));
+      direct = findDirect();
+    }
   }
   if (direct) return [direct];
   if (!apiSymbol) {

@@ -306,6 +306,17 @@ export function cppDefinitionQuery(name: string) {
   return `(?:\\b(?:class|struct|enum|define|using)\\s+(?:class\\s+)?${word}\\b|(?:^|[;{}])\\s*[\\w:<>,*& \\t]+\\b${word}\\s*(?:\\(|[;={\\[]))`;
 }
 
+/**
+ * A plain C enumerator: its name alone at the start of a line, before `,`, `=`, `}`, a comment or
+ * the line's end. It has no owner to search for first and ends at a comma rather than a declarator,
+ * so cppDefinitionQuery never finds it. Both server search engines match `^` and `$` per line, and
+ * fff's regex has no lookaround, so `==` is ruled out with a character class.
+ */
+export function cppEnumeratorQuery(name: string) {
+  const word = leaf(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `^\\s*${word}\\s*(?:[,}]|=(?:[^=]|$)|//|/\\*|$)`;
+}
+
 export function cppIncludes(source: AngelScriptSource) {
   return [...source.contents.matchAll(/^\s*#\s*include\s*["<]([^">]+)[">]/gm)].map((m) => m[1]!);
 }
