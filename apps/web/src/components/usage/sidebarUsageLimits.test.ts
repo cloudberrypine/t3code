@@ -8,7 +8,7 @@ import {
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
 import { collectLimitAccounts, type LimitAccount } from "@t3tools/shared/usageLimits";
-import { selectSidebarLimit } from "@t3tools/shared/sidebarUsageLimits";
+import { selectPooledSidebarRings, selectSidebarLimit } from "@t3tools/shared/sidebarUsageLimits";
 import { sidebarLimitLabel, sidebarWindowName, selectSidebarRings } from "./sidebarUsageLimits";
 
 const primary = EnvironmentId.make("primary");
@@ -180,6 +180,68 @@ describe("sidebar rings per provider instance", () => {
       ["Claude", 27, undefined, null],
     ]);
     expect(ringSummary(selectSidebarRings(new Map(), primary))).toEqual([
+      ["Codex", undefined, undefined, "not loaded yet"],
+      ["Claude", undefined, undefined, "not loaded yet"],
+    ]);
+  });
+});
+
+describe("pooled rings without a primary environment (the phone)", () => {
+  const codex = instance("codex", "codex", { email: "me@example.com" });
+  const claude = instance("claudeAgent", "claudeAgent", { email: "one@example.com" });
+  const second = instance("claude2", "claudeAgent", {
+    displayName: "Claude 2",
+    email: "two@example.com",
+    accentColor: "#22aa44",
+  });
+  const environment = (
+    label: string,
+    providers: ServerProvider[],
+    instanceOrder: readonly string[] = [],
+  ) => ({
+    entry: { target: { label } },
+    serverConfig: {
+      providers,
+      settings: { providerInstances: Object.fromEntries(instanceOrder.map((id) => [id, {}])) },
+    },
+  });
+  const pooled = (...environments: ReturnType<typeof environment>[]) =>
+    selectPooledSidebarRings(
+      new Map(environments.map((entry) => [EnvironmentId.make(entry.entry.target.label), entry])),
+    );
+  it("gives each account of every environment's instances a ring, codex first, in settings order", () => {
+    expect(ringSummary(pooled(environment("Mac", [second, claude, codex], ["claude2"])))).toEqual([
+      ["Codex", 27, undefined, null],
+      ["Claude (one@example.com)", 27, undefined, null],
+      ["Claude 2 (two@example.com)", 90, "#22aa44", null],
+    ]);
+    // The same account in another environment shares the first environment's ring.
+    const rings = pooled(
+      environment("Mac", [codex, claude]),
+      environment("Linux", [instance("claudeAgent", "claudeAgent", { email: "ONE@example.com" })]),
+    );
+    expect(rings.map((ring) => [ring.key, ring.title])).toEqual([
+      ["Mac:codex", "Codex"],
+      ["Mac:claudeAgent", "Claude"],
+    ]);
+    expect(pooled(environment("Mac", [codex, claude, { ...second, enabled: false }]))).toHaveLength(
+      2,
+    );
+    const signedOut = instance("claude2", "claudeAgent", {
+      displayName: "Claude 2",
+      auth: { status: "unauthenticated" },
+      usageLimits: undefined,
+    });
+    expect(
+      ringSummary(pooled(environment("Mac", [codex, claude]), environment("Linux", [signedOut]))),
+    ).toEqual([
+      ["Codex", 27, undefined, null],
+      ["Claude (one@example.com)", 27, undefined, null],
+      ["Claude 2", undefined, undefined, "not signed in"],
+    ]);
+  });
+  it("keeps one ring per driver before any environment's providers load", () => {
+    expect(ringSummary(selectPooledSidebarRings(new Map()))).toEqual([
       ["Codex", undefined, undefined, "not loaded yet"],
       ["Claude", undefined, undefined, "not loaded yet"],
     ]);

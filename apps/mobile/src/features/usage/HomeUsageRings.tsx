@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import { collectLimitAccounts, remainingPercent } from "@t3tools/shared/usageLimits";
-import { selectSidebarLimit, sidebarNoDataReason } from "@t3tools/shared/sidebarUsageLimits";
+import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
+import { remainingPercent } from "@t3tools/shared/usageLimits";
+import { selectPooledSidebarRings, type SidebarRing } from "@t3tools/shared/sidebarUsageLimits";
 import { formatLimitResetCountdown } from "@t3tools/shared/usageLimitFormatting";
 import { useState } from "react";
 import { Modal, Pressable, ScrollView, View } from "react-native";
@@ -13,39 +14,55 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { AccountLimits } from "./UsageLimitsSection";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
-/** Reads the same live config snapshots as the desktop sidebar, including hub accounts. */
+// Two rings keep their 40 pt slots. More get 30 pt (the 28 pt ring, strokes 4 pt apart), so four
+// take 120 pt and still fit beside the title on a 375 pt phone.
+const ringSlotWidth = (count: number) => (count > 2 ? 30 : 40);
+
+/** Reads the same live config snapshots as the desktop sidebar, including hub accounts. It has
+ * no primary environment, so its rings pool every connected environment's instances. */
 export function HomeUsageRings() {
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
-  const accounts = collectLimitAccounts(presentations);
-  const [selection, setSelection] = useState<{
-    driver: "codex" | "claudeAgent";
-    now: number;
-  } | null>(null);
+  const rings = selectPooledSidebarRings(presentations);
+  const [selection, setSelection] = useState<{ key: string; now: number } | null>(null);
   const { themeAppearance } = useAppearancePreferences();
   const insets = useSafeAreaInsets();
   const theme = useUniwindTheme();
+  // With one ring per driver the phone keeps its driver names; several are told apart by instance.
+  const ringLabel = (ring: SidebarRing) =>
+    rings.filter((other) => other.driver === ring.driver).length > 1
+      ? ring.title
+      : ring.driver === "codex"
+        ? "OpenAI"
+        : "Claude";
+  const selected = rings.find((ring) => ring.key === selection?.key);
   return (
     <View style={{ flexDirection: "row" }}>
-      {(["codex", "claudeAgent"] as const).map((driver) => {
-        const window = selectSidebarLimit(accounts, driver, null);
+      {rings.map((ring) => {
+        const { driver, window } = ring;
         const remaining = window ? remainingPercent(window) : null;
-        const label = driver === "codex" ? "OpenAI" : "Claude";
+        const label = ringLabel(ring);
         const color =
-          driver === "codex"
+          normalizeProviderAccentColor(ring.accentColor) ??
+          (driver === "codex"
             ? themeAppearance === "dark"
               ? "#e6e6e6"
               : "#3c3c43"
             : themeAppearance === "dark"
               ? "#d97757"
-              : "#b85e40";
+              : "#b85e40");
         return (
           <Pressable
-            key={driver}
+            key={ring.key}
             accessibilityRole="button"
             accessibilityLabel={`${label} usage, ${remaining === null ? "unavailable" : `${remaining}% left`}`}
             accessibilityHint="Shows usage limits and reset times"
-            onPress={() => setSelection({ driver, now: Date.now() })}
-            style={{ width: 40, height: 44, alignItems: "center", justifyContent: "center" }}
+            onPress={() => setSelection({ key: ring.key, now: Date.now() })}
+            style={{
+              width: ringSlotWidth(rings.length),
+              height: 44,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
             <View style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
               <Svg width={28} height={28} style={{ position: "absolute" }} viewBox="0 0 28 28">
@@ -81,7 +98,7 @@ export function HomeUsageRings() {
       })}
       <Modal
         transparent
-        visible={selection !== null}
+        visible={selected !== undefined}
         animationType="fade"
         onRequestClose={() => setSelection(null)}
       >
@@ -104,51 +121,49 @@ export function HomeUsageRings() {
             }}
           >
             <ScrollView>
-              {selection ? (
+              {selection && selected ? (
                 <>
                   <Text
                     className="px-4 pt-4 text-lg font-t3-bold"
                     style={{ color: theme["--color-foreground"] }}
                   >
-                    {selection.driver === "codex" ? "OpenAI" : "Claude"} usage limits
+                    {ringLabel(selected)} usage limits
                   </Text>
-                  {!selectSidebarLimit(accounts, selection.driver, null) ? (
+                  {!selected.window ? (
                     <Text className="p-4" style={{ color: theme["--color-foreground-muted"] }}>
-                      No usage limit data yet:{" "}
-                      {sidebarNoDataReason(presentations, selection.driver, null)}
+                      No usage limit data yet: {selected.noDataReason}
                     </Text>
                   ) : null}
-                  {accounts
-                    .filter((account) => account.driver === selection.driver)
-                    .map((account) => (
-                      <AccountLimits
-                        key={account.key}
-                        driver={account.driver}
-                        label={selection.driver === "codex" ? "OpenAI" : "Claude"}
-                        instanceLabel={account.email ?? account.displayName ?? ""}
-                        detail={account.plan}
-                        footer={
-                          <View className="gap-1">
-                            {account.limits.windows.map((window) =>
-                              window.resetsAt ? (
-                                <Text
-                                  key={window.id}
-                                  className="text-xs"
-                                  style={{ color: theme["--color-foreground-muted"] }}
-                                >
-                                  {window.label}: {formatLimitResetCountdown(window, selection.now)}{" "}
-                                  ({new Date(window.resetsAt).toLocaleString()})
-                                </Text>
-                              ) : null,
-                            )}
-                          </View>
-                        }
-                        limits={account.limits}
-                        now={selection.now}
-                        first
-                        dense
-                      />
-                    ))}
+                  {selected.account ? (
+                    <AccountLimits
+                      key={selected.account.key}
+                      driver={selected.account.driver}
+                      accentColor={selected.accentColor}
+                      label={selected.driver === "codex" ? "OpenAI" : "Claude"}
+                      instanceLabel={selected.account.email ?? selected.account.displayName ?? ""}
+                      detail={selected.account.plan}
+                      footer={
+                        <View className="gap-1">
+                          {selected.account.limits.windows.map((window) =>
+                            window.resetsAt ? (
+                              <Text
+                                key={window.id}
+                                className="text-xs"
+                                style={{ color: theme["--color-foreground-muted"] }}
+                              >
+                                {window.label}: {formatLimitResetCountdown(window, selection.now)} (
+                                {new Date(window.resetsAt).toLocaleString()})
+                              </Text>
+                            ) : null,
+                          )}
+                        </View>
+                      }
+                      limits={selected.account.limits}
+                      now={selection.now}
+                      first
+                      dense
+                    />
+                  ) : null}
                 </>
               ) : null}
             </ScrollView>

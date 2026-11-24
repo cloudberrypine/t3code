@@ -1,8 +1,9 @@
-import type {
-  EnvironmentId,
-  ProviderInstanceId,
-  ServerProvider,
-  ServerProviderUsageWindow,
+import {
+  defaultInstanceIdForDriver,
+  type EnvironmentId,
+  type ServerProvider,
+  type ServerProviderUsageWindow,
+  type UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 import {
   collectLimitAccounts,
@@ -60,7 +61,7 @@ function providerNoDataReason(provider: ServerProvider | undefined) {
   );
 }
 
-export function sidebarNoDataReason(
+function sidebarNoDataReason(
   presentations: LimitPresentations,
   driver: SidebarDriver,
   primaryEnvironmentId: EnvironmentId | null,
@@ -89,50 +90,63 @@ export interface SidebarRing {
   readonly noDataReason: string | null;
 }
 
-/** One ring per account of the primary environment's enabled Codex and Claude instances,
- * in the provider settings' order: drivers first, then each driver's default instance, then
- * `instanceOrder` (the settings' providerInstances keys). Until the primary environment's
- * providers load, or without one, each driver gets one ring from any environment. */
-export function selectSidebarRings(
+type InstanceEntry = ReturnType<typeof instanceLimitAccounts>[number] & { readonly key: string };
+
+/** The provider settings' order: each driver's default instance, then `instanceOrder` (the
+ * settings' providerInstances keys). The server sorts its providers by display name instead. */
+function inSettingsOrder(
+  instances: ReturnType<typeof instanceLimitAccounts>,
+  instanceOrder: readonly string[],
+) {
+  const rank = ({ provider }: (typeof instances)[number]) => {
+    const index = instanceOrder.indexOf(provider.instanceId);
+    return provider.instanceId === defaultInstanceIdForDriver(provider.driver)
+      ? -1
+      : index === -1
+        ? instanceOrder.length
+        : index;
+  };
+  return [...instances].sort((left, right) => rank(left) - rank(right));
+}
+
+/** Each driver gets one ring from any environment, preferring the primary's account. */
+function driverRings(
   presentations: LimitPresentations,
   primaryEnvironmentId: EnvironmentId | null,
-  instanceOrder: readonly string[] = [],
 ): readonly SidebarRing[] {
-  const loaded = primaryEnvironmentId
-    ? presentations.get(primaryEnvironmentId)?.serverConfig
-    : undefined;
-  if (!primaryEnvironmentId || !loaded) {
-    const accounts = collectLimitAccounts(presentations);
-    return SIDEBAR_DRIVERS.map((driver) => {
-      const account = selectSidebarAccount(accounts, driver, primaryEnvironmentId);
-      const window = weeklyWindow(driver, account);
-      return {
-        key: driver,
-        driver,
-        title: SIDEBAR_DRIVER_NAMES[driver],
-        account,
-        window,
-        accentColor: undefined,
-        noDataReason: window
-          ? null
-          : sidebarNoDataReason(presentations, driver, primaryEnvironmentId),
-      };
-    });
-  }
-  const instances = instanceLimitAccounts(presentations, primaryEnvironmentId);
-  return SIDEBAR_DRIVERS.flatMap((driver) => {
-    const rank = (instanceId: ProviderInstanceId) => {
-      const index = instanceOrder.indexOf(instanceId);
-      return instanceId === driver ? -1 : index === -1 ? instanceOrder.length : index;
+  const accounts = collectLimitAccounts(presentations);
+  return SIDEBAR_DRIVERS.map((driver) => {
+    const account = selectSidebarAccount(accounts, driver, primaryEnvironmentId);
+    const window = weeklyWindow(driver, account);
+    return {
+      key: driver,
+      driver,
+      title: SIDEBAR_DRIVER_NAMES[driver],
+      account,
+      window,
+      accentColor: undefined,
+      noDataReason: window
+        ? null
+        : sidebarNoDataReason(presentations, driver, primaryEnvironmentId),
     };
+  });
+}
+
+/** One ring per account of `instances` (already in ring order); the first instance on an
+ * account owns its ring. */
+function instanceRings(
+  presentations: LimitPresentations,
+  instances: readonly InstanceEntry[],
+  primaryEnvironmentId: EnvironmentId | null,
+): readonly SidebarRing[] {
+  return SIDEBAR_DRIVERS.flatMap((driver) => {
     const rings = instances
       .filter((entry) => entry.provider.driver === driver)
-      .sort((left, right) => rank(left.provider.instanceId) - rank(right.provider.instanceId))
       .filter(
         (entry, index, all) =>
           all.findIndex((other) => other.accountKey === entry.accountKey) === index,
       );
-    return rings.map(({ provider, account: own }): SidebarRing => {
+    return rings.map(({ key, provider, account: own }): SidebarRing => {
       // A lone instance keeps the footer's former fallback to another environment's account.
       const account =
         own ??
@@ -143,7 +157,7 @@ export function selectSidebarRings(
       const name = provider.displayName?.trim() || SIDEBAR_DRIVER_NAMES[driver];
       const email = rings.length > 1 ? account?.email : undefined;
       return {
-        key: provider.instanceId,
+        key,
         driver,
         title: email ? `${name} (${email})` : name,
         account,
@@ -155,4 +169,55 @@ export function selectSidebarRings(
       };
     });
   });
+}
+
+/** One ring per account of the primary environment's enabled Codex and Claude instances,
+ * in the provider settings' order. Until the primary environment's providers load, or without
+ * one, each driver gets one ring from any environment. */
+export function selectSidebarRings(
+  presentations: LimitPresentations,
+  primaryEnvironmentId: EnvironmentId | null,
+  instanceOrder: readonly string[] = [],
+): readonly SidebarRing[] {
+  const loaded = primaryEnvironmentId
+    ? presentations.get(primaryEnvironmentId)?.serverConfig
+    : undefined;
+  if (!primaryEnvironmentId || !loaded) return driverRings(presentations, primaryEnvironmentId);
+  const instances = inSettingsOrder(
+    instanceLimitAccounts(presentations, primaryEnvironmentId),
+    instanceOrder,
+  ).map((entry) => ({ ...entry, key: entry.provider.instanceId }));
+  return instanceRings(presentations, instances, primaryEnvironmentId);
+}
+
+type PooledRingPresentations = ReadonlyMap<
+  EnvironmentId,
+  {
+    readonly entry: { readonly target: { readonly label: string } };
+    readonly serverConfig: {
+      readonly providers: readonly ServerProvider[];
+      readonly usageLimitSources?: UsageLimitSourceSnapshots | undefined;
+      readonly settings?: { readonly providerInstances: Readonly<Record<string, unknown>> };
+    } | null;
+  }
+>;
+
+/** The rings of a client without a primary environment (the phone): one per account of the
+ * enabled Codex and Claude instances of every environment, each environment's instances in its
+ * own settings order, an account's ring owned by the first environment that has it. Until any
+ * environment's providers load, each driver gets one ring. */
+export function selectPooledSidebarRings(
+  presentations: PooledRingPresentations,
+): readonly SidebarRing[] {
+  if (![...presentations.values()].some(({ serverConfig }) => serverConfig))
+    return driverRings(presentations, null);
+  const instances = [...presentations].flatMap(([environmentId, { serverConfig }]) =>
+    serverConfig
+      ? inSettingsOrder(
+          instanceLimitAccounts(presentations, environmentId),
+          Object.keys(serverConfig.settings?.providerInstances ?? {}),
+        ).map((entry) => ({ ...entry, key: `${environmentId}:${entry.provider.instanceId}` }))
+      : [],
+  );
+  return instanceRings(presentations, instances, null);
 }
