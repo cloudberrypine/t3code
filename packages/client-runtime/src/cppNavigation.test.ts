@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vite-plus/test";
-import { resolveCppNavigation, resolveCppCounterpart } from "./cppNavigation.js";
+import {
+  resolveCppDefinitions,
+  resolveCppNavigation,
+  resolveCppCounterpart,
+} from "./cppNavigation.js";
 import { angelScriptCppSymbol } from "@t3tools/shared/cppNavigation";
 function fixture(files: Record<string, string>) {
   const read = vi.fn(async (relativePath: string) => {
@@ -207,10 +211,36 @@ void run(void) {
     `src/use${i}.c`,
     `void use${i}(void) {\n  spawn(w,\n        Species_None,\n        1);\n}`,
   ]);
+  // `return Status_Ok;` matches the definition query, so its uses fill the shared read budget
+  // (two definition loads and the includes of a file with eight of them) before the enumerator
+  // search runs.
+  const returns = Array.from({ length: 16 }, (_, i) => [
+    `src/ret${i}.c`,
+    `Status ret${i}(void) {\n  return Status_Ok;\n}`,
+  ]);
+  const includes = Array.from({ length: 8 }, (_, i) => [`src/app/inc${i}.h`, `int g${i};`]);
+  const main = {
+    path: "src/app/main.c",
+    contents: `${includes.map(([path]) => `#include "${path!.split("/").at(-1)}"`).join("\n")}
+#include "sim/sim_inc.h"
+int main(void) {
+  return Status_Ok;
+}`,
+  };
+  // A parameter named like the clicked name, on a file the enumerator search reads, is no
+  // definition of it.
+  const view = {
+    path: "src/app/view.c",
+    contents: "void show(View *view)\n{\n  emit(&view->m);\n  emit(m);\n}",
+  };
   const reader = fixture({
     ...Object.fromEntries(noise),
-    "src/sim/sim_inc.h": '#include "sim/ids.h"',
+    ...Object.fromEntries(returns),
+    ...Object.fromEntries(includes),
+    "src/sim/sim_inc.h": '#include "sim/ids.h"\n#include "sim/status.h"',
     "src/sim/ids.h": header,
+    "src/sim/status.h": "typedef enum Status\n{\n  Status_Ok,\n  Status_Fail,\n} Status;",
+    "src/app/draw.c": "internal void\ndraw(Mesh *m)\n{\n  emit(w,\n       m,\n       1);\n}",
   });
   for (const [name, line] of [
     ["Species_None", 3],
@@ -222,6 +252,22 @@ void run(void) {
     expect(
       await resolveCppNavigation({ source, offset: source.contents.indexOf(name), ...reader }),
     ).toEqual({ path: "src/sim/ids.h", line });
+  }
+  expect(
+    await resolveCppNavigation({
+      source: main,
+      offset: main.contents.indexOf("Status_Ok"),
+      ...reader,
+    }),
+  ).toEqual({ path: "src/sim/status.h", line: 3 });
+  for (const needle of [">m", "(m)"]) {
+    expect(
+      await resolveCppDefinitions({
+        source: view,
+        offset: view.contents.indexOf(needle) + needle.indexOf("m"),
+        ...reader,
+      }),
+    ).toEqual([]);
   }
 });
 it("keeps anonymous-namespace helpers in the current file ahead of unrelated helpers", async () => {

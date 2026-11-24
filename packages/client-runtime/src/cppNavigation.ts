@@ -19,6 +19,7 @@ import {
   cppSymbolAt,
   findCppDefinition,
   findCppDefinitions,
+  findCppEnumerators,
   isCppPath,
   type CppSymbol,
 } from "@t3tools/shared/cppNavigation";
@@ -93,6 +94,30 @@ export async function resolveCppDefinitions({
         }),
       );
     }
+  }
+  // A plain C enumerator has no owner to search for first. Its hits are read apart from `sources`,
+  // with reads of their own: earlier loads can spend the shared budget on uses of the name, and an
+  // unrelated hit (a multi-line call's argument) must not add candidates to the picker.
+  async function findEnumerators(name: string) {
+    // Multi-line calls also start lines with the name, often in more files than one load reads,
+    // and enums live in headers, so headers are read first.
+    const paths = (await searchFiles(cppEnumeratorQuery(name)))
+      .filter((path) => !seen.has(path))
+      .sort((a, b) => Number(!isCppHeader(a)) - Number(!isCppHeader(b)))
+      .slice(0, 8);
+    const files = await Promise.all(
+      paths.map(async (path) => {
+        seen.add(path);
+        const file = await read(path);
+        return file && !file.truncated && file.contents.length <= 2_000_000
+          ? { path, contents: file.contents }
+          : null;
+      }),
+    );
+    return findCppEnumerators(
+      files.filter((file): file is AngelScriptSource => !!file),
+      name,
+    );
   }
   async function searchFiles(query: string) {
     const result = await search(query);
@@ -218,12 +243,15 @@ export async function resolveCppDefinitions({
   if (!apiSymbol && !direct) {
     await load(await searchFiles(cppDefinitionQuery(symbol.name)));
     direct = findDirect();
-    if (!direct && !symbol.owner && !symbol.typeOnly && symbol.arity === undefined) {
-      // The name also starts lines of multi-line calls, often in more files than one load reads,
-      // and enums live in headers, so headers are read first.
-      const paths = await searchFiles(cppEnumeratorQuery(symbol.name));
-      await load(paths.sort((a, b) => Number(!isCppHeader(a)) - Number(!isCppHeader(b))));
-      direct = findDirect();
+    if (
+      !direct &&
+      !symbol.owner &&
+      !symbol.typeOnly &&
+      symbol.arity === undefined &&
+      !/(?:\.|->)\s*\w*$/.test(source.contents.slice(0, offset))
+    ) {
+      const enumerators = await findEnumerators(symbol.name);
+      if (enumerators.length) return enumerators;
     }
   }
   if (direct) return [direct];
