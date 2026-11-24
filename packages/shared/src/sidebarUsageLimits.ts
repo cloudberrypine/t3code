@@ -83,6 +83,7 @@ export interface SidebarRing {
   readonly title: string;
   readonly account: LimitAccount | undefined;
   readonly window: ServerProviderUsageWindow | undefined;
+  /** The instance's own accent colour; the ring uses the driver's colour without one. */
   readonly accentColor: string | undefined;
   /** Why there is no weekly window; null when there is one. */
   readonly noDataReason: string | null;
@@ -147,7 +148,9 @@ export function selectSidebarRings(
         title: email ? `${name} (${email})` : name,
         account,
         window,
-        accentColor: provider.accentColor ?? account?.accentColor,
+        // The instance's own colour only: a merged account carries the first accent of any
+        // instance on it, in any environment.
+        accentColor: provider.accentColor,
         noDataReason: window ? null : providerNoDataReason(provider),
       };
     });

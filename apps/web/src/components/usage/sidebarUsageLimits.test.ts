@@ -121,7 +121,11 @@ describe("sidebar rings per provider instance", () => {
       ["Claude (one@example.com)", 27, undefined, null],
       ["Claude 2 (two@example.com)", 90, "#22aa44", null],
     ]);
-    const sameAccount = instance("claude2", "claudeAgent", { email: "One@example.com" });
+    // The shared ring belongs to the first instance and takes its colour, not the other's.
+    const sameAccount = instance("claude2", "claudeAgent", {
+      email: "One@example.com",
+      accentColor: "#112233",
+    });
     expect(
       ringSummary(selectSidebarRings(primaryWith(codex, claude, sameAccount), primary)),
     ).toEqual([
@@ -153,6 +157,28 @@ describe("sidebar rings per provider instance", () => {
     expect(rings[1]?.window).toBe(
       selectSidebarLimit(collectLimitAccounts(presentations), "claudeAgent", primary),
     );
+    // An accent set on the same account in another environment leaves the driver colour.
+    const elsewhere = new Map([
+      ...presentations,
+      [
+        other,
+        {
+          entry: { target: { label: "Other" } },
+          serverConfig: {
+            providers: [
+              instance("claudeAgent", "claudeAgent", {
+                email: "one@example.com",
+                accentColor: "#abcdef",
+              }),
+            ],
+          },
+        },
+      ],
+    ]);
+    expect(ringSummary(selectSidebarRings(elsewhere, primary))).toEqual([
+      ["Codex", 27, undefined, null],
+      ["Claude", 27, undefined, null],
+    ]);
     expect(ringSummary(selectSidebarRings(new Map(), primary))).toEqual([
       ["Codex", undefined, undefined, "not loaded yet"],
       ["Claude", undefined, undefined, "not loaded yet"],
