@@ -279,7 +279,7 @@ const startLocalBackend = Effect.gen(function* () {
     });
   } else if (serverExposureState.mode === "network-accessible") {
     yield* logBootstrapWarning(
-      "bootstrap enabled network access before the machine had a network address",
+      "bootstrap enabled network access before the machine had a LAN address",
     );
   }
 
