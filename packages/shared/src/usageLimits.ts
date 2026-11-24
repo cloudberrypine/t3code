@@ -331,6 +331,29 @@ export interface LimitAccount {
 }
 
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
+  return [...mergeLimitAccounts(presentations).accounts.values()];
+}
+
+/** Each enabled native instance of one environment with its merged account, if it has data.
+ * Instances signed into the same account share an accountKey and that account. */
+export function instanceLimitAccounts(
+  presentations: LimitPresentations,
+  environmentId: EnvironmentId,
+): ReadonlyArray<{
+  readonly provider: ServerProvider;
+  readonly accountKey: string;
+  readonly account: LimitAccount | undefined;
+}> {
+  const { accounts, resolveKey } = mergeLimitAccounts(presentations);
+  return (presentations.get(environmentId)?.serverConfig?.providers ?? [])
+    .filter((provider) => provider.enabled)
+    .map((provider) => {
+      const accountKey = nativeRowKey(resolveKey, environmentId, provider);
+      return { provider, accountKey, account: accounts.get(accountKey) };
+    });
+}
+
+function mergeLimitAccounts(presentations: LimitPresentations) {
   const accounts = new Map<string, LimitAccount>();
   const creditSources = new Map<string, LimitAccount>();
   const hubRedeems = new Map<string, LimitAccount>();
@@ -477,10 +500,15 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       }
     }
   }
-  return [...accounts.values()].map((account) => ({
-    ...account,
-    limits: selectUsageLimitWindows(account.driver, account.limits),
-  }));
+  return {
+    accounts: new Map<string, LimitAccount>(
+      [...accounts].map(([key, account]) => [
+        key,
+        { ...account, limits: selectUsageLimitWindows(account.driver, account.limits) },
+      ]),
+    ),
+    resolveKey,
+  };
 }
 
 /** Hub accounts whose read failed and that no other report shows as a row, with their names. */

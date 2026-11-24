@@ -681,9 +681,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
 export function UsageLimitsPooled({
   presentations,
   now,
-  compact = false,
 }: {
-  readonly compact?: boolean;
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
 }) {
@@ -695,7 +693,6 @@ export function UsageLimitsPooled({
   const pools = collectLimitPools(accounts, now);
   const notices = collectLimitNotices(presentations, m);
   const externalLinks = collectExternalUsageLinks(presentations, m);
-  if (compact) return <CompactLimitAccounts accounts={accounts} notices={notices} now={now} />;
   return (
     <div className="flex flex-col gap-8">
       {pools.length === 0 && notices.length === 0 && externalLinks.length === 0 ? (
@@ -761,48 +758,26 @@ export function UsageLimitsPooled({
   );
 }
 
-/** Local: the sidebar ring hover, one provider's accounts without the pooled bars. */
-function CompactLimitAccounts({
-  accounts,
-  notices,
+/** Local: the sidebar ring hover, one account's windows without the pooled bars. */
+export function CompactLimitAccount({
+  account,
   now,
 }: {
-  readonly accounts: ReadonlyArray<LimitAccount>;
-  readonly notices: readonly string[];
+  readonly account: LimitAccount;
   readonly now: number;
 }) {
   const gt = useGT();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      {accounts.map((account) => (
-        <section
-          key={account.key}
-          className="flex min-w-0 flex-col gap-2 border-t border-border/60 pt-2"
-        >
-          {accounts.length > 1 ? (
-            <span className="text-xs">
-              {account.email ?? account.displayName ?? account.driver}
-            </span>
-          ) : null}
-          {account.plan ? (
-            <span className="text-xs text-muted-foreground">{account.plan}</span>
-          ) : null}
-          <LimitWindows
-            driver={account.driver}
-            windows={account.limits.windows}
-            now={now}
-            compact
-          />
-          <span className="text-xs text-muted-foreground">
-            {gt("Updated {date}", {
-              date: formatDayAwareTimestamp(account.limits.checkedAt, timestampFormat, now),
-            })}
-          </span>
-        </section>
-      ))}
-      <LimitNotices notices={notices} />
-    </div>
+    <section className="flex min-w-0 flex-col gap-2 border-t border-border/60 pt-2">
+      {account.plan ? <span className="text-xs text-muted-foreground">{account.plan}</span> : null}
+      <LimitWindows driver={account.driver} windows={account.limits.windows} now={now} compact />
+      <span className="text-xs text-muted-foreground">
+        {gt("Updated {date}", {
+          date: formatDayAwareTimestamp(account.limits.checkedAt, timestampFormat, now),
+        })}
+      </span>
+    </section>
   );
 }
 

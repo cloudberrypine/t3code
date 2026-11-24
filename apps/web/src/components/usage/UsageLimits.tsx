@@ -39,7 +39,6 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { providerLimitPresentations } from "./sidebarUsageLimits";
 import { UsageLimitsPooled } from "./UsageLimitsPooled";
 import { formatResetsIn, resetCreditChoices } from "@t3tools/shared/usageLimitsCopy";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
@@ -417,11 +416,7 @@ export function UsageLimitsSection({
   selectedEnvironmentIds,
   hiddenProviders,
   now,
-  driver,
-  compact = false,
 }: {
-  readonly driver?: "codex" | "claudeAgent";
-  readonly compact?: boolean;
   readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
   readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
   readonly now: number;
@@ -456,11 +451,5 @@ export function UsageLimitsSection({
       ];
     }),
   );
-  return (
-    <UsageLimitsPooled
-      presentations={driver ? providerLimitPresentations(selected, driver) : selected}
-      now={now}
-      compact={compact}
-    />
-  );
+  return <UsageLimitsPooled presentations={selected} now={now} />;
 }
