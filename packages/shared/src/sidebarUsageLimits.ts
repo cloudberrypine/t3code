@@ -133,12 +133,9 @@ function driverRings(
 }
 
 /** One ring per account of `instances` (already in ring order); the first instance on an
- * account owns its ring. */
-function instanceRings(
-  presentations: LimitPresentations,
-  instances: readonly InstanceEntry[],
-  primaryEnvironmentId: EnvironmentId | null,
-): readonly SidebarRing[] {
+ * account owns its ring. A ring shows only its own instance's account: an instance without one
+ * (signed out, or its limits not loaded) shows its own reason, never another account's quota. */
+function instanceRings(instances: readonly InstanceEntry[]): readonly SidebarRing[] {
   return SIDEBAR_DRIVERS.flatMap((driver) => {
     const rings = instances
       .filter((entry) => entry.provider.driver === driver)
@@ -146,13 +143,7 @@ function instanceRings(
         (entry, index, all) =>
           all.findIndex((other) => other.accountKey === entry.accountKey) === index,
       );
-    return rings.map(({ key, provider, account: own }): SidebarRing => {
-      // A lone instance keeps the footer's former fallback to another environment's account.
-      const account =
-        own ??
-        (rings.length === 1
-          ? selectSidebarAccount(collectLimitAccounts(presentations), driver, primaryEnvironmentId)
-          : undefined);
+    return rings.map(({ key, provider, account }): SidebarRing => {
       const window = weeklyWindow(driver, account);
       const name = provider.displayName?.trim() || SIDEBAR_DRIVER_NAMES[driver];
       const email = rings.length > 1 ? account?.email : undefined;
@@ -187,7 +178,7 @@ export function selectSidebarRings(
     instanceLimitAccounts(presentations, primaryEnvironmentId),
     instanceOrder,
   ).map((entry) => ({ ...entry, key: entry.provider.instanceId }));
-  return instanceRings(presentations, instances, primaryEnvironmentId);
+  return instanceRings(instances);
 }
 
 type PooledRingPresentations = ReadonlyMap<
@@ -219,5 +210,5 @@ export function selectPooledSidebarRings(
         ).map((entry) => ({ ...entry, key: `${environmentId}:${entry.provider.instanceId}` }))
       : [],
   );
-  return instanceRings(presentations, instances, null);
+  return instanceRings(instances);
 }

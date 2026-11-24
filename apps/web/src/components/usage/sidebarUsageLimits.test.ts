@@ -101,6 +101,29 @@ const primaryWith = (...providers: ServerProvider[]) =>
   new Map([[primary, { entry: { target: { label: "Primary" } }, serverConfig: { providers } }]]);
 const ringSummary = (rings: ReturnType<typeof selectSidebarRings>) =>
   rings.map((ring) => [ring.title, ring.window?.usedPercent, ring.accentColor, ring.noDataReason]);
+const signedOutCodex = instance("codex", "codex", {
+  auth: { status: "unauthenticated" },
+  usageLimits: undefined,
+});
+// A CLI Proxy on another machine that reports a Codex account no instance here signs into.
+const hubReporting = (email: string) => [
+  {
+    id: UsageLimitSourceId.make("proxy"),
+    kind: "cliproxy" as const,
+    checkedAt: "2026-10-29T09:00:00Z",
+    label: "Proxy",
+    accounts: [
+      {
+        id: `${email}.json`,
+        driver: ProviderDriverKind.make("codex"),
+        email,
+        usageLimits: account("codex", other, [
+          { ...window("seven_day", "weekly"), usedPercent: 30 },
+        ]).limits,
+      },
+    ],
+  },
+];
 
 describe("sidebar rings per provider instance", () => {
   const codex = instance("codex", "codex", { email: "me@example.com" });
@@ -184,6 +207,27 @@ describe("sidebar rings per provider instance", () => {
       ["Claude", undefined, undefined, "not loaded yet"],
     ]);
   });
+  it("never gives a lone instance without an account another environment's or a hub's", () => {
+    const presentations = new Map([
+      ...primaryWith(signedOutCodex, claude),
+      [
+        other,
+        {
+          entry: { target: { label: "Other" } },
+          serverConfig: {
+            providers: [instance("codex", "codex", { email: "other@example.com" })],
+            usageLimitSources: hubReporting("another@example.com"),
+          },
+        },
+      ],
+    ]);
+    const rings = selectSidebarRings(presentations, primary);
+    expect(ringSummary(rings)).toEqual([
+      ["Codex", undefined, undefined, "not signed in"],
+      ["Claude", 27, undefined, null],
+    ]);
+    expect(rings[0]?.account).toBeUndefined();
+  });
 });
 
 describe("pooled rings without a primary environment (the phone)", () => {
@@ -238,6 +282,26 @@ describe("pooled rings without a primary environment (the phone)", () => {
       ["Codex", 27, undefined, null],
       ["Claude (one@example.com)", 27, undefined, null],
       ["Claude 2", undefined, undefined, "not signed in"],
+    ]);
+  });
+  it("leaves a signed-out instance's ring empty when only a hub reports its driver", () => {
+    const rings = selectPooledSidebarRings(
+      new Map([
+        [EnvironmentId.make("Mac"), environment("Mac", [signedOutCodex])],
+        [
+          EnvironmentId.make("Linux"),
+          {
+            ...environment("Linux", []),
+            serverConfig: {
+              ...environment("Linux", []).serverConfig,
+              usageLimitSources: hubReporting("another@example.com"),
+            },
+          },
+        ],
+      ]),
+    );
+    expect(rings.map((ring) => [ring.key, ring.account, ring.window, ring.noDataReason])).toEqual([
+      ["Mac:codex", undefined, undefined, "not signed in"],
     ]);
   });
   it("keeps one ring per driver before any environment's providers load", () => {
