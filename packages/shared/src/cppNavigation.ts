@@ -306,6 +306,35 @@ export function cppDefinitionQuery(name: string) {
   return `(?:\\b(?:class|struct|enum|define|using)\\s+(?:class\\s+)?${word}\\b|(?:^|[;{}])\\s*[\\w:<>,*& \\t]+\\b${word}\\s*(?:\\(|[;={\\[]))`;
 }
 
+/**
+ * A plain C enumerator, which cppDefinitionQuery misses: the name alone at a line start, before
+ * `,`, `= value`, `}`, a comment or the line's end (`^` and `$` are per line in both server search
+ * engines). fff's regex has no lookaround, so a value excludes `=` and `;` to skip `m = m * m;`.
+ */
+export function cppEnumeratorQuery(name: string) {
+  const word = leaf(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `^\\s*${word}\\s*(?:[,}]|=[^=;]*(?://|/\\*|$)|//|/\\*|$)`;
+}
+
+/** Members of enums outside functions, the only definitions an enumerator search may supply. */
+export function findCppEnumerators(sources: readonly AngelScriptSource[], name: string) {
+  return uniqueDefinitions(
+    sources
+      .filter((s) => isCppPath(s.path) && s.contents.length <= 2_000_000)
+      .flatMap((source) =>
+        indexNavigationSource(source, true)
+          .declarations.filter(
+            (d) =>
+              d.token.text === name &&
+              d.kind === "variable" &&
+              d.scope.kind === "enum" &&
+              !["block", "function"].includes(d.scope.parent?.kind ?? ""),
+          )
+          .map((d) => ({ path: source.path, line: d.token.line })),
+      ),
+  );
+}
+
 export function cppIncludes(source: AngelScriptSource) {
   return [...source.contents.matchAll(/^\s*#\s*include\s*["<]([^">]+)[">]/gm)].map((m) => m[1]!);
 }

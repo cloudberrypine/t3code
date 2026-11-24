@@ -28,7 +28,7 @@ void run(Position* position) {
 }
 }`,
 };
-it("finds types, nested types, fields, scoped enums, and method bodies over prototypes", () => {
+it("finds types, nested types, fields, scoped and anonymous enums, and method bodies over prototypes", () => {
   const sources = [header, implementation];
   expect(findCppDefinition(sources, { name: "Position", typeOnly: true })).toEqual({
     path: header.path,
@@ -50,6 +50,16 @@ it("finds types, nested types, fields, scoped enums, and method bodies over prot
     path: header.path,
     line: 7,
   });
+  const flags = {
+    path: "src/flags.h",
+    contents:
+      "enum\n{\n  Flag_Swimming = (1 << 1), // x\n};\ntypedef enum : u8 { Mood_Calm } Mood;",
+  };
+  expect(findCppDefinition([flags], { name: "Flag_Swimming" })).toEqual({
+    path: flags.path,
+    line: 3,
+  });
+  expect(findCppDefinition([flags], { name: "Mood_Calm" })).toEqual({ path: flags.path, line: 5 });
 });
 it("infers pointer receiver types and resolves scoped locals", () => {
   const offset = implementation.contents.indexOf("move(3)");
