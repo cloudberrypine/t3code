@@ -55,11 +55,13 @@ export function reuseUnchanged<T>(previous: unknown, next: T): T {
   const before = previous as Record<string, unknown>;
   const after = next as Record<string, unknown>;
   const keys = Object.keys(after);
-  let same = keys.length === Object.keys(before).length;
+  // Key order is data too: providerInstances' order is the user's instance order.
+  const beforeKeys = Object.keys(before);
+  let same = keys.length === beforeKeys.length;
   const merged: Record<string, unknown> = {};
-  for (const key of keys) {
+  for (const [index, key] of keys.entries()) {
     const reused = reuseUnchanged(before[key], after[key]);
-    if (reused !== before[key] || !(key in before)) same = false;
+    if (reused !== before[key] || beforeKeys[index] !== key) same = false;
     merged[key] = reused;
   }
   return (same ? previous : merged) as T;

@@ -63,6 +63,28 @@ describe("applyServerConfigProjection settingsUpdated", () => {
     expect(nextSettings.providerInstances.claude.config.launchArgs).toBe("--verbose");
   });
 
+  it("takes an update that only reorders provider instances, keeping each instance", () => {
+    const team = { driver: "claudeAgent", displayName: "Team" };
+    const mac = { driver: "claudeAgent", displayName: "Mac" };
+    const current = Option.some({
+      config: { settings: { providerInstances: { team, mac } } } as unknown as ServerConfig,
+      latestEvent: {} as ServerConfigStreamEvent,
+      source: "live" as const,
+    });
+    const next = applyServerConfigProjection(current, {
+      type: "settingsUpdated",
+      payload: { settings: { providerInstances: { mac: { ...mac }, team: { ...team } } } },
+    } as unknown as ServerConfigStreamEvent);
+    const instances = Option.getOrThrow(next).config.settings.providerInstances as unknown as {
+      readonly team: typeof team;
+      readonly mac: typeof mac;
+    };
+    // Clients read the settings' key order as the user's instance order.
+    expect(Object.keys(instances)).toEqual(["mac", "team"]);
+    expect(instances.team).toBe(team);
+    expect(instances.mac).toBe(mac);
+  });
+
   it("keeps the settings object when an update repeats the current settings", () => {
     const wire = encodeSettings(DEFAULT_SERVER_SETTINGS);
     const decode = () => decodeSettings(structuredClone(wire));
