@@ -185,6 +185,7 @@ type PooledRingPresentations = ReadonlyMap<
   EnvironmentId,
   {
     readonly entry: { readonly target: { readonly label: string } };
+    readonly connection: { readonly phase: string };
     readonly serverConfig: {
       readonly providers: readonly ServerProvider[];
       readonly usageLimitSources?: UsageLimitSourceSnapshots | undefined;
@@ -193,19 +194,22 @@ type PooledRingPresentations = ReadonlyMap<
   }
 >;
 
-/** The rings of a client without a primary environment (the phone): one per account of the
- * enabled Codex and Claude instances of every environment, each environment's instances in its
- * own settings order, an account's ring owned by the first environment that has it. Until any
- * environment's providers load, each driver gets one ring. */
+/** The phone's rings: one per account of every connected environment's enabled Codex and Claude
+ * instances, each environment in its own settings order, a shared account's ring owned by the
+ * first environment with it. One not connected keeps stale limits, so it is left out. Before any
+ * connected environment's providers load, each driver gets one ring. */
 export function selectPooledSidebarRings(
   presentations: PooledRingPresentations,
 ): readonly SidebarRing[] {
-  if (![...presentations.values()].some(({ serverConfig }) => serverConfig))
-    return driverRings(presentations, null);
-  const instances = [...presentations].flatMap(([environmentId, { serverConfig }]) =>
+  const connected = new Map(
+    [...presentations].filter(([, { connection }]) => connection.phase === "connected"),
+  );
+  if (![...connected.values()].some(({ serverConfig }) => serverConfig))
+    return driverRings(connected, null);
+  const instances = [...connected].flatMap(([environmentId, { serverConfig }]) =>
     serverConfig
       ? inSettingsOrder(
-          instanceLimitAccounts(presentations, environmentId),
+          instanceLimitAccounts(connected, environmentId),
           Object.keys(serverConfig.settings?.providerInstances ?? {}),
         ).map((entry) => ({ ...entry, key: `${environmentId}:${entry.provider.instanceId}` }))
       : [],

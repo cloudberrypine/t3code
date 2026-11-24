@@ -7,7 +7,11 @@ import {
   type ServerProvider,
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
-import { collectLimitAccounts, type LimitAccount } from "@t3tools/shared/usageLimits";
+import {
+  collectLimitAccounts,
+  type LimitAccount,
+  type LimitPresentations,
+} from "@t3tools/shared/usageLimits";
 import { selectPooledSidebarRings, selectSidebarLimit } from "@t3tools/shared/sidebarUsageLimits";
 import { sidebarLimitLabel, sidebarWindowName, selectSidebarRings } from "./sidebarUsageLimits";
 
@@ -209,7 +213,7 @@ describe("sidebar rings per provider instance", () => {
   });
   it("never gives a lone instance without an account another environment's or a hub's", () => {
     const presentations = new Map([
-      ...primaryWith(signedOutCodex, claude),
+      ...(primaryWith(signedOutCodex, claude) as LimitPresentations),
       [
         other,
         {
@@ -242,10 +246,14 @@ describe("pooled rings without a primary environment (the phone)", () => {
     label: string,
     providers: ServerProvider[],
     instanceOrder: readonly string[] = [],
+    phase = "connected",
+    usageLimitSources: ReturnType<typeof hubReporting> = [],
   ) => ({
     entry: { target: { label } },
+    connection: { phase },
     serverConfig: {
       providers,
+      usageLimitSources,
       settings: { providerInstances: Object.fromEntries(instanceOrder.map((id) => [id, {}])) },
     },
   });
@@ -285,24 +293,29 @@ describe("pooled rings without a primary environment (the phone)", () => {
     ]);
   });
   it("leaves a signed-out instance's ring empty when only a hub reports its driver", () => {
-    const rings = selectPooledSidebarRings(
-      new Map([
-        [EnvironmentId.make("Mac"), environment("Mac", [signedOutCodex])],
-        [
-          EnvironmentId.make("Linux"),
-          {
-            ...environment("Linux", []),
-            serverConfig: {
-              ...environment("Linux", []).serverConfig,
-              usageLimitSources: hubReporting("another@example.com"),
-            },
-          },
-        ],
-      ]),
+    const rings = pooled(
+      environment("Mac", [signedOutCodex]),
+      environment("Linux", [], [], "connected", hubReporting("another@example.com")),
     );
     expect(rings.map((ring) => [ring.key, ring.account, ring.window, ring.noDataReason])).toEqual([
       ["Mac:codex", undefined, undefined, "not signed in"],
     ]);
+  });
+  it("leaves out an environment that is not connected, cached limits and all", () => {
+    const bob = instance("codex", "codex", { email: "bob@example.com" });
+    for (const phase of ["reconnecting", "offline", "connecting", "error"]) {
+      expect(
+        pooled(environment("Mac", [codex], [], phase), environment("Linux", [bob])).map((ring) => [
+          ring.key,
+          ring.account?.email,
+        ]),
+      ).toEqual([["Linux:codex", "bob@example.com"]]);
+      // With no environment connected the phone keeps its two empty driver rings.
+      expect(ringSummary(pooled(environment("Mac", [codex, claude], [], phase)))).toEqual([
+        ["Codex", undefined, undefined, "not loaded yet"],
+        ["Claude", undefined, undefined, "not loaded yet"],
+      ]);
+    }
   });
   it("keeps one ring per driver before any environment's providers load", () => {
     expect(ringSummary(selectPooledSidebarRings(new Map()))).toEqual([

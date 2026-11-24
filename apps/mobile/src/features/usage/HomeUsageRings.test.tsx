@@ -91,7 +91,11 @@ const environment = (...providers: ServerProvider[]) =>
   new Map([
     [
       EnvironmentId.make("mac"),
-      { entry: { target: { label: "Mac" } }, serverConfig: { providers } },
+      {
+        entry: { target: { label: "Mac" } },
+        connection: { phase: "connected" },
+        serverConfig: { providers },
+      },
     ],
   ]);
 const weekly = (usedPercent: number) => [{ id: "seven_day", kind: "weekly" as const, usedPercent }];
