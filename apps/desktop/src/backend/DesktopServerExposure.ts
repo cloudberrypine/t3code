@@ -375,29 +375,24 @@ function resolveRuntimeState(input: {
   readonly advertisedHostOverride: Option.Option<string>;
 }): ResolvedRuntimeState {
   const advertisedHostOverride = Option.getOrUndefined(input.advertisedHostOverride);
-  const requestedExposure = resolveDesktopServerExposure({
+  const exposure = resolveDesktopServerExposure({
     mode: input.requestedMode,
     port: input.port,
     networkInterfaces: input.networkInterfaces,
     ...(advertisedHostOverride ? { advertisedHostOverride } : {}),
   });
+  // Only turning network access on refuses a machine with no address. A launch
+  // before Wi-Fi or Tailscale is up still binds every interface, so the address
+  // that arrives later is reachable without a relaunch.
   const unavailable =
     input.requestedMode === "network-accessible" &&
-    requestedExposure.endpointUrl === null &&
+    exposure.endpointUrl === null &&
     !Object.values(input.networkInterfaces).some((addresses) =>
       addresses?.some(
         (address) =>
           !address.internal && address.family === "IPv4" && isTailscaleIpv4Address(address.address),
       ),
     );
-  const exposure = unavailable
-    ? resolveDesktopServerExposure({
-        mode: "local-only",
-        port: input.port,
-        networkInterfaces: input.networkInterfaces,
-        ...(advertisedHostOverride ? { advertisedHostOverride } : {}),
-      })
-    : requestedExposure;
 
   return {
     state: runtimeStateFromResolvedExposure({
