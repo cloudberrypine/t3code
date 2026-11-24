@@ -1,5 +1,5 @@
 import type { NativeStackHeaderItem } from "@react-navigation/native-stack";
-import { act } from "react";
+import { act, use } from "react";
 import { createRoot } from "react-dom/client";
 import type { StackHeaderConfigProps } from "react-native-screens";
 import { expect, it, vi } from "vite-plus/test";
@@ -19,15 +19,53 @@ vi.mock("./native-layout-metrics", () => ({
   useNativeLayoutMetrics: () => null,
 }));
 vi.mock("react-native-screens", () => ({
+  SearchBar: "search",
   Stack: {
     HeaderConfig: ({ ios }: StackHeaderConfigProps) => {
       bridge.ios = ios;
-      return null;
+      return ios?.titleItem?.render() ?? null;
     },
   },
 }));
 
+import { HeaderItemsWidthContext } from "./header-items-width";
 import { V5StackHeader } from "./V5StackHeader.ios";
+
+it("leaves the title what a custom item's own width leaves, not one button's", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const root = createRoot(document.createElement("div"));
+  let itemsWidth: number | null = null;
+  function Title() {
+    itemsWidth = use(HeaderItemsWidthContext);
+    return null;
+  }
+  // The home header on a 375 pt iPhone 13 mini: search, New task and the usage rings.
+  const titleWidth = (ringsWidth: number) => {
+    act(() =>
+      root.render(
+        <V5StackHeader
+          canGoBack={false}
+          options={{
+            headerTitle: () => <Title />,
+            headerSearchBarOptions: { placement: "integratedButton" },
+            unstable_headerRightItems: () => [
+              { type: "button", label: "New task", onPress: () => {} },
+              { type: "custom", element: <span />, width: ringsWidth } as NativeStackHeaderItem,
+            ],
+          }}
+        />,
+      ),
+    );
+    return 375 - itemsWidth!;
+  };
+  try {
+    // Three rings take 90 pt and four 120 pt, where one bar button takes 44.
+    expect([titleWidth(90), titleWidth(120)]).toEqual([165, 135]);
+  } finally {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
 
 it.each(["leadingItems", "trailingItems", "toolbarItems"] as const)(
   "updates native enabled state after permissions change in %s",

@@ -17,6 +17,16 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 // Two rings keep their 40 pt slots. More get 30 pt (the 28 pt ring, strokes 4 pt apart), so four
 // take 120 pt and still fit beside the title on a 375 pt phone.
 const ringSlotWidth = (count: number) => (count > 2 ? 30 : 40);
+const ringRowWidth = (presentations: Parameters<typeof selectPooledSidebarRings>[0]) => {
+  const count = selectPooledSidebarRings(presentations).length;
+  return count * ringSlotWidth(count);
+};
+
+/** The ring row's width, for the header to leave the title the rest. Re-renders only when it
+ * changes, not on every provider push. */
+export function useHomeUsageRingsWidth() {
+  return useAtomValue(environmentPresentations.presentationsWithProvidersAtom, ringRowWidth);
+}
 
 /** Reads the same live config snapshots as the desktop sidebar, including hub accounts. It has
  * no primary environment, so its rings pool every connected environment's instances. */

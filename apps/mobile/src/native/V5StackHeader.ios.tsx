@@ -11,6 +11,7 @@ import { isDuoDevice } from "../lib/device-type";
 import { useMobileNavigationTheme } from "../lib/useMobileNavigationTheme";
 import { useDeviceType, useNativeLayoutMetrics } from "./native-layout-metrics";
 import { HeaderItemsWidthContext } from "./header-items-width";
+import type { SizedCustomHeaderItem } from "./NativeHeaderToolbar";
 import {
   SearchBar,
   Stack,
@@ -100,7 +101,12 @@ function convertMenu(menu: MenuInput, id: string): StackHeaderMenuIOS {
   return { id, type: "menu", title: menu.title, children };
 }
 
-function convertItems(items: NativeStackHeaderItem[], prefix: string): HeaderItem[] {
+/** `widths` collects the declared widths of custom elements, by their header item id. */
+function convertItems(
+  items: NativeStackHeaderItem[],
+  prefix: string,
+  widths?: Map<string, number>,
+): HeaderItem[] {
   return items.map((item, index): HeaderItem => {
     const id =
       item.type === "spacing" ? `${prefix}:${index}` : (item.identifier ?? `${prefix}:${index}`);
@@ -109,13 +115,16 @@ function convertItems(items: NativeStackHeaderItem[], prefix: string): HeaderIte
         return "flexible" in item && item.flexible === true
           ? { type: "spacer", id, sizing: "flexible" }
           : { type: "spacer", id, sizing: "fixed", width: item.spacing };
-      case "custom":
+      case "custom": {
+        const { width } = item as SizedCustomHeaderItem;
+        if (width !== undefined) widths?.set(id, width);
         return {
           type: "item",
           id,
           render: () => item.element,
           hidesSharedBackground: item.hidesSharedBackground,
         };
+      }
       case "menu":
         return {
           type: "item",
@@ -168,13 +177,20 @@ export function V5StackHeader(props: {
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const searchRef = useRef<SearchBarCommands>(null);
   const itemProps = { tintColor: options.headerTintColor, canGoBack: props.canGoBack };
-  const leading = convertItems(options.unstable_headerLeftItems?.(itemProps) ?? [], "leading");
+  // A custom element is as wide as it says (the usage rings take 80 to 120 pt), not one button.
+  const customWidths = new Map<string, number>();
+  const leading = convertItems(
+    options.unstable_headerLeftItems?.(itemProps) ?? [],
+    "leading",
+    customWidths,
+  );
   const trailing = convertItems(
     [
       ...(options.unstable_headerCenterItems?.() ?? []),
       ...(options.unstable_headerRightItems?.(itemProps) ?? []),
     ],
     "trailing",
+    customWidths,
   );
   const toolbar = options.unstable_headerToolbarItems?.() ?? [];
   const mailSearch = toolbar.find(
@@ -314,7 +330,7 @@ export function V5StackHeader(props: {
           : // The keyboard dismiss rides the vertical bar, not beside the title.
             item.id === "dismiss-keyboard"
             ? 0
-            : BAR_BUTTON_WIDTH),
+            : (customWidths.get(item.id) ?? BAR_BUTTON_WIDTH)),
       0,
     );
   const titleStyle = StyleSheet.flatten(options.headerTitleStyle);

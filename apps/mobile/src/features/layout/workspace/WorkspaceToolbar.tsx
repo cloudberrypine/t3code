@@ -22,7 +22,7 @@ import { shouldRestoreNativeSearch } from "./workspace-tabs-state";
 import { useFloatingWorkspaceTabs, useSidebarWorkspaceTabs } from "./useSystemWorkspaceTabBar";
 import { WorkspaceTabToolbarButtons } from "./WorkspaceSectionToolbar";
 import { useWorkspaceCompose } from "./useWorkspaceCompose";
-import { HomeUsageRings } from "../../usage/HomeUsageRings";
+import { HomeUsageRings, useHomeUsageRingsWidth } from "../../usage/HomeUsageRings";
 
 const SEARCH_LABELS = {
   threads: msg("Search threads"),
@@ -45,6 +45,7 @@ export function WorkspaceToolbar(props: {
   const duoSearch = NATIVE_LIQUID_GLASS_SUPPORTED && isDuoDevice(deviceType);
   const bottomSearch = duoSearch && sidebarTabs !== "picker";
   const compose = useWorkspaceCompose();
+  const usageRingsWidth = useHomeUsageRingsWidth();
   // On the Duo, compose sits in the list's bar when folded and the detail column's when unfolded.
   const nativeToolbarCompose =
     deviceType === "duo-folded" && compose !== null && activeNewTask === null;
@@ -221,7 +222,7 @@ export function WorkspaceToolbar(props: {
           )}
           {/* PolyCode: provider usage rings, left of the thread list's trailing buttons. */}
           {selectedTab === "threads" ? (
-            <Toolbar.Custom>
+            <Toolbar.Custom width={usageRingsWidth}>
               <HomeUsageRings />
             </Toolbar.Custom>
           ) : null}

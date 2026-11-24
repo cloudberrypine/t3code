@@ -195,6 +195,21 @@ it("applies a custom header element rendered inside a navigation container", () 
   expect(renderedCustomLabel()).toBe("Reconnecting");
 });
 
+it("hands a custom element's declared width to the header", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  root = createRoot(document.createElement("div"));
+  act(() =>
+    root!.render(
+      <NativeHeaderToolbar placement="right">
+        <NativeHeaderToolbar.Custom width={120}>
+          <span />
+        </NativeHeaderToolbar.Custom>
+      </NativeHeaderToolbar>,
+    ),
+  );
+  expect(harness.renderedItems[0]).toMatchObject({ type: "custom", width: 120 });
+});
+
 it("keeps committed handlers while a replacement render suspends", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   root = createRoot(document.createElement("div"));

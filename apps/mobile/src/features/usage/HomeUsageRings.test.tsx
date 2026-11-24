@@ -11,7 +11,10 @@ vi.mock("react", async (original) => ({
     },
   ],
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.presentations }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (_atom: unknown, select?: (value: unknown) => unknown) =>
+    select ? select(state.presentations) : state.presentations,
+}));
 vi.mock("react-native", () => ({
   Modal: "modal",
   Pressable: "button",
@@ -43,7 +46,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { HomeUsageRings } from "./HomeUsageRings";
+import { HomeUsageRings, useHomeUsageRingsWidth } from "./HomeUsageRings";
 
 type Props = {
   children?: unknown;
@@ -206,4 +209,24 @@ it("keeps the sheet on the tapped ring's account and closes it for good when tha
   expect(sheet()).toEqual({ visible: false, accounts: [] });
   state.presentations = environments(["Linux", [bob, aliceOnLinux]]);
   expect(sheet()).toEqual({ visible: false, accounts: [] });
+});
+it("tells the header the ring row's width: 40 pt slots for two rings, 30 pt for more", () => {
+  const claude = (index: number) =>
+    instance(`claude${index}`, "claudeAgent", `claude${index}@example.com`, weekly(10));
+  const widths = [1, 2, 3].map((claudes) => {
+    state.presentations = environment(
+      instance("codex", "codex", "me@example.com", weekly(10)),
+      ...Array.from({ length: claudes }, (_, index) => claude(index)),
+    );
+    const buttons = nodes(HomeUsageRings()).filter(
+      (node) => node.type === "button" && node.props.style?.width,
+    );
+    const drawn = buttons.reduce((sum, node) => sum + node.props.style!.width!, 0);
+    return [buttons.length, drawn, useHomeUsageRingsWidth()];
+  });
+  expect(widths).toEqual([
+    [2, 80, 80],
+    [3, 90, 90],
+    [4, 120, 120],
+  ]);
 });

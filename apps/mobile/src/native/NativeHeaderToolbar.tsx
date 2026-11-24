@@ -43,6 +43,10 @@ type NativeStackHeaderVisibilityPriority = Extract<
   { type: "button" }
 >["visibilityPriority"];
 type NativeToolbarItem = NativeStackHeaderItem | HeaderBarButtonSearchBarPlacementItem;
+/** A custom element that declares its width, read by V5StackHeader. */
+export type SizedCustomHeaderItem = Extract<NativeStackHeaderItem, { type: "custom" }> & {
+  readonly width?: number;
+};
 type NativeStackOptionsWithToolbar = NativeStackNavigationOptions & {
   unstable_headerToolbarItems?: () => NativeToolbarItem[];
 };
@@ -141,7 +145,13 @@ function convertToolbarChild(
 
   const typeName = elementTypeName(child);
   if (typeName === "NativeHeaderToolbarCustom" && isValidElement(child.props.children)) {
-    return { type: "custom", element: child.props.children };
+    const { width } = child.props;
+    const item: SizedCustomHeaderItem = {
+      type: "custom",
+      element: child.props.children,
+      ...(typeof width === "number" ? { width } : {}),
+    };
+    return item;
   }
   if (typeName === "NativeHeaderToolbarSearchBarSlot") {
     return { type: "searchBarPlacement" };
@@ -335,7 +345,11 @@ function NativeHeaderToolbarMenuAction(_props: {
 }
 NativeHeaderToolbarMenuAction.displayName = "NativeHeaderToolbarMenuAction";
 
-function NativeHeaderToolbarCustom(_props: { readonly children: ReactElement }) {
+function NativeHeaderToolbarCustom(_props: {
+  readonly children: ReactElement;
+  /** The element's width, which the iOS header counts in place of one bar button's. */
+  readonly width?: number;
+}) {
   return null;
 }
 NativeHeaderToolbarCustom.displayName = "NativeHeaderToolbarCustom";
