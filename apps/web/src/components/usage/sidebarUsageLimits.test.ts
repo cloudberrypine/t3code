@@ -267,14 +267,15 @@ describe("pooled rings without a primary environment (the phone)", () => {
       ["Claude (one@example.com)", 27, undefined, null],
       ["Claude 2 (two@example.com)", 90, "#22aa44", null],
     ]);
-    // The same account in another environment shares the first environment's ring.
+    // The same account in another environment shares the first environment's ring, keyed by the
+    // account. A ring without an account keeps its instance's key (below).
     const rings = pooled(
       environment("Mac", [codex, claude]),
       environment("Linux", [instance("claudeAgent", "claudeAgent", { email: "ONE@example.com" })]),
     );
     expect(rings.map((ring) => [ring.key, ring.title])).toEqual([
-      ["Mac:codex", "Codex"],
-      ["Mac:claudeAgent", "Claude"],
+      ["codex:me@example.com", "Codex"],
+      ["claudeAgent:one@example.com", "Claude"],
     ]);
     expect(pooled(environment("Mac", [codex, claude, { ...second, enabled: false }]))).toHaveLength(
       2,
@@ -309,7 +310,7 @@ describe("pooled rings without a primary environment (the phone)", () => {
           ring.key,
           ring.account?.email,
         ]),
-      ).toEqual([["Linux:codex", "bob@example.com"]]);
+      ).toEqual([["codex:bob@example.com", "bob@example.com"]]);
       // With no environment connected the phone keeps its two empty driver rings.
       expect(ringSummary(pooled(environment("Mac", [codex, claude], [], phase)))).toEqual([
         ["Codex", undefined, undefined, "not loaded yet"],

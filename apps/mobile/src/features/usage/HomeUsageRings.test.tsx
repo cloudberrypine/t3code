@@ -98,6 +98,26 @@ const environment = (...providers: ServerProvider[]) =>
       },
     ],
   ]);
+const environments = (...entries: [label: string, providers: ServerProvider[]][]) =>
+  new Map(
+    entries.map(([label, providers]) => [
+      EnvironmentId.make(label),
+      {
+        entry: { target: { label } },
+        connection: { phase: "connected" },
+        serverConfig: { providers },
+      },
+    ]),
+  );
+const sheet = () => {
+  const tree = nodes(HomeUsageRings());
+  return {
+    visible: tree.find((node) => node.type === "modal")?.props.visible,
+    accounts: tree
+      .filter((node) => node.type === "account")
+      .map((node) => node.props.instanceLabel),
+  };
+};
 const weekly = (usedPercent: number) => [{ id: "seven_day", kind: "weekly" as const, usedPercent }];
 beforeEach(() => {
   state.selection = null;
@@ -160,4 +180,30 @@ it("draws a narrower ring per Claude account and opens only the tapped ring's ac
       .filter((node) => node.type === "account")
       .map((node) => [node.props.instanceLabel, node.props.accentColor]),
   ).toEqual([["two@example.com", "#22aa44"]]);
+});
+it("keeps the sheet on the tapped ring's account and closes it for good when that ring goes", () => {
+  const alice = instance("codex", "codex", "alice@example.com", weekly(20));
+  const bob = instance("codex", "codex", "bob@example.com", weekly(90));
+  state.presentations = environments(["Mac", [alice]], ["Linux", [bob]]);
+  nodes(HomeUsageRings()).find((node) =>
+    node.props.accessibilityLabel?.startsWith("Codex (alice@example.com)"),
+  )!.props.onPress!();
+  expect(sheet()).toEqual({ visible: true, accounts: ["alice@example.com"] });
+  // Linux reports Alice too; the Mac leaving hands her ring to Linux, and the sheet stays.
+  const aliceOnLinux = instance("codex2", "codex", "ALICE@example.com", weekly(30));
+  state.presentations = environments(["Mac", [alice]], ["Linux", [bob, aliceOnLinux]]);
+  expect(sheet()).toEqual({ visible: true, accounts: ["alice@example.com"] });
+  state.presentations = environments(["Linux", [bob, aliceOnLinux]]);
+  expect(sheet()).toEqual({ visible: true, accounts: ["ALICE@example.com"] });
+  // Alice's ring goes: the sheet closes, and neither Carol on her instance nor Alice's return
+  // reopens it.
+  state.presentations = environments(["Linux", [bob]]);
+  expect(sheet().visible).toBe(false);
+  state.presentations = environments(
+    ["Linux", [bob]],
+    ["Mac", [instance("codex", "codex", "carol@example.com", weekly(50))]],
+  );
+  expect(sheet()).toEqual({ visible: false, accounts: [] });
+  state.presentations = environments(["Linux", [bob, aliceOnLinux]]);
+  expect(sheet()).toEqual({ visible: false, accounts: [] });
 });

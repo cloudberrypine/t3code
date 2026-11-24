@@ -35,6 +35,9 @@ export function HomeUsageRings() {
         ? "OpenAI"
         : "Claude";
   const selected = rings.find((ring) => ring.key === selection?.key);
+  // The sheet follows its ring's account. Once that ring is gone the sheet closes for good, so a
+  // ring that later takes the same key never reopens it without a tap.
+  if (selection && !selected) setSelection(null);
   return (
     <View style={{ flexDirection: "row" }}>
       {rings.map((ring) => {

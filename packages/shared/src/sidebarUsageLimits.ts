@@ -78,6 +78,8 @@ function sidebarNoDataReason(
 }
 
 export interface SidebarRing {
+  /** Unique among the rings. On the phone it is the ring's account (its instance's key without
+   * one), so it stays the same when another environment takes the ring over. */
   readonly key: string;
   readonly driver: SidebarDriver;
   /** The instance's name, plus the account's email when its driver has several rings. */
@@ -211,7 +213,7 @@ export function selectPooledSidebarRings(
       ? inSettingsOrder(
           instanceLimitAccounts(connected, environmentId),
           Object.keys(serverConfig.settings?.providerInstances ?? {}),
-        ).map((entry) => ({ ...entry, key: `${environmentId}:${entry.provider.instanceId}` }))
+        ).map((entry) => ({ ...entry, key: entry.accountKey }))
       : [],
   );
   return instanceRings(instances);
